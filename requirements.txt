@@ -1,0 +1,9 @@
+# Digital Life Aquarium - Dependencies
+# プロセス監視用
+psutil>=7.0.0
+
+# ビジュアライゼーション用  
+pygame>=2.6.0
+
+# 数値計算用（オプション）
+numpy>=1.21.0
