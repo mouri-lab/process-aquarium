@@ -34,14 +34,28 @@ class Aquarium:
         pygame.init()
         pygame.mixer.init()
 
-        # 環境変数から設定を読み取り
+        # macOS Retina対応の環境変数設定
         import os
+        os.environ['SDL_VIDEO_HIGHDPI_DISABLED'] = '0'  # 高DPI有効化
+
+        # 環境変数から設定を読み取り
         max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '100'))
         target_fps = int(os.environ.get('AQUARIUM_FPS', '30'))
 
         # 画面設定
+        self.base_width = width
+        self.base_height = height
         self.width = width
         self.height = height
+        self.fullscreen = False
+        self.scale_factor = 1.0  # Retina scaling factor
+
+        # 利用可能な解像度情報を表示（デバッグ用）
+        self._print_display_info()
+
+        # Retinaスケール情報を取得
+        self.retina_info = self.detect_retina_scaling()
+
         self.screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption("Digital Life Aquarium - デジタル生命の水族館")
 
@@ -69,14 +83,20 @@ class Aquarium:
         self.background_particles = []
         self.init_background_particles()
 
-        # 統計情報
+        # プロセス関連統計
         self.total_processes = 0
         self.total_memory = 0.0
         self.avg_cpu = 0.0
         self.total_threads = 0
 
+        # IPC接続情報
+        self.ipc_connections = []
+        self.ipc_update_timer = 0
+        self.ipc_update_interval = 60  # 1秒間隔でIPC更新
+
         # デバッグ情報表示
         self.show_debug = False  # デフォルトでデバッグ表示をオフ
+        self.show_ipc = True    # IPC可視化をオン
         self.debug_text_lines = []
 
         # 実行状態
@@ -84,11 +104,13 @@ class Aquarium:
 
     def init_background_particles(self):
         """背景の水泡パーティクルを初期化"""
-        for _ in range(20):  # パーティクル数を20に削減
+        self.background_particles = []  # 既存のパーティクルをクリア
+        particle_count = min(50, int(self.width * self.height / 20000))  # 画面サイズに応じてパーティクル数を調整
+        for _ in range(particle_count):
             particle = {
                 'x': random.uniform(0, self.width),
                 'y': random.uniform(0, self.height),
-                'size': random.uniform(2, 6),
+                'size': random.uniform(2, 8),
                 'speed': random.uniform(0.5, 2.0),
                 'alpha': random.randint(30, 80)
             }
@@ -165,6 +187,18 @@ class Aquarium:
                     fish.x = parent_fish.x + random.uniform(-50, 50)
                     fish.y = parent_fish.y + random.uniform(-50, 50)
 
+        # exec検出とエフェクト
+        exec_processes = self.process_manager.detect_exec()
+        for proc in exec_processes:
+            if proc.pid in self.fishes:
+                self.fishes[proc.pid].set_exec_event()
+
+        # 群れ行動の設定
+        self._update_schooling_behavior()
+
+        # IPC接続の更新
+        self._update_ipc_connections()
+
         # 既存のFishデータ更新
         for pid, fish in self.fishes.items():
             if pid in process_data:
@@ -187,6 +221,30 @@ class Aquarium:
 
         for pid in dead_pids:
             del self.fishes[pid]
+
+    def _update_schooling_behavior(self):
+        """群れ行動の更新"""
+        # 関連プロセス群を取得して群れを形成
+        processed_pids = set()
+
+        for pid, fish in self.fishes.items():
+            if pid in processed_pids:
+                continue
+
+            # 関連プロセスを取得
+            related_processes = self.process_manager.get_related_processes(pid, max_distance=2)
+            related_pids = [p.pid for p in related_processes if p.pid in self.fishes]
+
+            if len(related_pids) > 1:
+                # 群れを形成
+                # 最も古いプロセスまたは親プロセスをリーダーに
+                leader_pid = min(related_pids)  # 単純にPIDが小さいものをリーダーに
+
+                for related_pid in related_pids:
+                    if related_pid in self.fishes:
+                        is_leader = (related_pid == leader_pid)
+                        self.fishes[related_pid].set_school_members(related_pids, is_leader)
+                        processed_pids.add(related_pid)
 
     def handle_mouse_click(self, pos: Tuple[int, int]):
         """マウスクリックによるFish選択"""
@@ -250,7 +308,9 @@ class Aquarium:
             "操作方法:",
             "クリック: 生命体を選択",
             "ESC: 終了",
-            "D: デバッグ表示切替"
+            "D: デバッグ表示切替",
+            "I: IPC接続表示切替",
+            "F/F11: フルスクリーン切替"
         ]
 
         help_height = len(help_lines) * 20 + 10
@@ -277,6 +337,59 @@ class Aquarium:
                                (int(fish.x), int(fish.y)), 1)
                 self.screen.blit(temp_surface, (0, 0))
 
+    def _update_ipc_connections(self):
+        """IPC接続情報の更新"""
+        self.ipc_update_timer += 1
+        if self.ipc_update_timer >= self.ipc_update_interval:
+            self.ipc_update_timer = 0
+            self.ipc_connections = self.process_manager.detect_ipc_connections()
+
+    def draw_ipc_connections(self):
+        """IPC接続の描画（デジタル神経網のような線で）"""
+        if not self.show_ipc:
+            return
+
+        connection_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+
+        for proc1, proc2 in self.ipc_connections:
+            if proc1.pid in self.fishes and proc2.pid in self.fishes:
+                fish1 = self.fishes[proc1.pid]
+                fish2 = self.fishes[proc2.pid]
+
+                # 距離チェック（画面上でも近い場合のみ描画）
+                distance = math.sqrt((fish1.x - fish2.x)**2 + (fish1.y - fish2.y)**2)
+                if distance < 200:  # 200ピクセル以内の場合のみ
+                    # 脈動する線の効果
+                    pulse = math.sin(time.time() * 3) * 0.3 + 0.7
+                    alpha = int(80 * pulse)
+
+                    # CPU使用率に応じて線の色を変更
+                    cpu_intensity = (fish1.cpu_percent + fish2.cpu_percent) / 200.0
+                    red = int(100 + cpu_intensity * 155)
+                    green = int(150 - cpu_intensity * 50)
+                    blue = int(200 - cpu_intensity * 100)
+
+                    color = (red, green, blue, alpha)
+
+                    # 少し曲がった線を描画（より有機的に）
+                    mid_x = (fish1.x + fish2.x) / 2 + math.sin(time.time() * 2) * 10
+                    mid_y = (fish1.y + fish2.y) / 2 + math.cos(time.time() * 2) * 10
+
+                    # ベジェ曲線風の描画
+                    steps = 10
+                    points = []
+                    for i in range(steps + 1):
+                        t = i / steps
+                        # 二次ベジェ曲線
+                        x = (1-t)**2 * fish1.x + 2*(1-t)*t * mid_x + t**2 * fish2.x
+                        y = (1-t)**2 * fish1.y + 2*(1-t)*t * mid_y + t**2 * fish2.y
+                        points.append((x, y))
+
+                    if len(points) > 1:
+                        pygame.draw.lines(connection_surface, color, False, points, 2)
+
+        self.screen.blit(connection_surface, (0, 0))
+
     def handle_events(self):
         """イベント処理"""
         for event in pygame.event.get():
@@ -288,10 +401,87 @@ class Aquarium:
                     self.running = False
                 elif event.key == pygame.K_d:
                     self.show_debug = not self.show_debug
+                elif event.key == pygame.K_i:
+                    self.show_ipc = not self.show_ipc
+                    print(f"IPC可視化: {'オン' if self.show_ipc else 'オフ'}")
+                elif event.key == pygame.K_f or event.key == pygame.K_F11:
+                    self.toggle_fullscreen()
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # 左クリック
                     self.handle_mouse_click(event.pos)
+
+    def toggle_fullscreen(self):
+        """フルスクリーンモードの切り替え"""
+        self.fullscreen = not self.fullscreen
+
+        if self.fullscreen:
+            # フルスクリーンモードに切り替え
+            try:
+                # 最適な解像度を取得
+                self.width, self.height = self.get_best_fullscreen_resolution()
+                print(f"📱 選択された解像度: {self.width}x{self.height}")
+
+                # フルスクリーンモードを設定
+                self.screen = pygame.display.set_mode((self.width, self.height), pygame.FULLSCREEN)
+
+                # 実際に設定されたサイズを確認・更新
+                actual_width = self.screen.get_width()
+                actual_height = self.screen.get_height()
+
+                if actual_width != self.width or actual_height != self.height:
+                    print(f"⚠️ 解像度が調整されました: {self.width}x{self.height} → {actual_width}x{actual_height}")
+                    self.width = actual_width
+                    self.height = actual_height
+
+                print(f"🖥️ フルスクリーンモード適用: {self.width}x{self.height}")
+
+            except Exception as e:
+                print(f"❌ フルスクリーン設定エラー: {e}")
+                # エラー時は(0,0)指定でシステムに任せる
+                self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+                self.width = self.screen.get_width()
+                self.height = self.screen.get_height()
+                print(f"🖥️ フォールバック解像度: {self.width}x{self.height}")
+        else:
+            # ウィンドウモードに戻す
+            self.width = self.base_width
+            self.height = self.base_height
+            self.screen = pygame.display.set_mode((self.width, self.height))
+            print(f"🪟 ウィンドウモード: {self.width}x{self.height}")
+
+        print(f"📐 現在の画面サイズ: {self.screen.get_width()}x{self.screen.get_height()}")
+
+        # 背景パーティクルを新しいサイズに合わせて再初期化
+        self.init_background_particles()
+
+        # 魚の位置を新しい画面サイズに合わせて調整
+        self.adjust_fish_positions_for_screen_resize()
+
+        # フォントサイズも画面サイズに合わせて調整
+        font_scale = min(self.width / self.base_width, self.height / self.base_height)
+        base_font_size = 24
+        small_font_size = 18
+
+        self.font = self._get_japanese_font(int(base_font_size * font_scale))
+        self.small_font = self._get_japanese_font(int(small_font_size * font_scale))
+
+    def adjust_fish_positions_for_screen_resize(self):
+        """画面サイズ変更時に魚の位置を調整"""
+        for fish in self.fishes.values():
+            # 魚が画面外にいる場合は画面内に移動
+            if fish.x >= self.width:
+                fish.x = self.width - 50
+                fish.target_x = fish.x
+            if fish.y >= self.height:
+                fish.y = self.height - 50
+                fish.target_y = fish.y
+
+            # 新しい画面サイズに合わせて目標位置も調整
+            if fish.target_x >= self.width:
+                fish.target_x = random.uniform(50, self.width - 50)
+            if fish.target_y >= self.height:
+                fish.target_y = random.uniform(50, self.height - 50)
 
     def update(self):
         """フレーム更新"""
@@ -301,9 +491,18 @@ class Aquarium:
         # 背景パーティクルの更新
         self.update_background_particles()
 
-        # Fishの位置更新
-        for fish in list(self.fishes.values()):
-            fish.update_position(self.width, self.height)
+        # Fishの位置更新（群れ行動対応）
+        fish_list = list(self.fishes.values())
+        for fish in fish_list:
+            # 近くの魚を検索
+            nearby_fish = []
+            for other_fish in fish_list:
+                if other_fish.pid != fish.pid:
+                    distance = math.sqrt((fish.x - other_fish.x)**2 + (fish.y - other_fish.y)**2)
+                    if distance < 100:  # 100ピクセル以内の魚
+                        nearby_fish.append(other_fish)
+
+            fish.update_position(self.width, self.height, nearby_fish)
 
     def draw(self):
         """描画処理"""
@@ -313,6 +512,9 @@ class Aquarium:
         # 親子関係の線
         if self.show_debug:
             self.draw_parent_child_connections()
+
+        # IPC接続の線
+        self.draw_ipc_connections()
 
         # 全てのFishを描画
         for fish in self.fishes.values():
@@ -354,6 +556,65 @@ class Aquarium:
         # 終了処理
         pygame.quit()
         print("🌙 水族館を閉館しました。お疲れさまでした！")
+
+    def _print_display_info(self):
+        """ディスプレイ情報をデバッグ表示"""
+        try:
+            # 利用可能な解像度モードを取得
+            modes = pygame.display.list_modes()
+            print("🖥️ 利用可能な解像度モード:")
+            if modes == -1:
+                print("  - 全ての解像度が利用可能")
+            elif modes:
+                for mode in modes[:5]:  # 最初の5つを表示
+                    print(f"  - {mode[0]}x{mode[1]}")
+                if len(modes) > 5:
+                    print(f"  - ...他 {len(modes)-5} モード")
+                max_mode = max(modes, key=lambda x: x[0] * x[1])
+                print(f"  - 最大解像度: {max_mode}")
+            else:
+                print("  - 利用可能なモードが見つかりません")
+
+            # 現在のディスプレイ情報
+            info = pygame.display.Info()
+            print(f"📱 現在のディスプレイ情報:")
+            print(f"  - 現在のサイズ: {info.current_w}x{info.current_h}")
+            print(f"  - ビット深度: {info.bitsize}")
+
+            # Retinaスケールファクターを推定
+            if modes and modes != -1:
+                max_mode = max(modes, key=lambda x: x[0] * x[1])
+                logical_width = info.current_w
+                physical_width = max_mode[0]
+
+                if physical_width > logical_width:
+                    self.scale_factor = physical_width / logical_width
+                    print(f"🔍 Retinaスケールファクター検出: {self.scale_factor:.1f}x")
+                    print(f"  - 物理解像度: {physical_width}x{max_mode[1]}")
+                    print(f"  - 論理解像度: {logical_width}x{info.current_h}")
+                else:
+                    self.scale_factor = 1.0
+                    print("🔍 標準ディスプレイ (スケールファクター: 1.0x)")
+
+        except Exception as e:
+            print(f"❌ ディスプレイ情報取得エラー: {e}")
+            self.scale_factor = 1.0
+
+    def get_best_fullscreen_resolution(self):
+        """最適なフルスクリーン解像度を取得（論理解像度を優先）"""
+        try:
+            # 常に論理解像度を使用（Retinaディスプレイ対応）
+            info = pygame.display.Info()
+            logical_width = info.current_w
+            logical_height = info.current_h
+
+            print(f"🔍 論理解像度を使用: {logical_width}x{logical_height}")
+            return (logical_width, logical_height)
+
+        except Exception as e:
+            print(f"❌ 解像度取得エラー: {e}")
+            # フォールバック: 一般的な解像度
+            return (1920, 1080)
 
     def _get_japanese_font(self, size: int) -> pygame.font.Font:
         """日本語対応フォントを取得"""
@@ -455,17 +716,50 @@ class Aquarium:
                 fallback_text = "[TEXT_ERROR]"
                 return font.render(fallback_text, True, color)
 
+    def detect_retina_scaling(self):
+        """Retinaスケールファクターを検出"""
+        try:
+            # 利用可能な最大物理解像度を取得
+            modes = pygame.display.list_modes()
+            if modes and modes != -1:
+                max_physical = max(modes, key=lambda x: x[0] * x[1])
+            else:
+                max_physical = (1920, 1080)  # フォールバック
+
+            # 現在の論理解像度を取得
+            info = pygame.display.Info()
+            logical = (info.current_w, info.current_h)
+
+            # スケールファクターを計算
+            scale_x = max_physical[0] / logical[0] if logical[0] > 0 else 1.0
+            scale_y = max_physical[1] / logical[1] if logical[1] > 0 else 1.0
+            scale_factor = max(scale_x, scale_y)
+
+            print(f"🔍 Retina解析:")
+            print(f"  - 物理解像度: {max_physical[0]}x{max_physical[1]}")
+            print(f"  - 論理解像度: {logical[0]}x{logical[1]}")
+            print(f"  - スケールファクター: {scale_factor:.2f}x")
+
+            return {
+                'physical': max_physical,
+                'logical': logical,
+                'scale_factor': scale_factor,
+                'is_retina': scale_factor >= 1.5
+            }
+
+        except Exception as e:
+            print(f"❌ Retina検出エラー: {e}")
+            return {
+                'physical': (1920, 1080),
+                'logical': (1920, 1080),
+                'scale_factor': 1.0,
+                'is_retina': False
+            }
+
 def main():
     """メイン関数"""
-    try:
-        aquarium = Aquarium()
-        aquarium.run()
-    except KeyboardInterrupt:
-        print("\n🌙 水族館を手動で閉館しました。")
-    except Exception as e:
-        print(f"❌ エラーが発生しました: {e}")
-        import traceback
-        traceback.print_exc()
+    aquarium = Aquarium()
+    aquarium.run()
 
 if __name__ == "__main__":
     main()

@@ -40,9 +40,15 @@ class ProcessManager:
     def __init__(self, max_processes: int = 100):
         self.processes: Dict[int, ProcessInfo] = {}
         self.previous_pids: Set[int] = set()
+        self.previous_process_exes: Dict[int, str] = {}  # exec検出用
         self.update_interval = 1.0  # 更新間隔を1秒に延長
         self.last_update = time.time()
         self.max_processes = max_processes  # 表示する最大プロセス数
+        
+        # プロセス関係追跡
+        self.process_families: Dict[int, List[int]] = {}  # 親→子リスト
+        self.recent_forks: List[tuple] = []  # 最近のfork履歴
+        self.recent_execs: List[int] = []    # 最近のexec履歴
         
         # 重要なプロセス名のフィルタ（優先表示）
         self.important_processes = {
@@ -74,6 +80,7 @@ class ProcessManager:
 
         current_pids = set()
         new_processes = {}
+        current_process_exes = {}
 
         # 現在のプロセス一覧を取得
         for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'memory_percent',
@@ -83,6 +90,7 @@ class ProcessManager:
                 info = proc.info
                 pid = info['pid']
                 name = info['name'] or 'unknown'
+                exe = info['exe'] or ''
                 memory_percent = info['memory_percent'] or 0.0
                 cpu_percent = info['cpu_percent'] or 0.0
                 
@@ -91,6 +99,7 @@ class ProcessManager:
                     continue
                 
                 current_pids.add(pid)
+                current_process_exes[pid] = exe
 
                 # 新しいプロセスかどうかをチェック
                 is_new = pid not in self.previous_pids
@@ -100,7 +109,7 @@ class ProcessManager:
                     pid=pid,
                     ppid=info['ppid'] or 0,
                     name=name,
-                    exe=info['exe'] or '',
+                    exe=exe,
                     memory_percent=memory_percent,
                     cpu_percent=cpu_percent,
                     num_threads=info['num_threads'] or 1,
@@ -121,6 +130,12 @@ class ProcessManager:
                 # プロセスがアクセス不可または既に終了している場合はスキップ
                 continue
 
+        # exec検出
+        self._detect_exec_events(current_process_exes)
+        
+        # 家族関係の更新
+        self._update_process_families(new_processes)
+
         # 消滅したプロセスをマーク
         for pid in self.previous_pids:
             if pid not in current_pids and pid in self.processes:
@@ -129,6 +144,7 @@ class ProcessManager:
         # プロセス情報を更新
         self.processes = new_processes
         self.previous_pids = current_pids
+        self.previous_process_exes = current_process_exes
         self.last_update = current_time
 
     def _should_include_process(self, process_name: str, memory_percent: float, cpu_percent: float) -> bool:
@@ -189,16 +205,105 @@ class ProcessManager:
             if proc.ppid in self.processes:
                 parent = self.processes[proc.ppid]
                 forks.append((parent, proc))
+        
+        # 最近のfork履歴を更新
+        self.recent_forks.extend(forks)
+        # 履歴は最大10個まで保持
+        self.recent_forks = self.recent_forks[-10:]
+        
         return forks
 
     def detect_exec(self) -> List[ProcessInfo]:
         """exec操作を検知（実行ファイルパスの変更）"""
-        # 簡単な実装：新しいプロセスでPIDが再利用されている場合
+        # recent_execsから該当するプロセス情報を取得
         execs = []
-        for proc in self.processes.values():
-            if proc.is_new and proc.pid in self.previous_pids:
-                execs.append(proc)
+        for pid in self.recent_execs:
+            if pid in self.processes:
+                execs.append(self.processes[pid])
+        
+        # 履歴をクリア（一度検出したらクリア）
+        self.recent_execs.clear()
+        
         return execs
+    
+    def _detect_exec_events(self, current_process_exes: Dict[int, str]):
+        """exec操作を検知する内部メソッド"""
+        for pid, current_exe in current_process_exes.items():
+            if pid in self.previous_process_exes:
+                previous_exe = self.previous_process_exes[pid]
+                # 実行ファイルパスが変更された場合はexecとみなす
+                if previous_exe and current_exe and previous_exe != current_exe:
+                    self.recent_execs.append(pid)
+    
+    def _update_process_families(self, new_processes: Dict[int, ProcessInfo]):
+        """プロセスファミリー（親子関係）を更新"""
+        self.process_families.clear()
+        for proc in new_processes.values():
+            if proc.ppid > 0:  # 親プロセスが存在する場合
+                if proc.ppid not in self.process_families:
+                    self.process_families[proc.ppid] = []
+                self.process_families[proc.ppid].append(proc.pid)
+    
+    def get_process_children(self, pid: int) -> List[ProcessInfo]:
+        """指定されたプロセスの子プロセス一覧を取得"""
+        if pid not in self.process_families:
+            return []
+        
+        children = []
+        for child_pid in self.process_families[pid]:
+            if child_pid in self.processes:
+                children.append(self.processes[child_pid])
+        return children
+    
+    def get_related_processes(self, pid: int, max_distance: int = 2) -> List[ProcessInfo]:
+        """指定されたプロセスに関連するプロセス群を取得（群れ行動用）"""
+        related = []
+        visited = set()
+        
+        def collect_related(current_pid: int, distance: int):
+            if distance > max_distance or current_pid in visited:
+                return
+            
+            visited.add(current_pid)
+            if current_pid in self.processes:
+                related.append(self.processes[current_pid])
+            
+            # 子プロセスを追加
+            for child_pid in self.process_families.get(current_pid, []):
+                collect_related(child_pid, distance + 1)
+            
+            # 兄弟プロセスを追加
+            if current_pid in self.processes:
+                parent_pid = self.processes[current_pid].ppid
+                for sibling_pid in self.process_families.get(parent_pid, []):
+                    if sibling_pid != current_pid:
+                        collect_related(sibling_pid, distance + 1)
+        
+        collect_related(pid, 0)
+        return related
+    
+    def detect_ipc_connections(self) -> List[tuple]:
+        """プロセス間通信の可能性を検出（簡単な実装）"""
+        connections = []
+        
+        # 同じ実行ファイル名を持つプロセス群を検出
+        exe_groups = {}
+        for proc in self.processes.values():
+            if proc.exe:
+                exe_name = proc.exe.split('/')[-1]  # ファイル名のみ取得
+                if exe_name not in exe_groups:
+                    exe_groups[exe_name] = []
+                exe_groups[exe_name].append(proc)
+        
+        # 複数のプロセスを持つ実行ファイルは通信の可能性あり
+        for exe_name, procs in exe_groups.items():
+            if len(procs) > 1:
+                # 全ての組み合わせを接続とみなす
+                for i in range(len(procs)):
+                    for j in range(i + 1, len(procs)):
+                        connections.append((procs[i], procs[j]))
+        
+        return connections
 
 
 def test_process_manager():
