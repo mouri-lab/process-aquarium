@@ -168,11 +168,11 @@ class ProcessManager:
                 return True
         
         # リソース使用量が一定以上のプロセスは含める
-        if memory_percent > 0.5 or cpu_percent > 1.0:
+        if memory_percent > 0.1 or cpu_percent > 0.5:  # 閾値を下げる
             return True
         
-        # その他のプロセスは確率的に選択（負荷軽減）
-        return random.random() < 0.3
+        # その他のプロセスも高確率で選択（制限解除）
+        return random.random() < 0.8  # 30%から80%に増加
 
     def get_new_processes(self) -> List[ProcessInfo]:
         """新しく生成されたプロセスのリストを取得"""
@@ -283,28 +283,63 @@ class ProcessManager:
         return related
     
     def detect_ipc_connections(self) -> List[tuple]:
-        """プロセス間通信の可能性を検出（簡単な実装）"""
+        """プロセス間通信（IPC）接続を検出
+        
+        Returns:
+            List[tuple]: (ProcessInfo, ProcessInfo)のタプルリスト
+        """
         connections = []
         
-        # 同じ実行ファイル名を持つプロセス群を検出
-        exe_groups = {}
-        for proc in self.processes.values():
-            if proc.exe:
-                exe_name = proc.exe.split('/')[-1]  # ファイル名のみ取得
-                if exe_name not in exe_groups:
-                    exe_groups[exe_name] = []
-                exe_groups[exe_name].append(proc)
+        try:
+            # ネットワーク接続からプロセス間通信を推定
+            net_connections = psutil.net_connections(kind='inet')
+            
+            # ローカル接続を抽出
+            local_connections = {}
+            for conn in net_connections:
+                if (conn.laddr and conn.raddr and 
+                    conn.laddr.ip in ['127.0.0.1', '::1'] and
+                    conn.raddr.ip in ['127.0.0.1', '::1'] and
+                    conn.pid):
+                    
+                    key = (min(conn.laddr.port, conn.raddr.port), 
+                           max(conn.laddr.port, conn.raddr.port))
+                    
+                    if key not in local_connections:
+                        local_connections[key] = []
+                    local_connections[key].append(conn.pid)
+            
+            # 同じポートペアを使用するプロセス同士を接続として扱う
+            for port_pair, pids in local_connections.items():
+                if len(pids) >= 2:
+                    unique_pids = list(set(pids))
+                    for i in range(len(unique_pids)):
+                        for j in range(i + 1, len(unique_pids)):
+                            pid1, pid2 = unique_pids[i], unique_pids[j]
+                            if pid1 in self.processes and pid2 in self.processes:
+                                proc1 = self.processes[pid1]
+                                proc2 = self.processes[pid2]
+                                connections.append((proc1, proc2))
+            
+            # 親子関係も一種のIPC接続として扱う
+            for proc in self.processes.values():
+                if proc.ppid in self.processes:
+                    parent = self.processes[proc.ppid]
+                    # 既に追加されていない場合のみ追加
+                    if not any((p1.pid == parent.pid and p2.pid == proc.pid) or 
+                              (p1.pid == proc.pid and p2.pid == parent.pid) 
+                              for p1, p2 in connections):
+                        connections.append((parent, proc))
+                        
+        except (psutil.AccessDenied, psutil.NoSuchProcess) as e:
+            # アクセス権限がない場合は親子関係のみ返す
+            for proc in self.processes.values():
+                if proc.ppid in self.processes:
+                    parent = self.processes[proc.ppid]
+                    connections.append((parent, proc))
         
-        # 複数のプロセスを持つ実行ファイルは通信の可能性あり
-        for exe_name, procs in exe_groups.items():
-            if len(procs) > 1:
-                # 全ての組み合わせを接続とみなす
-                for i in range(len(procs)):
-                    for j in range(i + 1, len(procs)):
-                        connections.append((procs[i], procs[j]))
-        
-        return connections
-
+        # 接続数を制限（パフォーマンス考慮）
+        return connections[:20]
 
 def test_process_manager():
     """ProcessManagerのテスト関数"""

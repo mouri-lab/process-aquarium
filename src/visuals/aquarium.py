@@ -38,8 +38,8 @@ class Aquarium:
         import os
         os.environ['SDL_VIDEO_HIGHDPI_DISABLED'] = '0'  # 高DPI有効化
 
-        # 環境変数から設定を読み取り
-        max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '100'))
+        # 環境変数から設定を読み取り（制限を大幅に緩和）
+        max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '500'))  # 100から500に増加
         target_fps = int(os.environ.get('AQUARIUM_FPS', '30'))
 
         # 画面設定
@@ -67,20 +67,35 @@ class Aquarium:
         self.process_manager = ProcessManager(max_processes=max_processes)
         self.fishes: Dict[int, Fish] = {}  # PID -> Fish
 
-        # 描画最適化
+        # パフォーマンス最適化（制限緩和）
         self.surface_cache = {}  # 描画キャッシュ
+        self.background_cache = None  # 背景キャッシュ
         self.last_process_update = 0
-        self.process_update_interval = 2.0  # プロセス更新を2秒間隔に
+        self.process_update_interval = 1.0  # プロセス更新を1秒間隔に短縮（2秒から1秒へ）
+        self.last_cache_cleanup = time.time()
+        self.cache_cleanup_interval = 60.0  # キャッシュクリーンアップを1分間隔に延長
+
+        # 動的パフォーマンス調整
+        self.performance_monitor = {
+            'fps_history': [],
+            'fish_count_history': [],
+            'last_adjustment': 0,
+            'adaptive_particle_count': 50,
+            'adaptive_fish_update_interval': 1
+        }
 
         # UI状態
         self.selected_fish: Optional[Fish] = None
 
-        # 日本語対応フォントの設定
-        self.font = self._get_japanese_font(24)
-        self.small_font = self._get_japanese_font(18)
+        # 動的フォントスケーリング
+        self.font_scale = 1.0
+        self._update_font_scale()
+        self.font = self._get_japanese_font(int(24 * self.font_scale))
+        self.small_font = self._get_japanese_font(int(18 * self.font_scale))
 
-        # 背景とエフェクト
+        # 背景とエフェクト（動的パーティクル数）
         self.background_particles = []
+        self.particle_count = self.performance_monitor['adaptive_particle_count']
         self.init_background_particles()
 
         # プロセス関連統計
@@ -99,13 +114,20 @@ class Aquarium:
         self.show_ipc = True    # IPC可視化をオン
         self.debug_text_lines = []
 
+        # フルスクリーン管理
+        self.original_size = (width, height)
+
         # 実行状態
         self.running = True
 
     def init_background_particles(self):
-        """背景の水泡パーティクルを初期化"""
+        """背景の水泡パーティクルを初期化（適応的）"""
         self.background_particles = []  # 既存のパーティクルをクリア
-        particle_count = min(50, int(self.width * self.height / 20000))  # 画面サイズに応じてパーティクル数を調整
+
+        # 適応的パーティクル数を使用
+        base_count = min(100, int(self.width * self.height / 15000))  # 画面サイズに応じた基本数
+        particle_count = min(base_count, self.performance_monitor['adaptive_particle_count'])
+
         for _ in range(particle_count):
             particle = {
                 'x': random.uniform(0, self.width),
@@ -115,6 +137,9 @@ class Aquarium:
                 'alpha': random.randint(30, 80)
             }
             self.background_particles.append(particle)
+
+        # 背景キャッシュをクリア（サイズ変更に対応）
+        self.background_cache = None
 
     def update_background_particles(self):
         """背景パーティクルの更新"""
@@ -127,17 +152,18 @@ class Aquarium:
                 particle['x'] = random.uniform(0, self.width)
 
     def draw_background(self):
-        """背景の描画"""
-        # 深海のグラデーション背景
-        for y in range(self.height):
-            # 上部は濃い青、下部は黒に近い青
-            intensity = 1.0 - (y / self.height)
-            blue_intensity = int(20 + intensity * 30)
-            color = (0, 0, blue_intensity)
-            pygame.draw.line(self.screen, color, (0, y), (self.width, y))
+        """背景の描画（キャッシュ最適化版）"""
+        # 背景キャッシュがない場合は作成
+        if self.background_cache is None or self.background_cache.get_size() != (self.width, self.height):
+            self._create_background_cache()
 
-        # 水泡パーティクル
-        for particle in self.background_particles:
+        # キャッシュされた背景を描画
+        self.screen.blit(self.background_cache, (0, 0))
+
+        # 動的な水泡パーティクル（適応的な数）
+        particle_count = min(len(self.background_particles), self.performance_monitor['adaptive_particle_count'])
+
+        for i, particle in enumerate(self.background_particles[:particle_count]):
             color = (100, 150, 200, particle['alpha'])
             temp_surface = pygame.Surface((particle['size'] * 2, particle['size'] * 2), pygame.SRCALPHA)
             pygame.draw.circle(temp_surface, color,
@@ -146,6 +172,18 @@ class Aquarium:
             self.screen.blit(temp_surface,
                            (particle['x'] - particle['size'],
                             particle['y'] - particle['size']))
+
+    def _create_background_cache(self):
+        """背景キャッシュを作成"""
+        self.background_cache = pygame.Surface((self.width, self.height))
+
+        # 深海のグラデーション背景
+        for y in range(self.height):
+            # 上部は濃い青、下部は黒に近い青
+            intensity = 1.0 - (y / self.height)
+            blue_intensity = int(20 + intensity * 30)
+            color = (0, 0, blue_intensity)
+            pygame.draw.line(self.background_cache, color, (0, y), (self.width, y))
 
     def update_process_data(self):
         """プロセス情報の更新"""
@@ -169,9 +207,14 @@ class Aquarium:
         self.avg_cpu = sum(proc.cpu_percent for proc in process_data.values()) / max(1, len(process_data))
         self.total_threads = sum(proc.num_threads for proc in process_data.values())
 
-        # 新規プロセス用のFish作成
+        # 新規プロセス用のFish作成（制限解除）
         for pid, proc in process_data.items():
             if pid not in self.fishes:
+                # 制限を一時的に解除 - すべてのプロセスを表示
+                # max_fish = min(self.process_manager.max_processes, 150)  # 最大150匹
+                # if len(self.fishes) >= max_fish:
+                #     self._remove_oldest_fish()
+
                 # ランダムな初期位置
                 x = random.uniform(50, self.width - 50)
                 y = random.uniform(50, self.height - 50)
@@ -222,6 +265,16 @@ class Aquarium:
         for pid in dead_pids:
             del self.fishes[pid]
 
+    def _remove_oldest_fish(self):
+        """最も古い魚を削除してパフォーマンスを維持"""
+        if not self.fishes:
+            return
+
+        # 作成時刻でソートして最も古い魚を特定
+        oldest_fish = min(self.fishes.values(), key=lambda f: f.creation_time)
+        print(f"🗑️ 古い魚を削除: PID {oldest_fish.pid} ({oldest_fish.process_name})")
+        del self.fishes[oldest_fish.pid]
+
     def _update_schooling_behavior(self):
         """群れ行動の更新"""
         # 関連プロセス群を取得して群れを形成
@@ -261,24 +314,33 @@ class Aquarium:
 
     def draw_ui(self):
         """UI情報の描画"""
-        # 統計情報
+        current_fps = self.clock.get_fps()
+
+        # 統計情報（パフォーマンス情報を含む）
         stats_lines = [
             f"総プロセス数: {self.total_processes}",
+            f"表示中の魚: {len(self.fishes)}",
             f"総メモリ使用率: {self.total_memory:.1f}%",
             f"平均CPU使用率: {self.avg_cpu:.2f}%",
             f"総スレッド数: {self.total_threads}",
-            f"FPS: {self.clock.get_fps():.1f}",
+            f"FPS: {current_fps:.1f}",
+            f"パーティクル数: {self.performance_monitor['adaptive_particle_count']}",
         ]
+
+        # Retinaディスプレイ情報
+        if hasattr(self, 'retina_info') and self.retina_info['is_retina']:
+            stats_lines.append(f"Retina: {self.retina_info['scale_factor']:.1f}x")
 
         # 背景パネル
         panel_height = len(stats_lines) * 25 + 10
-        panel_surface = pygame.Surface((220, panel_height), pygame.SRCALPHA)
+        panel_surface = pygame.Surface((280, panel_height), pygame.SRCALPHA)
         panel_surface.fill((0, 0, 0, 128))
         self.screen.blit(panel_surface, (10, 10))
 
         # 統計テキスト
         for i, line in enumerate(stats_lines):
-            text_surface = self._render_text(line, self.small_font, (255, 255, 255))
+            color = (255, 100, 100) if current_fps < self.fps * 0.7 else (255, 255, 255)  # 低FPS時は赤
+            text_surface = self._render_text(line, self.small_font, color)
             self.screen.blit(text_surface, (15, 15 + i * 25))
 
         # 選択されたFishの詳細情報
@@ -483,26 +545,104 @@ class Aquarium:
             if fish.target_y >= self.height:
                 fish.target_y = random.uniform(50, self.height - 50)
 
+    def _adjust_performance(self):
+        """動的パフォーマンス調整"""
+        if not self.performance_monitor['fps_history']:
+            return
+
+        avg_fps = sum(self.performance_monitor['fps_history']) / len(self.performance_monitor['fps_history'])
+        avg_fish_count = sum(self.performance_monitor['fish_count_history']) / len(self.performance_monitor['fish_count_history'])
+
+        # FPSが低い場合の調整
+        if avg_fps < self.fps * 0.7:  # 目標FPSの70%以下
+            # パーティクル数を減らす
+            if self.performance_monitor['adaptive_particle_count'] > 20:
+                self.performance_monitor['adaptive_particle_count'] -= 5
+                print(f"🐌 パフォーマンス調整: パーティクル数を{self.performance_monitor['adaptive_particle_count']}に減少")
+
+            # 魚の更新間隔を増やす
+            if self.performance_monitor['adaptive_fish_update_interval'] < 3:
+                self.performance_monitor['adaptive_fish_update_interval'] += 1
+                print(f"🐌 パフォーマンス調整: 魚更新間隔を{self.performance_monitor['adaptive_fish_update_interval']}に増加")
+
+        # FPSが十分高い場合は品質を向上
+        elif avg_fps > self.fps * 0.9 and avg_fish_count < 80:
+            # パーティクル数を増やす
+            if self.performance_monitor['adaptive_particle_count'] < 100:
+                self.performance_monitor['adaptive_particle_count'] += 5
+                print(f"🚀 パフォーマンス調整: パーティクル数を{self.performance_monitor['adaptive_particle_count']}に増加")
+
+            # 魚の更新間隔を減らす
+            if self.performance_monitor['adaptive_fish_update_interval'] > 1:
+                self.performance_monitor['adaptive_fish_update_interval'] -= 1
+                print(f"🚀 パフォーマンス調整: 魚更新間隔を{self.performance_monitor['adaptive_fish_update_interval']}に減少")
+
+    def _cleanup_caches(self):
+        """キャッシュクリーンアップ"""
+        # サーフェスキャッシュをクリア
+        old_cache_size = len(self.surface_cache)
+        self.surface_cache.clear()
+
+        # 背景キャッシュをクリア
+        self.background_cache = None
+
+        print(f"🧹 キャッシュクリーンアップ完了 (削除: {old_cache_size}アイテム)")
+
+        # ガベージコレクションを明示的に実行
+        import gc
+        gc.collect()
+
     def update(self):
         """フレーム更新"""
+        current_time = time.time()
+
+        # パフォーマンス監視
+        current_fps = self.clock.get_fps()
+        self.performance_monitor['fps_history'].append(current_fps)
+        self.performance_monitor['fish_count_history'].append(len(self.fishes))
+
+        # 履歴を最新100フレームに制限
+        if len(self.performance_monitor['fps_history']) > 100:
+            self.performance_monitor['fps_history'] = self.performance_monitor['fps_history'][-100:]
+            self.performance_monitor['fish_count_history'] = self.performance_monitor['fish_count_history'][-100:]
+
+        # 動的パフォーマンス調整（5秒ごと）
+        if current_time - self.performance_monitor['last_adjustment'] > 5.0:
+            self._adjust_performance()
+            self.performance_monitor['last_adjustment'] = current_time
+
         # プロセスデータの更新
         self.update_process_data()
 
         # 背景パーティクルの更新
         self.update_background_particles()
 
-        # Fishの位置更新（群れ行動対応）
+        # Fishの位置更新（適応的更新間隔）
         fish_list = list(self.fishes.values())
-        for fish in fish_list:
-            # 近くの魚を検索
+        update_interval = self.performance_monitor['adaptive_fish_update_interval']
+
+        for i, fish in enumerate(fish_list):
+            # 適応的更新：魚の数が多い場合は一部の魚のみ更新
+            if len(fish_list) > 50 and i % update_interval != (int(current_time * 10) % update_interval):
+                continue
+
+            # 近くの魚を検索（最適化：距離の事前チェック）
             nearby_fish = []
             for other_fish in fish_list:
                 if other_fish.pid != fish.pid:
-                    distance = math.sqrt((fish.x - other_fish.x)**2 + (fish.y - other_fish.y)**2)
-                    if distance < 100:  # 100ピクセル以内の魚
-                        nearby_fish.append(other_fish)
+                    dx = fish.x - other_fish.x
+                    dy = fish.y - other_fish.y
+                    if abs(dx) < 100 and abs(dy) < 100:  # 事前チェック
+                        distance_sq = dx * dx + dy * dy
+                        if distance_sq < 10000:  # 100^2
+                            nearby_fish.append(other_fish)
 
             fish.update_position(self.width, self.height, nearby_fish)
+
+        # 定期的なキャッシュクリーンアップ
+        if current_time - self.last_cache_cleanup > self.cache_cleanup_interval:
+            self._cleanup_caches()
+            self.last_cache_cleanup = current_time
 
     def draw(self):
         """描画処理"""
@@ -601,20 +741,28 @@ class Aquarium:
             self.scale_factor = 1.0
 
     def get_best_fullscreen_resolution(self):
-        """最適なフルスクリーン解像度を取得（論理解像度を優先）"""
+        """フルスクリーン用の最適解像度を取得（常に論理解像度を使用）"""
         try:
-            # 常に論理解像度を使用（Retinaディスプレイ対応）
+            # 現在のディスプレイ情報を取得
             info = pygame.display.Info()
             logical_width = info.current_w
             logical_height = info.current_h
 
-            print(f"🔍 論理解像度を使用: {logical_width}x{logical_height}")
-            return (logical_width, logical_height)
+            print(f"🖥️ 論理解像度を使用: {logical_width}x{logical_height}")
+
+            # Retinaディスプレイでも論理解像度を返す
+            return logical_width, logical_height
 
         except Exception as e:
             print(f"❌ 解像度取得エラー: {e}")
-            # フォールバック: 一般的な解像度
-            return (1920, 1080)
+            # フォールバック解像度
+            return 1920, 1080
+
+    def _update_font_scale(self):
+        """画面サイズに基づいてフォントスケールを更新"""
+        self.font_scale = min(self.width / self.base_width, self.height / self.base_height)
+        # 最小スケールを設定（読みやすさを保証）
+        self.font_scale = max(0.5, min(2.0, self.font_scale))
 
     def _get_japanese_font(self, size: int) -> pygame.font.Font:
         """日本語対応フォントを取得"""

@@ -6,6 +6,7 @@ Digital Life Aquarium - Fish Entity
 import pygame
 import math
 import random
+import time
 from typing import Tuple, Optional, List
 
 class Fish:
@@ -19,7 +20,9 @@ class Fish:
         # プロセス基本情報
         self.pid = pid
         self.name = name
+        self.process_name = name  # aquarium.pyとの互換性
         self.parent_pid: Optional[int] = None
+        self.creation_time = time.time()  # 作成時刻を記録
 
         # 位置と動き
         self.x = x
