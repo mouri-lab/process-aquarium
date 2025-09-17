@@ -46,6 +46,10 @@ class Fish:
         self.alignment_distance = 50.0   # 整列距離
         self.cohesion_distance = 70.0    # 結束距離
 
+        # IPC通信の吸引力
+        self.ipc_attraction_x = 0.0  # IPC接続による吸引力X
+        self.ipc_attraction_y = 0.0  # IPC接続による吸引力Y
+
         # 視覚的属性
         self.base_size = 10
         self.current_size = self.base_size
@@ -69,6 +73,12 @@ class Fish:
         self.recently_forked = False
         self.fork_glow_timer = 0
         self.exec_transition = False
+        self.exec_timer = 0
+
+        # IPC会話状態
+        self.is_talking = False  # 会話中かどうか
+        self.talk_timer = 0  # 会話アニメーションタイマー
+        self.talk_message = ""  # 表示するメッセージ
         self.exec_timer = 0
 
     def _generate_color(self) -> Tuple[int, int, int]:
@@ -205,6 +215,13 @@ class Fish:
             self.exec_timer -= 1
             if self.exec_timer == 0:
                 self.exec_transition = False
+                
+        # 会話タイマーの更新
+        if self.talk_timer > 0:
+            self.talk_timer -= 1
+            if self.talk_timer == 0:
+                self.is_talking = False
+                self.talk_message = ""
 
         # 群れ行動の計算
         flocking_force_x = 0.0
@@ -239,6 +256,10 @@ class Fish:
         # 摩擦
         self.vx *= 0.98
         self.vy *= 0.98
+
+        # IPC通信による吸引力を適用
+        self.vx += self.ipc_attraction_x
+        self.vy += self.ipc_attraction_y
 
         # 位置更新
         self.x += self.vx
@@ -400,6 +421,10 @@ class Fish:
                 sat_size = max(2, size * 0.2)
                 # 小さな魚として描画
                 self._draw_small_fish(screen, color, alpha//2, sat_x, sat_y, sat_size)
+
+        # 会話吹き出しの描画
+        if self.is_talking and self.talk_message:
+            self._draw_speech_bubble(screen, self.talk_message)
 
     def _draw_small_fish(self, screen: pygame.Surface, color: Tuple[int, int, int],
                         alpha: int, x: float, y: float, size: float):
@@ -772,3 +797,54 @@ class Fish:
             return force_x, force_y
 
         return 0.0, 0.0
+
+    def _draw_speech_bubble(self, screen: pygame.Surface, message: str):
+        """会話吹き出しの描画"""
+        if not message:
+            return
+            
+        # フォントの設定（システムフォントを使用）
+        try:
+            font = pygame.font.Font(None, 24)
+        except:
+            font = pygame.font.SysFont("Arial", 20)
+            
+        # テキストのレンダリング
+        text_surface = font.render(message, True, (255, 255, 255))
+        text_rect = text_surface.get_rect()
+        
+        # 吹き出しの位置とサイズ
+        bubble_margin = 8
+        bubble_width = text_rect.width + bubble_margin * 2
+        bubble_height = text_rect.height + bubble_margin * 2
+        
+        # 魚の上に吹き出しを配置
+        bubble_x = self.x - bubble_width // 2
+        bubble_y = self.y - bubble_height - 20
+        
+        # 画面外に出ないように調整
+        bubble_x = max(5, min(bubble_x, screen.get_width() - bubble_width - 5))
+        bubble_y = max(5, bubble_y)
+        
+        # 吹き出しの背景
+        bubble_surface = pygame.Surface((bubble_width, bubble_height), pygame.SRCALPHA)
+        pygame.draw.rect(bubble_surface, (0, 0, 0, 180), 
+                        (0, 0, bubble_width, bubble_height), border_radius=8)
+        pygame.draw.rect(bubble_surface, (255, 255, 255, 220),
+                        (2, 2, bubble_width-4, bubble_height-4), border_radius=6)
+        
+        # テキストを描画
+        text_x = bubble_margin
+        text_y = bubble_margin
+        bubble_surface.blit(text_surface, (text_x, text_y))
+        
+        # 吹き出しの尻尾（三角形）
+        tail_points = [
+            (bubble_width // 2, bubble_height),
+            (bubble_width // 2 - 8, bubble_height + 10),
+            (bubble_width // 2 + 8, bubble_height + 10)
+        ]
+        pygame.draw.polygon(bubble_surface, (255, 255, 255, 220), tail_points)
+        
+        # 画面に描画
+        screen.blit(bubble_surface, (bubble_x, bubble_y))

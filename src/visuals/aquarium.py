@@ -246,6 +246,9 @@ class Aquarium:
 
         # IPC接続の更新
         self._update_ipc_connections()
+        
+        # IPC吸引力の適用
+        self._apply_ipc_attraction()
 
         # 既存のFishデータ更新
         for pid, fish in self.fishes.items():
@@ -410,6 +413,51 @@ class Aquarium:
         if self.ipc_update_timer >= self.ipc_update_interval:
             self.ipc_update_timer = 0
             self.ipc_connections = self.process_manager.detect_ipc_connections()
+
+    def _apply_ipc_attraction(self):
+        """IPC接続ペア間の吸引力を計算・適用"""
+        # すべてのFishのIPC吸引力をリセット
+        for fish in self.fishes.values():
+            fish.ipc_attraction_x = 0.0
+            fish.ipc_attraction_y = 0.0
+            
+        # IPC接続ペアに対して吸引力を適用
+        for proc1, proc2 in self.ipc_connections:
+            if proc1.pid in self.fishes and proc2.pid in self.fishes:
+                fish1 = self.fishes[proc1.pid]
+                fish2 = self.fishes[proc2.pid]
+                
+                # 距離を計算
+                dx = fish2.x - fish1.x
+                dy = fish2.y - fish1.y
+                distance = math.sqrt(dx*dx + dy*dy)
+                
+                if distance > 5:  # 極端に近い場合は無視
+                    # 吸引力の強さを距離に応じて調整
+                    attraction_strength = 0.002  # 基本の吸引力
+                    if distance < 100:  # 近い場合は弱く
+                        attraction_strength *= 0.5
+                    elif distance > 300:  # 遠い場合は強く
+                        attraction_strength *= 2.0
+                    
+                    # 正規化された方向ベクトル
+                    force_x = (dx / distance) * attraction_strength
+                    force_y = (dy / distance) * attraction_strength
+                    
+                    # 両方の魚に吸引力を適用
+                    fish1.ipc_attraction_x += force_x
+                    fish1.ipc_attraction_y += force_y
+                    fish2.ipc_attraction_x -= force_x
+                    fish2.ipc_attraction_y -= force_y
+                    
+                    # 近距離で会話フラグをセット
+                    if distance < 80:  # 80ピクセル以内で会話
+                        fish1.is_talking = True
+                        fish1.talk_timer = 60  # 1秒間会話
+                        fish1.talk_message = "通信中..."
+                        fish2.is_talking = True
+                        fish2.talk_timer = 60
+                        fish2.talk_message = "データ送信"
 
     def draw_ipc_connections(self):
         """IPC接続の描画（デジタル神経網のような線で）"""
