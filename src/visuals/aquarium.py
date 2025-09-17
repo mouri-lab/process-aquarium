@@ -119,6 +119,9 @@ class Aquarium:
         self.show_debug = False  # デフォルトでデバッグ表示をオフ
         self.show_ipc = True    # IPC可視化をオン
         self.debug_text_lines = []
+        
+        # 通信相手のハイライト
+        self.highlighted_partners = []  # ハイライトする通信相手のPIDリスト
 
         # フルスクリーン管理
         self.original_size = (width, height)
@@ -309,9 +312,21 @@ class Aquarium:
                         processed_pids.add(related_pid)
 
     def handle_mouse_click(self, pos: Tuple[int, int]):
-        """マウスクリックによるFish選択"""
+        """マウスクリックによるFish選択と吹き出しクリック処理"""
         x, y = pos
+        
+        # まず吹き出しのクリック判定をチェック
+        for fish in self.fishes.values():
+            if fish.bubble_rect and fish.is_talking:
+                bx, by, bw, bh = fish.bubble_rect
+                if bx <= x <= bx + bw and by <= y <= by + bh:
+                    # 吹き出しがクリックされた場合、通信相手をハイライト
+                    self._highlight_communication_partners(fish)
+                    return
+        
+        # 吹き出しがクリックされなかった場合、通常のFish選択
         self.selected_fish = None
+        self.highlighted_partners = []  # 通信相手のハイライトをクリア
 
         # 最も近いFishを選択
         min_distance = float('inf')
@@ -320,6 +335,24 @@ class Aquarium:
             if distance < fish.current_size + 10 and distance < min_distance:
                 min_distance = distance
                 self.selected_fish = fish
+
+    def _highlight_communication_partners(self, fish):
+        """通信相手をハイライト表示"""
+        self.highlighted_partners = fish.talk_partners.copy()
+        
+        # 通信相手の情報を表示
+        partner_names = []
+        for partner_pid in fish.talk_partners:
+            if partner_pid in self.fishes:
+                partner_fish = self.fishes[partner_pid]
+                partner_names.append(f"{partner_fish.name} (PID:{partner_pid})")
+        
+        if partner_names:
+            print(f"プロセス {fish.name} (PID:{fish.pid}) の通信相手:")
+            for name in partner_names:
+                print(f"  -> {name}")
+        else:
+            print(f"プロセス {fish.name} (PID:{fish.pid}) の通信相手が見つかりません")
 
     def draw_ui(self):
         """UI情報の描画"""
@@ -456,9 +489,11 @@ class Aquarium:
                         fish1.is_talking = True
                         fish1.talk_timer = 60  # 1秒間会話
                         fish1.talk_message = "通信中..."
+                        fish1.talk_partners = [proc2.pid]  # 通信相手を記録
                         fish2.is_talking = True
                         fish2.talk_timer = 60
                         fish2.talk_message = "データ送信"
+                        fish2.talk_partners = [proc1.pid]  # 通信相手を記録
 
     def draw_ipc_connections(self):
         """IPC接続の描画（デジタル神経網のような線で）"""
@@ -722,6 +757,20 @@ class Aquarium:
                              (int(self.selected_fish.x), int(self.selected_fish.y)),
                              int(self.selected_fish.current_size + 10), 2)
             self.screen.blit(highlight_surface, (0, 0))
+
+        # 通信相手のハイライト表示
+        if self.highlighted_partners:
+            partner_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+            for partner_pid in self.highlighted_partners:
+                if partner_pid in self.fishes:
+                    partner_fish = self.fishes[partner_pid]
+                    # 緑色の点滅ハイライト
+                    pulse = math.sin(time.time() * 8) * 0.5 + 0.5
+                    alpha = int(150 * pulse + 50)
+                    pygame.draw.circle(partner_surface, (0, 255, 0, alpha),
+                                     (int(partner_fish.x), int(partner_fish.y)),
+                                     int(partner_fish.current_size + 15), 3)
+            self.screen.blit(partner_surface, (0, 0))
 
         # UI描画
         self.draw_ui()

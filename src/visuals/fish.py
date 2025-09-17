@@ -79,6 +79,8 @@ class Fish:
         self.is_talking = False  # 会話中かどうか
         self.talk_timer = 0  # 会話アニメーションタイマー
         self.talk_message = ""  # 表示するメッセージ
+        self.talk_partners = []  # 通信相手のPIDリスト
+        self.bubble_rect = None  # 吹き出しのクリック領域 (x, y, width, height)
         self.exec_timer = 0
 
     def _generate_color(self) -> Tuple[int, int, int]:
@@ -221,6 +223,8 @@ class Fish:
             self.talk_timer -= 1
             if self.talk_timer == 0:
                 self.is_talking = False
+                self.talk_message = ""
+                self.bubble_rect = None  # 吹き出し領域をクリア
                 self.talk_message = ""
 
         # 群れ行動の計算
@@ -826,6 +830,9 @@ class Fish:
         # 画面外に出ないように調整
         bubble_x = max(5, min(bubble_x, screen.get_width() - bubble_width - 5))
         bubble_y = max(5, bubble_y)
+        
+        # 吹き出しのクリック領域を記録
+        self.bubble_rect = (bubble_x, bubble_y, bubble_width, bubble_height)
         
         # 吹き出しの背景
         bubble_surface = pygame.Surface((bubble_width, bubble_height), pygame.SRCALPHA)

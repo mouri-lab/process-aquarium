@@ -320,6 +320,38 @@ class ProcessManager:
                                 proc1 = self.processes[pid1]
                                 proc2 = self.processes[pid2]
                                 connections.append((proc1, proc2))
+
+            # Unixドメインソケット接続の検出
+            try:
+                unix_connections = psutil.net_connections(kind='unix')
+                unix_socket_map = {}
+                
+                for conn in unix_connections:
+                    if conn.laddr and conn.pid and conn.pid in self.processes:
+                        socket_path = conn.laddr
+                        if socket_path not in unix_socket_map:
+                            unix_socket_map[socket_path] = []
+                        unix_socket_map[socket_path].append(conn.pid)
+                
+                # 同じUnixソケットパスを使用するプロセス同士を接続として扱う
+                for socket_path, pids in unix_socket_map.items():
+                    if len(pids) >= 2:
+                        unique_pids = list(set(pids))
+                        for i in range(len(unique_pids)):
+                            for j in range(i + 1, len(unique_pids)):
+                                pid1, pid2 = unique_pids[i], unique_pids[j]
+                                if pid1 in self.processes and pid2 in self.processes:
+                                    proc1 = self.processes[pid1]
+                                    proc2 = self.processes[pid2]
+                                    # 既に追加されていない場合のみ追加
+                                    if not any((p1.pid == proc1.pid and p2.pid == proc2.pid) or 
+                                              (p1.pid == proc2.pid and p2.pid == proc1.pid) 
+                                              for p1, p2 in connections):
+                                        connections.append((proc1, proc2))
+                                        
+            except (psutil.AccessDenied, OSError):
+                # Unixソケットへのアクセス権限がない場合はスキップ
+                pass
             
             # 親子関係も一種のIPC接続として扱う
             for proc in self.processes.values():
