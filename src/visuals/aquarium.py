@@ -711,7 +711,7 @@ class Aquarium:
 
         # 全てのFishを描画
         for fish in self.fishes.values():
-            fish.draw(self.screen)
+            fish.draw(self.screen, self.small_font)
 
         # 選択されたFishのハイライト
         if self.selected_fish:

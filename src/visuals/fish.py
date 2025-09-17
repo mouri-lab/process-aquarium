@@ -395,7 +395,7 @@ class Fish:
         else:
             self._draw_generic_fish(screen, color, alpha, body_length, body_width)
 
-    def draw(self, screen: pygame.Surface):
+    def draw(self, screen: pygame.Surface, font: pygame.font.Font = None):
         """Fishの描画（魚らしい見た目版）"""
         if self.death_progress >= 1.0:
             return
@@ -424,7 +424,7 @@ class Fish:
 
         # 会話吹き出しの描画
         if self.is_talking and self.talk_message:
-            self._draw_speech_bubble(screen, self.talk_message)
+            self._draw_speech_bubble(screen, self.talk_message, font)
 
     def _draw_small_fish(self, screen: pygame.Surface, color: Tuple[int, int, int],
                         alpha: int, x: float, y: float, size: float):
@@ -798,16 +798,17 @@ class Fish:
 
         return 0.0, 0.0
 
-    def _draw_speech_bubble(self, screen: pygame.Surface, message: str):
+    def _draw_speech_bubble(self, screen: pygame.Surface, message: str, font: pygame.font.Font = None):
         """会話吹き出しの描画"""
         if not message:
             return
             
-        # フォントの設定（システムフォントを使用）
-        try:
-            font = pygame.font.Font(None, 24)
-        except:
-            font = pygame.font.SysFont("Arial", 20)
+        # フォントの設定（引数で指定されたフォントを優先）
+        if font is None:
+            try:
+                font = pygame.font.Font(None, 20)
+            except:
+                font = pygame.font.SysFont("Arial", 18)
             
         # テキストのレンダリング
         text_surface = font.render(message, True, (255, 255, 255))
