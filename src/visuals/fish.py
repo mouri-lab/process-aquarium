@@ -806,16 +806,16 @@ class Fish:
         # フォントの設定（引数で指定されたフォントを優先）
         if font is None:
             try:
-                font = pygame.font.Font(None, 20)
+                font = pygame.font.Font(None, 10)
             except:
-                font = pygame.font.SysFont("Arial", 18)
+                font = pygame.font.SysFont("Arial", 10)
             
         # テキストのレンダリング
-        text_surface = font.render(message, True, (255, 255, 255))
+        text_surface = font.render(message, True, (0, 0, 0))
         text_rect = text_surface.get_rect()
         
         # 吹き出しの位置とサイズ
-        bubble_margin = 8
+        bubble_margin = 5
         bubble_width = text_rect.width + bubble_margin * 2
         bubble_height = text_rect.height + bubble_margin * 2
         

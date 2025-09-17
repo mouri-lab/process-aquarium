@@ -97,6 +97,7 @@ class Aquarium:
         self._update_font_scale()
         self.font = self._get_japanese_font(int(24 * self.font_scale))
         self.small_font = self._get_japanese_font(int(18 * self.font_scale))
+        self.bubble_font = self._get_japanese_font(10)  # IPC会話吹き出し用の小さなフォント
 
         # 背景とエフェクト（動的パーティクル数）
         self.background_particles = []
@@ -580,6 +581,7 @@ class Aquarium:
 
         self.font = self._get_japanese_font(int(base_font_size * font_scale))
         self.small_font = self._get_japanese_font(int(small_font_size * font_scale))
+        self.bubble_font = self._get_japanese_font(10)  # IPC会話吹き出し用は固定サイズ
 
     def adjust_fish_positions_for_screen_resize(self):
         """画面サイズ変更時に魚の位置を調整"""
@@ -711,7 +713,7 @@ class Aquarium:
 
         # 全てのFishを描画
         for fish in self.fishes.values():
-            fish.draw(self.screen, self.small_font)
+            fish.draw(self.screen, self.bubble_font)
 
         # 選択されたFishのハイライト
         if self.selected_fish:
