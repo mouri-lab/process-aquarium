@@ -32,7 +32,12 @@ class Aquarium:
     def __init__(self, width: int = 1200, height: int = 800):
         # Pygameの初期化
         pygame.init()
-        pygame.mixer.init()
+        try:
+            pygame.mixer.init()
+        except pygame.error:
+            # オーディオデバイスが利用できない場合は無視
+            print("⚠️  オーディオデバイスが利用できません。音声なしで継続します。")
+            pass
 
         # macOS Retina対応の環境変数設定
         import os
