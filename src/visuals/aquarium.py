@@ -53,7 +53,7 @@ class Aquarium:
         os.environ['SDL_VIDEO_HIGHDPI_DISABLED'] = '0'  # 高DPI有効化
 
         # 環境変数から設定を読み取り（制限を大幅に緩和）
-        max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '500'))  # 100から500に増加
+        max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '2000'))  # 500から2000に増加
         target_fps = int(os.environ.get('AQUARIUM_FPS', '30'))
 
         # 画面設定
@@ -273,6 +273,9 @@ class Aquarium:
 
                 fish = Fish(pid, proc.name, x, y)
                 self.fishes[pid] = fish
+                
+                # プロセス誕生ログ
+                print(f"🐟 新しいプロセス誕生: PID {pid} ({proc.name})")
 
                 # 親子関係があれば分裂エフェクト
                 if proc.ppid in self.fishes:
@@ -281,6 +284,7 @@ class Aquarium:
                     # 子プロセスは親の近くに配置
                     fish.x = parent_fish.x + random.uniform(-50, 50)
                     fish.y = parent_fish.y + random.uniform(-50, 50)
+                    print(f"👨‍👦 親子関係検出: 親PID {proc.ppid} → 子PID {pid}")
 
         # exec検出とエフェクト
         exec_processes = self.process_manager.detect_exec()
@@ -325,21 +329,21 @@ class Aquarium:
                 dying_fish_details.append(f"PID {pid}: {fish.death_progress:.2f}")
                 if fish.death_progress >= 1.0:
                     dead_pids.append(pid)
-                    print(f"💀 魚の死亡処理完了: PID {pid} ({fish.process_name}) - 削除対象")
+                    # print(f"💀 魚の死亡処理完了: PID {pid} ({fish.process_name}) - 削除対象")
 
         # 死亡中の魚の進行状況を定期的に表示（最大5匹まで）
-        if dying_fish_details:
-            print(f"⏰ 死亡進行中: {', '.join(dying_fish_details[:5])}{'...' if len(dying_fish_details) > 5 else ''}")
+        # if dying_fish_details:
+        #     print(f"⏰ 死亡進行中: {', '.join(dying_fish_details[:5])}{'...' if len(dying_fish_details) > 5 else ''}")
 
-        print(f"📊 現在の魚数: {len(self.fishes)}, 削除対象: {len(dead_pids)}, 総プロセス数: {len(process_data)}")
+        # print(f"📊 現在の魚数: {len(self.fishes)}, 削除対象: {len(dead_pids)}, 総プロセス数: {len(process_data)}")
         
         for pid in dead_pids:
             fish_name = self.fishes[pid].process_name
             del self.fishes[pid]
-            print(f"🗑️ 魚を削除完了: PID {pid} ({fish_name})")
+            # print(f"🗑️ 魚を削除完了: PID {pid} ({fish_name})")
             
-        if dead_pids:
-            print(f"📊 削除後の魚数: {len(self.fishes)}")
+        # if dead_pids:
+        #     print(f"📊 削除後の魚数: {len(self.fishes)}")
 
     def _remove_oldest_fish(self):
         """最も古い魚を削除してパフォーマンスを維持"""
@@ -348,7 +352,7 @@ class Aquarium:
 
         # 作成時刻でソートして最も古い魚を特定
         oldest_fish = min(self.fishes.values(), key=lambda f: f.creation_time)
-        print(f"🗑️ 古い魚を削除: PID {oldest_fish.pid} ({oldest_fish.process_name})")
+        # print(f"🗑️ 古い魚を削除: PID {oldest_fish.pid} ({oldest_fish.process_name})")
         del self.fishes[oldest_fish.pid]
 
     def _update_schooling_behavior(self):
@@ -741,7 +745,7 @@ class Aquarium:
         # 背景キャッシュをクリア
         self.background_cache = None
 
-        print(f"🧹 キャッシュクリーンアップ完了 (削除: {old_cache_size}アイテム)")
+        # print(f"🧹 キャッシュクリーンアップ完了 (削除: {old_cache_size}アイテム)")
 
         # ガベージコレクションを明示的に実行
         import gc
@@ -807,8 +811,8 @@ class Aquarium:
             fish.update_position(self.width, self.height, nearby_fish)
 
         # 魚の更新統計をログ出力（デバッグ用）
-        if dying_fish_updated > 0 or total_fish_updated < len(fish_list):
-            print(f"🔄 魚更新統計: 総数{len(fish_list)}, 更新数{total_fish_updated}, 死亡中更新数{dying_fish_updated}")
+        # if dying_fish_updated > 0 or total_fish_updated < len(fish_list):
+        #     print(f"🔄 魚更新統計: 総数{len(fish_list)}, 更新数{total_fish_updated}, 死亡中更新数{dying_fish_updated}")
 
         # 定期的なキャッシュクリーンアップ
         if current_time - self.last_cache_cleanup > self.cache_cleanup_interval:

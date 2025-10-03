@@ -177,15 +177,19 @@ class PsutilProcessSource(IProcessSource):
 
     # ---------------- Internal helpers ---------------- #
     def _should_include(self, name: str, mem: float, cpu: float) -> bool:
-        lower = name.lower()
-        if any(pat in lower for pat in self.excluded_patterns):
-            return False
-        if any(imp in lower for imp in self.important_names):
-            return True
-        if (mem or 0) > 0.1 or (cpu or 0) > 0.5:
-            return True
-        import random
-        return random.random() < 0.8
+        # すべてのプロセスを可視化するため、フィルタリングを無効化
+        return True
+        
+        # 元のフィルタリングロジック（コメントアウト）
+        # lower = name.lower()
+        # if any(pat in lower for pat in self.excluded_patterns):
+        #     return False
+        # if any(imp in lower for imp in self.important_names):
+        #     return True
+        # if (mem or 0) > 0.1 or (cpu or 0) > 0.5:
+        #     return True
+        # import random
+        # return random.random() < 0.8
 
     def _detect_ipc(self) -> List[IPCConnection]:
         conns: List[IPCConnection] = []
@@ -428,20 +432,24 @@ class EbpfProcessSource(IProcessSource):
         print(f"[eBPF] 初期スキャン完了: {count}プロセス収集 ({elapsed:.2f}秒)")
 
     def _should_include_in_scan(self, name: str, mem_percent: float) -> bool:
-        """初期スキャン時のフィルタリング（重要なプロセスのみ）"""
-        # システムプロセスは除外
-        excluded = {'kthreadd', 'ksoftirqd', 'rcu_', 'watchdog', 'swapper'}
-        if any(ex in name.lower() for ex in excluded):
-            return False
+        """初期スキャン時のフィルタリング（すべてのプロセスを表示）"""
+        # すべてのプロセスを可視化するため、フィルタリングを無効化
+        return True
         
-        # メモリ使用量が一定以上、または重要なプロセス名
-        important = {'python', 'node', 'java', 'chrome', 'firefox', 'code', 'docker', 'nginx', 'apache'}
-        if any(imp in name.lower() for imp in important) or (mem_percent and mem_percent > 0.5):
-            return True
-        
-        # ランダムサンプリング（負荷軽減）
-        import random
-        return random.random() < 0.3
+        # 元のフィルタリングロジック（コメントアウト）
+        # # システムプロセスは除外
+        # excluded = {'kthreadd', 'ksoftirqd', 'rcu_', 'watchdog', 'swapper'}
+        # if any(ex in name.lower() for ex in excluded):
+        #     return False
+        # 
+        # # メモリ使用量が一定以上、または重要なプロセス名
+        # important = {'python', 'node', 'java', 'chrome', 'firefox', 'code', 'docker', 'nginx', 'apache'}
+        # if any(imp in name.lower() for imp in important) or (mem_percent and mem_percent > 0.5):
+        #     return True
+        # 
+        # # ランダムサンプリング（負荷軽減）
+        # import random
+        # return random.random() < 0.3
 
     # ---------- IProcessSource API ---------- #
     def update(self) -> None:  # type: ignore[override]

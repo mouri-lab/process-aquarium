@@ -172,16 +172,16 @@ class ProcessManager:
         for pid in self.previous_pids:
             if pid not in current_pids and pid in self.processes:
                 process_name = self.processes[pid].name
-                print(f"⚰️ ProcessManager: プロセス終了検出 PID {pid} ({process_name}) - is_dying=True設定")
+                # print(f"⚰️ ProcessManager: プロセス終了検出 PID {pid} ({process_name}) - is_dying=True設定")
                 self.processes[pid].is_dying = True
                 dying_processes.append(pid)
         
-        if dying_processes:
-            print(f"📊 ProcessManager: 今回のサイクルで{len(dying_processes)}個のプロセス終了を検出")
+        # if dying_processes:
+        #     print(f"📊 ProcessManager: 今回のサイクルで{len(dying_processes)}個のプロセス終了を検出")
         prev_count = len(self.processes)
         self.processes = new_snapshot
         new_count = len(self.processes)
-        print(f"📊 ProcessManager更新: {prev_count} → {new_count} プロセス (現在PID数: {len(current_pids)})")
+        # print(f"📊 ProcessManager更新: {prev_count} → {new_count} プロセス (現在PID数: {len(current_pids)})")
         
         self.previous_pids = current_pids
         self.previous_process_exes = current_exe
