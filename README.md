@@ -2,6 +2,29 @@
 
 Process Aquarium is an application visualizing processes as fish in an aquarium. Each fish represents a running process on your system.
 
+## 🚀 GPU Acceleration with Pyglet
+
+**Process Aquarium now uses Pyglet for GPU-accelerated rendering!** This provides:
+
+- **Hardware-accelerated graphics** via OpenGL for smooth 60 FPS rendering even with hundreds of processes
+- **Better performance** with efficient vertex batching and GPU blending
+- **Anti-aliased lines and shapes** for crisp visuals
+- **Lower CPU usage** compared to software-rendered Pygame
+
+### Rendering Backend
+
+By default, Process Aquarium uses Pyglet (GPU-accelerated). You can switch backends using the `AQUARIUM_BACKEND` environment variable:
+
+```bash
+# Use Pyglet (default, GPU-accelerated) 🚀
+python main.py
+
+# Use Pygame (software rendering, fallback)
+AQUARIUM_BACKEND=pygame python main.py
+```
+
+The Pygame version is preserved for compatibility, but Pyglet is recommended for better performance.
+
 ## eBPF Integration (Design Draft)
 
 This branch introduces an abstraction layer to allow future event–driven
@@ -14,7 +37,8 @@ monitoring using eBPF instead of (or combined with) psutil polling.
 | `src/core/types.py` | Shared dataclasses (`ProcessInfo`, lifecycle / IPC events) |
 | `src/core/sources.py` | `IProcessSource` interface + `PsutilProcessSource` implementation |
 | `src/core/process_manager.py` | Backwards compatible wrapper exposing legacy API |
-| `src/visuals/*` | Visualization & interaction (unchanged public contract) |
+| `src/visuals/*_pyglet.py` | **GPU-accelerated** visualization with Pyglet/OpenGL (default) |
+| `src/visuals/*_pygame.py` | Software-rendered visualization with Pygame (fallback) |
 
 ### Lifecycle Events
 `ProcessLifecycleEvent` normalizes: `spawn`, `fork` (derived), `exec`, `exit`.

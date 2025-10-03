@@ -19,7 +19,7 @@ import argparse
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-from src.visuals.aquarium import Aquarium
+from src.visuals import Aquarium
 
 
 def main_cli():

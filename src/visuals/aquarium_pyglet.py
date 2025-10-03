@@ -361,9 +361,9 @@ class Aquarium:
         
         # Stats (top right)
         lines = [
-            f"🐠 生命体: {stats['total']}",
-            f"🆕 新規: {stats['new']}",
-            f"💀 終了: {stats['dying']}",
+            f"🐠 生命体: {stats['total_processes']}",
+            f"🆕 新規: {stats['new_processes']}",
+            f"💀 終了: {stats['dying_processes']}",
         ]
         
         limit = self.process_manager._process_limit
@@ -487,7 +487,7 @@ class Aquarium:
                 now = time.time()
                 if now - last_print >= self.headless_interval:
                     last_print = now
-                    print(f"[{time.strftime('%H:%M:%S')}] プロセス: {stats['total']} (新規: {stats['new']}, 終了: {stats['dying']})")
+                    print(f"[{time.strftime('%H:%M:%S')}] プロセス: {stats['total_processes']} (新規: {stats['new_processes']}, 終了: {stats['dying_processes']})")
                 
                 elapsed = time.time() - start
                 remaining = self.headless_interval - elapsed
