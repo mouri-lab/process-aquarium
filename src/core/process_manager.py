@@ -211,6 +211,18 @@ class ProcessManager:
         """消滅するプロセスのリストを取得"""
         return [proc for proc in self.processes.values() if proc.is_dying]
 
+    def get_data_source(self) -> str:
+        """現在使用中のデータソース名を取得"""
+        if self._external_source is not None:
+            source_class = self._external_source.__class__.__name__
+            if "Ebpf" in source_class:
+                return "eBPF"
+            elif "Psutil" in source_class:
+                return "psutil"
+            else:
+                return source_class.replace("ProcessSource", "").lower()
+        return "psutil"  # フォールバック時
+
     def get_process_statistics(self) -> Dict[str, any]:
         """プロセス統計情報を取得"""
         total_processes = len(self.processes)
@@ -218,14 +230,23 @@ class ProcessManager:
         avg_cpu = sum(proc.cpu_percent for proc in self.processes.values()) / total_processes if total_processes > 0 else 0
         total_threads = sum(proc.num_threads for proc in self.processes.values())
 
-        return {
+        stats = {
             'total_processes': total_processes,
             'total_memory_percent': total_memory,
             'average_cpu_percent': avg_cpu,
             'total_threads': total_threads,
             'new_processes': len(self.get_new_processes()),
-            'dying_processes': len(self.get_dying_processes())
+            'dying_processes': len(self.get_dying_processes()),
+            'data_source': self.get_data_source()
         }
+        
+        # eBPFソースの場合はイベント統計を含める
+        if (self._external_source is not None and 
+            hasattr(self._external_source, '_event_stats')):
+            event_stats = self._external_source._event_stats
+            stats['ebpf_events'] = f"spawn:{event_stats['spawn']} exec:{event_stats['exec']} exit:{event_stats['exit']} captured:{event_stats['captured']}"
+        
+        return stats
 
     def detect_fork(self) -> List[tuple]:
         """fork操作を検知（親子関係の新規作成）"""

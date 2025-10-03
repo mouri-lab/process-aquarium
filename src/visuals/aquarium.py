@@ -95,7 +95,18 @@ class Aquarium:
                     source = eb
                     print("[eBPF] EbpfProcessSource 有効化")
                 else:
-                    print("[eBPF] 利用不可のため psutil にフォールバック")
+                    # エラー詳細をライフサイクルイベントから取得
+                    error_details = ""
+                    try:
+                        events = eb.drain_lifecycle_events()
+                        for event in events:
+                            if event.details and ('error' in event.details or 'warning' in event.details):
+                                error_msg = event.details.get('error') or event.details.get('warning')
+                                error_details = f" - 理由: {error_msg}"
+                                break
+                    except:
+                        pass
+                    print(f"[eBPF] 利用不可のため psutil にフォールバック{error_details}")
             except Exception as e:
                 print(f"[eBPF] 初期化失敗: {e} -> psutil フォールバック")
         self.process_manager = ProcessManager(max_processes=max_processes, source=source)
@@ -842,7 +853,14 @@ class Aquarium:
                 now = time.time()
                 if now - last_print >= self.headless_interval:
                     last_print = now
-                    print(f"[stats] procs={stats['total_processes']} new={stats['new_processes']} dying={stats['dying_processes']} mem={stats['total_memory_percent']:.2f}% cpu_avg={stats['average_cpu_percent']:.2f}% threads={stats['total_threads']}")
+                    data_source = stats.get('data_source', 'unknown')
+                    base_stats = f"procs={stats['total_processes']} new={stats['new_processes']} dying={stats['dying_processes']} mem={stats['total_memory_percent']:.2f}% cpu_avg={stats['average_cpu_percent']:.2f}% threads={stats['total_threads']}"
+                    
+                    # eBPFの場合はイベント統計も表示
+                    if 'ebpf_events' in stats:
+                        print(f"[stats|{data_source}] {base_stats} events=[{stats['ebpf_events']}]")
+                    else:
+                        print(f"[stats|{data_source}] {base_stats}")
                 # シンプルスリープ（イベント駆動化は今後 eBPF 実装時に検討）
                 elapsed = time.time() - start
                 remaining = self.headless_interval - elapsed

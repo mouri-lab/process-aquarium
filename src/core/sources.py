@@ -257,6 +257,8 @@ class EbpfProcessSource(IProcessSource):
         self._lifecycle_buffer: List[ProcessLifecycleEvent] = []
         self._last_poll = 0.0
         self.poll_interval = 0.2  # seconds (perf buffer drain)
+        # イベント統計
+        self._event_stats = {"spawn": 0, "exec": 0, "exit": 0, "captured": 0}
         if not enable:
             return
         try:
@@ -274,10 +276,22 @@ class EbpfProcessSource(IProcessSource):
             self._bpf["exit_events"].open_perf_buffer(self._handle_exit)
             self.available = True
         except Exception as e:
-            # ロード失敗（カーネルサポート/権限の問題）
+            # エラー詳細を判別して適切なメッセージを生成
+            error_str = str(e)
+            if "Operation not permitted" in error_str or "Permission denied" in error_str:
+                error_detail = "root権限が必要です (sudo で実行してください)"
+            elif "No such file or directory" in error_str and "tracepoint" in error_str:
+                error_detail = "カーネルがeBPFトレースポイントをサポートしていません"
+            elif "Invalid argument" in error_str:
+                error_detail = "eBPFプログラムのロードに失敗 (カーネルバージョンが古い可能性)"
+            elif "bpf" in error_str.lower() and "not" in error_str.lower():
+                error_detail = "eBPFサブシステムが利用できません"
+            else:
+                error_detail = f"予期しないエラー: {e}"
+            
             self._lifecycle_buffer.append(ProcessLifecycleEvent(
                 event_type="exec", pid=0, ppid=None, timestamp=time.time(),
-                details={"error": f"eBPF load failed: {e}"}
+                details={"error": error_detail}
             ))
             self.available = False
 
@@ -286,26 +300,31 @@ class EbpfProcessSource(IProcessSource):
         from bcc import BPF  # type: ignore
         evt = self._bpf["fork_events"].event(data)
         now = time.time()
+        self._event_stats["spawn"] += 1
         self._lifecycle_buffer.append(ProcessLifecycleEvent(
             event_type="spawn", pid=evt.pid, ppid=evt.ppid, timestamp=now,
             details={"source": "ebpf", "raw_ts": evt.ts}
         ))
         # spawn直後に psutil で補完（短命プロセスを捕捉したいのでベストエフォート）
-        self._populate_process(evt.pid, evt.ppid)
+        if self._populate_process(evt.pid, evt.ppid):
+            self._event_stats["captured"] += 1
 
     def _handle_exec(self, cpu, data, size):  # type: ignore[override]
         evt = self._bpf["exec_events"].event(data)
         now = time.time()
+        self._event_stats["exec"] += 1
         self._lifecycle_buffer.append(ProcessLifecycleEvent(
             event_type="exec", pid=evt.pid, ppid=self._processes.get(evt.pid).ppid if evt.pid in self._processes else None,
             timestamp=now, details={"source": "ebpf", "raw_ts": evt.ts}
         ))
         # exec後に名称/コマンドラインをリフレッシュ
-        self._populate_process(evt.pid)
+        if self._populate_process(evt.pid):
+            self._event_stats["captured"] += 1
 
     def _handle_exit(self, cpu, data, size):  # type: ignore[override]
         evt = self._bpf["exit_events"].event(data)
         now = time.time()
+        self._event_stats["exit"] += 1
         ppid = self._processes.get(evt.pid).ppid if evt.pid in self._processes else None
         self._lifecycle_buffer.append(ProcessLifecycleEvent(
             event_type="exit", pid=evt.pid, ppid=ppid, timestamp=now,
@@ -320,11 +339,18 @@ class EbpfProcessSource(IProcessSource):
         try:
             p = psutil.Process(pid)
             with p.oneshot():
+                name = p.name()
+                exe = ''
+                try:
+                    exe = p.exe()
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    pass  # exe取得失敗は無視
+                
                 info = ProcessInfo(
                     pid=pid,
                     ppid=p.ppid() if ppid_hint is None else ppid_hint,
-                    name=p.name(),
-                    exe=p.exe() if p.info.get('exe') else '',
+                    name=name,
+                    exe=exe,
                     memory_percent=p.memory_percent() or 0.0,
                     cpu_percent=0.0,  # CPU% は後で外部で更新され得る
                     num_threads=p.num_threads(),
@@ -336,9 +362,18 @@ class EbpfProcessSource(IProcessSource):
                     is_new=True
                 )
                 self._processes[pid] = info
-        except Exception:
-            # 短命 or 権限不足は無視
+                print(f"[eBPF] プロセス捕捉成功: {name} (PID: {pid})")
+                return True
+        except psutil.NoSuchProcess:
+            # プロセスが既に終了済み（短命プロセス）
             pass
+        except psutil.AccessDenied:
+            # 権限不足
+            pass
+        except Exception as e:
+            # その他のエラー
+            pass
+        return False
 
     # ---------- IProcessSource API ---------- #
     def update(self) -> None:  # type: ignore[override]
