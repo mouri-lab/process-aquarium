@@ -251,14 +251,17 @@ class EbpfProcessSource(IProcessSource):
     }
     """
 
-    def __init__(self, enable: bool = True):
+    def __init__(self, enable: bool = True, hybrid_mode: bool = True):
         self.available = False
         self._processes: Dict[int, ProcessInfo] = {}
         self._lifecycle_buffer: List[ProcessLifecycleEvent] = []
         self._last_poll = 0.0
-        self.poll_interval = 0.2  # seconds (perf buffer drain)
+        self.poll_interval = 1.0  # seconds (perf buffer drain - 軽量化)
+        # ハイブリッドモード: 初期スキャン + eBPF イベント追跡
+        self.hybrid_mode = hybrid_mode
+        self._initial_scan_done = False
         # イベント統計
-        self._event_stats = {"spawn": 0, "exec": 0, "exit": 0, "captured": 0}
+        self._event_stats = {"spawn": 0, "exec": 0, "exit": 0, "captured": 0, "initial_scan": 0}
         if not enable:
             return
         try:
@@ -275,6 +278,10 @@ class EbpfProcessSource(IProcessSource):
             self._bpf["exec_events"].open_perf_buffer(self._handle_exec)
             self._bpf["exit_events"].open_perf_buffer(self._handle_exit)
             self.available = True
+            
+            # ハイブリッドモード: 初期スキャンで既存プロセスを収集
+            if self.hybrid_mode:
+                self._perform_initial_scan()
         except Exception as e:
             # エラー詳細を判別して適切なメッセージを生成
             error_str = str(e)
@@ -330,9 +337,9 @@ class EbpfProcessSource(IProcessSource):
             event_type="exit", pid=evt.pid, ppid=ppid, timestamp=now,
             details={"source": "ebpf", "raw_ts": evt.ts}
         ))
-        # 終了したプロセスは保持し続けず簡潔化
+        # 終了したプロセスを削除（メモリ効率化）
         if evt.pid in self._processes:
-            self._processes[evt.pid].is_dying = True
+            del self._processes[evt.pid]
 
     # ---------- helpers ---------- #
     def _populate_process(self, pid: int, ppid_hint: Optional[int] = None):
@@ -375,6 +382,67 @@ class EbpfProcessSource(IProcessSource):
             pass
         return False
 
+    def _perform_initial_scan(self):
+        """初期スキャン: 既存のプロセス群をpsutilで一度だけ取得"""
+        print("[eBPF] 初期プロセススキャンを実行中...")
+        start_time = time.time()
+        count = 0
+        
+        for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'memory_percent',
+                                         'cpu_percent', 'num_threads', 'create_time',
+                                         'status', 'cmdline']):
+            try:
+                info = proc.info
+                pid = info['pid']
+                name = (info['name'] or 'unknown')
+                
+                # 簡単なフィルタリング（重要なプロセスのみ）
+                if not self._should_include_in_scan(name, info.get('memory_percent', 0)):
+                    continue
+                
+                proc_info = ProcessInfo(
+                    pid=pid,
+                    ppid=info['ppid'] or 0,
+                    name=name,
+                    exe=info['exe'] or '',
+                    memory_percent=info['memory_percent'] or 0.0,
+                    cpu_percent=info['cpu_percent'] or 0.0,
+                    num_threads=info['num_threads'] or 1,
+                    create_time=info['create_time'] or 0.0,
+                    status=info['status'] or 'unknown',
+                    cmdline=info['cmdline'] or [],
+                    birth_time=datetime.now(),
+                    last_update=datetime.now(),
+                    is_new=False,  # 初期スキャンなので新規ではない
+                )
+                
+                self._processes[pid] = proc_info
+                count += 1
+                
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+        
+        self._initial_scan_done = True
+        self._event_stats["initial_scan"] = count
+        elapsed = time.time() - start_time
+        print(f"[eBPF] 初期スキャン完了: {count}プロセス収集 ({elapsed:.2f}秒)")
+
+    def _should_include_in_scan(self, name: str, mem_percent: float) -> bool:
+        """初期スキャン時のフィルタリング（重要なプロセスのみ）"""
+        # システムプロセスは除外
+        excluded = {'kthreadd', 'ksoftirqd', 'rcu_', 'watchdog', 'swapper'}
+        if any(ex in name.lower() for ex in excluded):
+            return False
+        
+        # メモリ使用量が一定以上、または重要なプロセス名
+        important = {'python', 'node', 'java', 'chrome', 'firefox', 'code', 'docker', 'nginx', 'apache'}
+        if any(imp in name.lower() for imp in important) or (mem_percent and mem_percent > 0.5):
+            return True
+        
+        # ランダムサンプリング（負荷軽減）
+        import random
+        return random.random() < 0.3
+
     # ---------- IProcessSource API ---------- #
     def update(self) -> None:  # type: ignore[override]
         if not self.available:
@@ -383,8 +451,9 @@ class EbpfProcessSource(IProcessSource):
         if now - self._last_poll < self.poll_interval:
             return
         self._last_poll = now
+        
+        # eBPFイベントのみをポーリング（軽量）
         try:
-            # non-blocking poll
             self._bpf.perf_buffer_poll(timeout=0)
         except Exception:
             pass

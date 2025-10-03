@@ -90,10 +90,10 @@ class Aquarium:
         if chosen == "ebpf":
             try:
                 from ..core.sources import EbpfProcessSource
-                eb = EbpfProcessSource()
+                eb = EbpfProcessSource(enable=True, hybrid_mode=True)
                 if getattr(eb, 'available', False):
                     source = eb
-                    print("[eBPF] EbpfProcessSource 有効化")
+                    print("[eBPF] EbpfProcessSource 有効化（ハイブリッドモード）")
                 else:
                     # エラー詳細をライフサイクルイベントから取得
                     error_details = ""

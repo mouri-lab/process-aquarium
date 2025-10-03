@@ -244,7 +244,10 @@ class ProcessManager:
         if (self._external_source is not None and 
             hasattr(self._external_source, '_event_stats')):
             event_stats = self._external_source._event_stats
-            stats['ebpf_events'] = f"spawn:{event_stats['spawn']} exec:{event_stats['exec']} exit:{event_stats['exit']} captured:{event_stats['captured']}"
+            if event_stats.get('initial_scan', 0) > 0:
+                stats['ebpf_events'] = f"initial:{event_stats['initial_scan']} spawn:{event_stats['spawn']} exec:{event_stats['exec']} exit:{event_stats['exit']} captured:{event_stats['captured']}"
+            else:
+                stats['ebpf_events'] = f"spawn:{event_stats['spawn']} exec:{event_stats['exec']} exit:{event_stats['exit']} captured:{event_stats['captured']}"
         
         return stats
 
