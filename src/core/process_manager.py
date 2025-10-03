@@ -87,6 +87,11 @@ class ProcessManager:
             'bluetoothd', 'audiomxd', 'logd_helper', 'deleted'
         }
 
+        # プロセス制限とソート設定
+        self.process_limit: Optional[int] = None
+        self.sort_by: str = "cpu"  # cpu, memory, name, pid
+        self.sort_order: str = "desc"  # asc, desc
+
         # ソース確立
         if self._external_source is None and PsutilProcessSource is not None:
             self._external_source = PsutilProcessSource(max_processes=max_processes)
@@ -94,6 +99,21 @@ class ProcessManager:
     def get_all_processes(self) -> Dict[int, ProcessInfo]:
         """全プロセス情報を取得"""
         return self.processes.copy()
+
+    def set_process_limit(self, limit: Optional[int]) -> None:
+        """表示プロセス数の制限を設定"""
+        self.process_limit = limit
+        if self._external_source is not None and hasattr(self._external_source, 'set_process_limit'):
+            self._external_source.set_process_limit(limit)
+
+    def set_sort_config(self, sort_by: str, sort_order: str = "desc") -> None:
+        """ソート設定を変更"""
+        if sort_by in ["cpu", "memory", "name", "pid"]:
+            self.sort_by = sort_by
+        if sort_order in ["asc", "desc"]:
+            self.sort_order = sort_order
+        if self._external_source is not None and hasattr(self._external_source, 'set_sort_config'):
+            self._external_source.set_sort_config(sort_by, sort_order)
 
     def get_process(self, pid: int) -> Optional[ProcessInfo]:
         """指定されたPIDのプロセス情報を取得"""
@@ -105,6 +125,9 @@ class ProcessManager:
             # 新実装経路
             self._external_source.update()
             snapshot = self._external_source.get_processes()
+
+            # ソートと制限を適用
+            snapshot = self._apply_sort_and_limit(snapshot)
 
             # 互換フィールドへ反映
             self.processes = snapshot
@@ -166,6 +189,10 @@ class ProcessManager:
                 new_snapshot[pid] = pinfo
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
+        
+        # ソートと制限を適用
+        new_snapshot = self._apply_sort_and_limit(new_snapshot)
+        
         self._detect_exec_events(current_exe)
         self._update_process_families(new_snapshot)
         dying_processes = []
@@ -213,6 +240,37 @@ class ProcessManager:
         
         # その他のプロセスも高確率で選択（制限解除）
         return random.random() < 0.8  # 30%から80%に増加
+
+    def _apply_sort_and_limit(self, processes: Dict[int, ProcessInfo]) -> Dict[int, ProcessInfo]:
+        """プロセスをソートして制限を適用"""
+        if not processes:
+            return processes
+
+        # プロセスリストに変換
+        process_list = list(processes.values())
+
+        # ソートキーを決定
+        if self.sort_by == "cpu":
+            key_func = lambda p: p.cpu_percent
+        elif self.sort_by == "memory":
+            key_func = lambda p: p.memory_percent
+        elif self.sort_by == "name":
+            key_func = lambda p: p.name.lower()
+        elif self.sort_by == "pid":
+            key_func = lambda p: p.pid
+        else:
+            key_func = lambda p: p.cpu_percent
+
+        # ソート
+        reverse = (self.sort_order == "desc")
+        process_list.sort(key=key_func, reverse=reverse)
+
+        # 制限を適用
+        if self.process_limit is not None and self.process_limit > 0:
+            process_list = process_list[:self.process_limit]
+
+        # 辞書に戻す
+        return {p.pid: p for p in process_list}
 
     def get_new_processes(self) -> List[ProcessInfo]:
         """新しく生成されたプロセスのリストを取得"""

@@ -112,6 +112,17 @@ class Aquarium:
         self.process_manager = ProcessManager(max_processes=max_processes, source=source)
         self.fishes: Dict[int, Fish] = {}  # PID -> Fish
 
+        # プロセス制限とソート設定
+        limit_str = os.environ.get("AQUARIUM_LIMIT")
+        self.process_limit = int(limit_str) if limit_str else None
+        self.sort_by = os.environ.get("AQUARIUM_SORT_BY", "cpu")
+        self.sort_order = os.environ.get("AQUARIUM_SORT_ORDER", "desc")
+        
+        # ProcessManagerに設定を反映
+        if self.process_limit is not None:
+            self.process_manager.set_process_limit(self.process_limit)
+        self.process_manager.set_sort_config(self.sort_by, self.sort_order)
+
         # パフォーマンス最適化（制限緩和）
         self.surface_cache = {}  # 描画キャッシュ
         self.background_cache = None  # 背景キャッシュ
@@ -439,6 +450,14 @@ class Aquarium:
             f"パーティクル数: {self.performance_monitor['adaptive_particle_count']}",
         ]
 
+        # プロセス制限とソート情報を追加
+        limit_str = "無制限" if self.process_limit is None else str(self.process_limit)
+        stats_lines.append(f"制限: {limit_str}")
+        
+        field_names = {"cpu": "CPU", "memory": "メモリ", "name": "名前", "pid": "PID"}
+        order_symbol = "↓" if self.sort_order == "desc" else "↑"
+        stats_lines.append(f"ソート: {field_names.get(self.sort_by, self.sort_by)} {order_symbol}")
+
         # Retinaディスプレイ情報
         if hasattr(self, 'retina_info') and self.retina_info['is_retina']:
             stats_lines.append(f"Retina: {self.retina_info['scale_factor']:.1f}x")
@@ -484,7 +503,10 @@ class Aquarium:
             "ESC: 終了",
             "D: デバッグ表示切替",
             "I: IPC接続表示切替",
-            "F/F11: フルスクリーン切替"
+            "F/F11: フルスクリーン切替",
+            "L: プロセス制限切替",
+            "S: ソートフィールド切替",
+            "O: ソート順序切替"
         ]
 
         help_height = len(help_lines) * 20 + 10
@@ -628,6 +650,15 @@ class Aquarium:
                     print(f"IPC可視化: {'オン' if self.show_ipc else 'オフ'}")
                 elif event.key == pygame.K_f or event.key == pygame.K_F11:
                     self.toggle_fullscreen()
+                elif event.key == pygame.K_l:
+                    # プロセス制限の切り替え
+                    self._cycle_process_limit()
+                elif event.key == pygame.K_s:
+                    # ソートフィールドの切り替え
+                    self._cycle_sort_field()
+                elif event.key == pygame.K_o:
+                    # ソート順序の切り替え
+                    self._toggle_sort_order()
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 self.handle_mouse_click(event.pos)
 
@@ -703,6 +734,33 @@ class Aquarium:
                 fish.target_x = random.uniform(50, self.width - 50)
             if fish.target_y >= self.height:
                 fish.target_y = random.uniform(50, self.height - 50)
+
+    def _cycle_process_limit(self):
+        """プロセス制限を切り替え"""
+        limits = [None, 10, 20, 50, 100, 200]
+        current_index = limits.index(self.process_limit) if self.process_limit in limits else 0
+        next_index = (current_index + 1) % len(limits)
+        self.process_limit = limits[next_index]
+        self.process_manager.set_process_limit(self.process_limit)
+        limit_str = "無制限" if self.process_limit is None else str(self.process_limit)
+        print(f"🔢 プロセス制限: {limit_str}")
+
+    def _cycle_sort_field(self):
+        """ソートフィールドを切り替え"""
+        fields = ["cpu", "memory", "name", "pid"]
+        current_index = fields.index(self.sort_by) if self.sort_by in fields else 0
+        next_index = (current_index + 1) % len(fields)
+        self.sort_by = fields[next_index]
+        self.process_manager.set_sort_config(self.sort_by, self.sort_order)
+        field_names = {"cpu": "CPU使用率", "memory": "メモリ使用率", "name": "プロセス名", "pid": "PID"}
+        print(f"📊 ソート: {field_names[self.sort_by]}")
+
+    def _toggle_sort_order(self):
+        """ソート順序を切り替え"""
+        self.sort_order = "asc" if self.sort_order == "desc" else "desc"
+        self.process_manager.set_sort_config(self.sort_by, self.sort_order)
+        order_name = "昇順" if self.sort_order == "asc" else "降順"
+        print(f"🔄 ソート順序: {order_name}")
 
     def _adjust_performance(self):
         """動的パフォーマンス調整"""

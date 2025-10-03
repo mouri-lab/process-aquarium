@@ -72,6 +72,47 @@ Optional flags:
 * `--width / --height` still accepted (affects internal surfaces only)
 * `--headless-interval <seconds>` controls stats print frequency (default 1.0)
 
+## Process Limiting and Sorting
+
+You can limit the number of processes displayed and sort them by various criteria:
+
+### Command-line Options
+
+```bash
+# Display top 20 processes by CPU usage
+python main.py --limit 20 --sort-by cpu --sort-order desc
+
+# Display top 10 processes by memory usage
+python main.py --limit 10 --sort-by memory --sort-order desc
+
+# Display processes sorted by name in ascending order
+python main.py --sort-by name --sort-order asc
+
+# Display top 50 processes by PID
+python main.py --limit 50 --sort-by pid
+```
+
+**Available options:**
+* `--limit N` - Limit the number of processes displayed (default: no limit)
+* `--sort-by {cpu,memory,name,pid}` - Sort processes by field (default: cpu)
+* `--sort-order {asc,desc}` - Sort order ascending or descending (default: desc)
+
+### Runtime Keyboard Controls
+
+When running in GUI mode, you can dynamically change the display settings:
+
+* **L** - Cycle through process limits (None → 10 → 20 → 50 → 100 → 200 → None)
+* **S** - Cycle through sort fields (CPU → Memory → Name → PID → CPU)
+* **O** - Toggle sort order (ascending ↔ descending)
+
+The current limit and sort settings are displayed in the statistics panel in the upper left corner.
+
+### Use Cases
+
+* **Performance monitoring**: Display only the top N CPU or memory consumers
+* **Debugging**: Focus on specific processes by limiting the display
+* **Large systems**: Reduce visual clutter by showing only relevant processes
+
 ## eBPF Source (Experimental)
 
 You can switch the backend from psutil polling to an experimental eBPF based
