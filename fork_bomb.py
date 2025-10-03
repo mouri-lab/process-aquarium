@@ -15,6 +15,49 @@ import argparse
 from multiprocessing import Process
 import psutil
 
+# プロセス名変更用ライブラリのインポート（オプション）
+try:
+    import setproctitle
+    HAS_SETPROCTITLE = True
+except ImportError:
+    HAS_SETPROCTITLE = False
+    print("💡 ヒント: pip install setproctitle でプロセス名変更がより確実になります")
+
+def set_process_name(name):
+    """
+    プロセス名を変更する
+    複数の方法を試して最適な方法を使用
+    """
+    methods_tried = []
+    
+    # 方法1: setproctitleライブラリを使用（最も確実）
+    if HAS_SETPROCTITLE:
+        try:
+            setproctitle.setproctitle(name)
+            methods_tried.append("setproctitle ✅")
+            return True
+        except Exception as e:
+            methods_tried.append(f"setproctitle ❌ ({e})")
+    
+    # 方法2: sys.argv[0]を変更（部分的効果）
+    try:
+        sys.argv[0] = name
+        methods_tried.append("sys.argv[0] ✅")
+    except Exception as e:
+        methods_tried.append(f"sys.argv[0] ❌ ({e})")
+    
+    # 方法3: プロセス環境での名前設定
+    try:
+        # プロセス名をプロセスタイトルとして設定を試みる
+        if hasattr(os, 'environ'):
+            os.environ['_'] = name
+            methods_tried.append("environ ✅")
+    except Exception as e:
+        methods_tried.append(f"environ ❌ ({e})")
+    
+    print(f"📝 プロセス名変更試行結果: {', '.join(methods_tried)}")
+    return len([m for m in methods_tried if "✅" in m]) > 0
+
 class ForkBomb:
     def __init__(self, max_children=50, fork_interval=0.1, child_lifetime=30.0, use_recursion=False):
         """
@@ -61,6 +104,10 @@ class ForkBomb:
     def child_worker(self, child_id, generation=1):
         """子プロセスのワーカー関数"""
         try:
+            # プロセス名を変更
+            process_name = f"fork_bomb"
+            set_process_name(process_name)
+            
             print(f"👶 子プロセス開始: ID={child_id}, PID={os.getpid()}, 世代={generation}")
             
             # 再帰的forkの場合、さらに子プロセスを作成
@@ -109,6 +156,9 @@ class ForkBomb:
             
     def start_fork_bomb(self):
         """Fork Bomb開始"""
+        # 親プロセスの名前を変更
+        set_process_name("fork_bomb_parent")
+        
         print(f"💣 Fork Bomb開始!")
         print(f"📊 設定: 最大子プロセス数={self.max_children}, fork間隔={self.fork_interval}s")
         print(f"⏰ 子プロセス生存時間={self.child_lifetime}s, 再帰fork={'有効' if self.use_recursion else '無効'}")
