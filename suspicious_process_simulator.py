@@ -310,6 +310,78 @@ class SuspiciousProcessSimulator:
             p.start()
             self.processes.append(p)
 
+    def memory_intensive_workers(self, count=3, duration=30):
+        """メモリ集約的プロセス生成器"""
+        print(f"🧠 メモリ集約的処理開始 (ワーカー数: {count}, 時間: {duration}秒)")
+        
+        def memory_worker(worker_id):
+            try:
+                if hasattr(os, 'prctl'):
+                    import prctl
+                    prctl.set_name(f"memory_hog_{worker_id}")
+                
+                print(f"  🧠 Memory Worker {worker_id} 開始, PID: {os.getpid()}")
+                
+                # 大量のメモリを段階的に確保
+                memory_chunks = []
+                start_time = time.time()
+                chunk_size = 50 * 1024 * 1024  # 50MB チャンク
+                
+                # long_livedモードに応じてメモリ使用量を調整
+                if hasattr(self, 'long_lived_mode') and self.long_lived_mode:
+                    max_chunks = 40  # 最大2GB
+                    hold_time = duration
+                else:
+                    max_chunks = 20  # 最大1GB
+                    hold_time = min(duration, 60)
+                
+                # メモリを段階的に確保
+                for i in range(max_chunks):
+                    if not self.running or (time.time() - start_time) > duration:
+                        break
+                    
+                    try:
+                        # メモリチャンクを確保してランダムデータで埋める
+                        chunk = bytearray(chunk_size)
+                        # ランダムデータで埋めてメモリを実際に使用
+                        for j in range(0, chunk_size, 4096):
+                            chunk[j:j+100] = os.urandom(100)
+                        memory_chunks.append(chunk)
+                        
+                        current_mb = (i + 1) * 50
+                        if i % 5 == 0:  # 5チャンクごとに報告
+                            print(f"    🧠 Worker {worker_id}: {current_mb}MB 確保済み")
+                        
+                        time.sleep(0.5)  # メモリ確保の間隔
+                    except MemoryError:
+                        print(f"    ⚠️ Worker {worker_id}: メモリ不足により停止 ({len(memory_chunks) * 50}MB で上限)")
+                        break
+                
+                total_mb = len(memory_chunks) * 50
+                print(f"  📊 Worker {worker_id}: 最大 {total_mb}MB を確保, {hold_time}秒間保持")
+                
+                # メモリを保持したまま待機
+                hold_start = time.time()
+                while self.running and (time.time() - hold_start) < hold_time:
+                    # メモリを時々アクセスして解放を防ぐ
+                    if memory_chunks:
+                        random_chunk = random.choice(memory_chunks)
+                        random_pos = random.randint(0, len(random_chunk) - 100)
+                        random_chunk[random_pos:random_pos+10] = os.urandom(10)
+                    time.sleep(1)
+                
+                print(f"  ✅ Memory Worker {worker_id} 完了, PID: {os.getpid()}")
+                
+            except Exception as e:
+                print(f"  ❌ Memory Worker エラー: {e}")
+        
+        for i in range(count):
+            if not self.running:
+                break
+            p = Process(target=memory_worker, args=(i,))
+            p.start()
+            self.processes.append(p)
+
     def run_simulation(self, mode='all', process_count=50, duration=30, long_lived=False):
         """シミュレーション実行"""
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -361,6 +433,12 @@ class SuspiciousProcessSimulator:
                 self.cpu_intensive_workers(count=cpu_count, duration=cpu_duration)
                 time.sleep(5)
             
+            if mode == 'all' or mode == 'memory':
+                memory_count = min(process_count // 15, 6)  # メモリ集約的なので数をさらに制限
+                memory_duration = duration if mode == 'memory' else min(duration // 2, 30)
+                self.memory_intensive_workers(count=memory_count, duration=memory_duration)
+                time.sleep(5)
+            
             # 全体完了まで待機
             print("⏳ シミュレーション実行中... (Ctrl+C で停止)")
             start_time = time.time()
@@ -394,7 +472,7 @@ def main():
     
     parser.add_argument(
         '--mode', 
-        choices=['all', 'fork', 'mass', 'network', 'names', 'rapid', 'cpu'],
+        choices=['all', 'fork', 'mass', 'network', 'names', 'rapid', 'cpu', 'memory'],
         default='all',
         help='実行する動作モード (デフォルト: all)'
     )

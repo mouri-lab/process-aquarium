@@ -314,12 +314,12 @@ class Aquarium:
                 )
             else:
                 # プロセスが消滅した場合
-                print(f"🔥 プロセス消失を検出: PID {pid} ({fish.process_name}) - 死亡フラグ設定")
+                # print(f"🔥 プロセス消失を検出: PID {pid} ({fish.process_name}) - 死亡フラグ設定")
                 fish.set_death_event()
                 processes_marked_for_death.append(pid)
 
-        if processes_marked_for_death:
-            print(f"📊 死亡フラグ設定済みプロセス数: {len(processes_marked_for_death)}")
+        # if processes_marked_for_death:
+        #     print(f"📊 死亡フラグ設定済みプロセス数: {len(processes_marked_for_death)}")
 
         # 死んだFishの除去
         dead_pids = []

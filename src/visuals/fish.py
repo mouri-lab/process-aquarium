@@ -56,6 +56,8 @@ class Fish:
         self.color = self._generate_color()
         self.alpha = 255
         self.glow_intensity = 0
+        self.is_memory_giant = False  # メモリ巨大魚フラグ
+        self.pulsation_phase = 0.0  # 脈動エフェクト用
 
         # 生命活動指標
         self.memory_percent = 0.0
@@ -160,16 +162,33 @@ class Fish:
         self.thread_count = thread_count
         self.parent_pid = parent_pid
 
-        # メモリ使用量に基づくサイズ調整
-        memory_factor = 1.0 + (memory_percent / 100.0) * 2.0  # 1.0～3.0倍
+        # メモリ使用量に基づくサイズ調整（非常に急激な指数関数）
+        memory_normalized = memory_percent / 100.0  # 0.0-1.0に正規化
+        # より急激な指数関数でサイズを計算：exp(8 * memory) を使用
+        # 0%で1倍、1%で約1.2倍、5%で約1.8倍、10%で約3.2倍、50%で約81倍、100%で約6561倍！
+        if memory_normalized > 0:
+            # 指数関数：e^(8x) - わずかなメモリ使用でも劇的に大きくなる
+            raw_factor = math.exp(8 * memory_normalized)
+            # ただし画面に収まるよう最大60倍で制限（超巨大魚！）
+            memory_factor = min(raw_factor, 60.0)
+        else:
+            memory_factor = 1.0
         self.current_size = self.base_size * memory_factor
+        
+        # メモリ巨大魚の判定（メモリ使用率5%以上または、サイズが基本の5倍以上）
+        self.is_memory_giant = memory_percent >= 5.0 or memory_factor >= 5.0
 
-        # CPU使用率に基づく光り方
-        self.glow_intensity = min(cpu_percent * 10, 255)
+        # CPU使用率に基づく光り方（指数関数的に強調）
+        cpu_normalized = cpu_percent / 100.0
+        # 指数関数で光の強さを計算
+        glow_factor = (math.exp(3 * cpu_normalized) - 1) / (math.exp(3) - 1)
+        self.glow_intensity = min(glow_factor * 255, 255)
 
-        # CPU使用率に基づく移動速度調整
-        speed_factor = 1.0 + (cpu_percent / 100.0) * 3.0
-        max_speed = 2.0 * speed_factor
+        # CPU使用率に基づく移動速度調整（指数関数的に高速化）
+        # 指数関数で速度倍率を計算：1.0 + (exp(4 * cpu) - 1) / (exp(4) - 1) * 6
+        # これにより0%で1倍、100%で約7倍の速度になる
+        speed_factor = 1.0 + (math.exp(4 * cpu_normalized) - 1) / (math.exp(4) - 1) * 6.0
+        max_speed = 2.0 * min(speed_factor, 8.0)  # 最大8倍で制限
         self.vx = max(min(self.vx, max_speed), -max_speed)
         self.vy = max(min(self.vy, max_speed), -max_speed)
 
@@ -195,6 +214,12 @@ class Fish:
         """位置の更新とバウンド処理（群れ行動対応版）"""
         # 年齢を増やす
         self.age += 1
+        
+        # メモリ巨大魚の脈動エフェクト
+        if self.is_memory_giant:
+            self.pulsation_phase += 0.15  # 脈動速度
+            if self.pulsation_phase > 2 * math.pi:
+                self.pulsation_phase -= 2 * math.pi
 
         # スポーン時のアニメーション
         if self.is_spawning:
@@ -291,6 +316,14 @@ class Fish:
         """現在の状態に応じた表示色を取得"""
         r, g, b = self.color
 
+        # メモリ巨大魚の特別な色合い（赤みを強調）
+        if self.is_memory_giant:
+            # 脈動に合わせて赤色を強調
+            red_boost = int(50 * (1.0 + 0.5 * math.sin(self.pulsation_phase)))
+            r = min(255, r + red_boost)
+            # 青を少し減らして赤紫っぽく
+            b = max(0, b - 20)
+
         # フォーク時の白い光り
         if self.recently_forked:
             glow_factor = self.fork_glow_timer / 60.0
@@ -298,12 +331,14 @@ class Fish:
             g = int(g + (255 - g) * glow_factor)
             b = int(b + (255 - b) * glow_factor)
 
-        # CPU使用時の光り
+        # CPU使用時の光り（指数関数的に強調）
         if self.glow_intensity > 0:
             intensity = self.glow_intensity / 255.0
-            r = min(255, int(r + intensity * 50))
-            g = min(255, int(g + intensity * 50))
-            b = min(255, int(b + intensity * 50))
+            # 指数関数的な光の強調：最大150の明度追加（非常に明るく）
+            glow_boost = (math.exp(3 * intensity) - 1) / (math.exp(3) - 1) * 150
+            r = min(255, int(r + glow_boost))
+            g = min(255, int(g + glow_boost))
+            b = min(255, int(b + glow_boost))
 
         # exec変態時の色変化
         if self.exec_transition:
@@ -334,6 +369,11 @@ class Fish:
         """現在の状態に応じた表示サイズを取得"""
         size = self.current_size
 
+        # メモリ巨大魚の脈動エフェクト（±30%の変動）
+        if self.is_memory_giant:
+            pulsation = 1.0 + 0.3 * math.sin(self.pulsation_phase)
+            size *= pulsation
+
         # スポーン時の拡大
         if self.is_spawning:
             spawn_scale = 0.1 + 0.9 * self.spawn_progress
@@ -351,14 +391,89 @@ class Fish:
 
         return size
 
+    def _draw_memory_giant_effects(self, screen: pygame.Surface, alpha: int):
+        """メモリ巨大魚用の特別エフェクト（波紋など）"""
+        # 波紋エフェクト：3つの同心円
+        ripple_color = (255, 100, 100, max(30, alpha // 4))  # 赤っぽい半透明
+        
+        for i in range(4):  # 波紋を4つに増加
+            # 各波紋の半径と透明度を脈動に合わせて変化（より大きな範囲）
+            ripple_phase = self.pulsation_phase + i * (math.pi / 4)
+            # 波紋の範囲を2倍に拡大：巨大魚に相応しいスケール
+            ripple_radius = self.current_size * (3.0 + i * 1.2) * (1.0 + 0.5 * math.sin(ripple_phase))
+            ripple_alpha = max(8, int((alpha // 8) * (1.0 - i * 0.2)))
+            
+            # 半透明の円を描画
+            if ripple_radius > 0 and ripple_alpha > 0:
+                try:
+                    # 一時的なサーフェスを作成して半透明描画
+                    temp_surface = pygame.Surface((ripple_radius * 2 + 4, ripple_radius * 2 + 4), pygame.SRCALPHA)
+                    pygame.draw.circle(temp_surface, (*ripple_color[:3], ripple_alpha), 
+                                     (ripple_radius + 2, ripple_radius + 2), int(ripple_radius), 2)
+                    screen.blit(temp_surface, (self.x - ripple_radius - 2, self.y - ripple_radius - 2), 
+                               special_flags=pygame.BLEND_ALPHA_SDL2)
+                except (ValueError, pygame.error):
+                    pass  # 描画エラーを無視
+
+    def _draw_lightning_effects(self, screen: pygame.Surface, alpha: int):
+        """超巨大魚用の雷エフェクト（メモリ使用率20%以上）"""
+        if not hasattr(self, 'lightning_timer'):
+            self.lightning_timer = 0
+        
+        self.lightning_timer += 1
+        
+        # ランダムに雷を発生（30フレームに1回程度）
+        if self.lightning_timer % 30 == 0 or random.random() < 0.1:
+            lightning_color = (255, 255, 150, max(100, alpha // 2))  # 明るい黄色
+            
+            # 魚の周りに3-5本の雷を描画
+            num_bolts = random.randint(3, 5)
+            for _ in range(num_bolts):
+                # 雷の起点と終点をランダムに設定
+                angle = random.uniform(0, 2 * math.pi)
+                start_radius = self.current_size * 0.8
+                end_radius = self.current_size * 2.5
+                
+                start_x = self.x + math.cos(angle) * start_radius
+                start_y = self.y + math.sin(angle) * start_radius
+                end_x = self.x + math.cos(angle) * end_radius
+                end_y = self.y + math.sin(angle) * end_radius
+                
+                # ジグザグの雷を描画
+                try:
+                    points = [(start_x, start_y)]
+                    segments = 4
+                    for i in range(1, segments):
+                        t = i / segments
+                        mid_x = start_x + (end_x - start_x) * t
+                        mid_y = start_y + (end_y - start_y) * t
+                        # ランダムな揺れを追加
+                        offset_x = random.uniform(-20, 20)
+                        offset_y = random.uniform(-20, 20)
+                        points.append((mid_x + offset_x, mid_y + offset_y))
+                    points.append((end_x, end_y))
+                    
+                    # 雷の線を描画
+                    if len(points) >= 2:
+                        pygame.draw.lines(screen, lightning_color[:3], False, points, 2)
+                except (ValueError, pygame.error):
+                    pass
+
     def get_thread_satellites(self) -> list:
-        """スレッド数に応じた衛星の位置を計算"""
+        """スレッド数に応じた衛星の位置を計算（指数関数的に強調）"""
         satellites = []
         if self.thread_count > 1:
-            satellite_count = min(self.thread_count - 1, 8)  # 最大8個まで
+            # スレッド数を指数関数的に視覚化：最大16個まで表示
+            thread_normalized = min(self.thread_count / 16.0, 1.0)
+            # 指数関数でスレッド数による衛星数を計算
+            satellite_factor = (math.exp(2 * thread_normalized) - 1) / (math.exp(2) - 1)
+            satellite_count = max(1, min(int((self.thread_count - 1) * (1 + satellite_factor)), 16))
+            
             for i in range(satellite_count):
                 angle = (2 * math.pi * i) / satellite_count + self.age * 0.02
-                radius = self.current_size * 1.5
+                # スレッド数が多いほど衛星が遠くに配置される
+                radius_multiplier = 1.5 + (self.thread_count / 16.0) * 2.0
+                radius = self.current_size * radius_multiplier
                 sat_x = self.x + math.cos(angle) * radius
                 sat_y = self.y + math.sin(angle) * radius
                 satellites.append((sat_x, sat_y))
@@ -383,9 +498,20 @@ class Fish:
 
         # 泳ぎのアニメーション（速度に応じて変化）
         speed = math.sqrt(self.vx**2 + self.vy**2)
-        swim_speed = 0.1 + speed * 0.1
+        
+        # CPU使用率に応じて泳ぎの激しさを指数関数的に調整
+        cpu_factor = 1.0
+        if hasattr(self, 'cpu_percent'):
+            cpu_normalized = self.cpu_percent / 100.0
+            # 指数関数でCPU使用率による激しさを計算
+            cpu_factor = 1.0 + (math.exp(2 * cpu_normalized) - 1) / (math.exp(2) - 1) * 4.0
+            
+        swim_speed = (0.1 + speed * 0.1) * cpu_factor
         self.swim_cycle += swim_speed
-        self.tail_swing = math.sin(self.swim_cycle) * (0.2 + speed * 0.1)
+        
+        # 尻尾の振りもCPU使用率に応じて激しく
+        tail_intensity = (0.2 + speed * 0.1) * cpu_factor
+        self.tail_swing = math.sin(self.swim_cycle) * min(tail_intensity, 1.0)  # 最大1.0で制限
 
         # 魚の基本サイズ（形状によって調整）
         body_length = size * 1.8
@@ -420,6 +546,14 @@ class Fish:
         if size < 2:
             return
 
+        # メモリ巨大魚の波紋エフェクト（メモリ使用率5%以上）
+        if self.is_memory_giant and hasattr(self, 'memory_percent'):
+            if self.memory_percent >= 5.0:
+                self._draw_memory_giant_effects(screen, alpha)
+            # 超巨大魚（20%以上）には追加の雷エフェクト
+            if self.memory_percent >= 20.0:
+                self._draw_lightning_effects(screen, alpha)
+
         # メイン生命体の描画（魚の形状）
         if alpha > 20:  # 透明度が低すぎる場合はスキップ
             self._draw_fish_shape(screen, color, alpha, size)
@@ -427,9 +561,12 @@ class Fish:
         # スレッド衛星の描画（小魚の群れとして）
         if self.thread_count > 1 and size > 5:
             satellites = self.get_thread_satellites()
-            # 最大4個まで描画
-            for i, (sat_x, sat_y) in enumerate(satellites[:4]):
-                sat_size = max(2, size * 0.2)
+            # スレッド数に応じて表示数を増加（最大12個まで）
+            max_display = min(len(satellites), max(4, self.thread_count // 2))
+            for i, (sat_x, sat_y) in enumerate(satellites[:max_display]):
+                # スレッド数が多いほど衛星サイズも大きく
+                thread_size_factor = 1.0 + (self.thread_count / 16.0) * 1.5
+                sat_size = max(2, size * 0.2 * thread_size_factor)
                 # 小さな魚として描画
                 self._draw_small_fish(screen, color, alpha//2, sat_x, sat_y, sat_size)
 
