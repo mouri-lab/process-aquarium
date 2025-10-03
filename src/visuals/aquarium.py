@@ -298,6 +298,7 @@ class Aquarium:
         self._apply_ipc_attraction()
 
         # 既存のFishデータ更新
+        processes_marked_for_death = []
         for pid, fish in self.fishes.items():
             if pid in process_data:
                 proc = process_data[pid]
@@ -309,16 +310,36 @@ class Aquarium:
                 )
             else:
                 # プロセスが消滅した場合
+                print(f"🔥 プロセス消失を検出: PID {pid} ({fish.process_name}) - 死亡フラグ設定")
                 fish.set_death_event()
+                processes_marked_for_death.append(pid)
+
+        if processes_marked_for_death:
+            print(f"📊 死亡フラグ設定済みプロセス数: {len(processes_marked_for_death)}")
 
         # 死んだFishの除去
         dead_pids = []
+        dying_fish_details = []
         for pid, fish in self.fishes.items():
-            if fish.is_dying and fish.death_progress >= 1.0:
-                dead_pids.append(pid)
+            if fish.is_dying:
+                dying_fish_details.append(f"PID {pid}: {fish.death_progress:.2f}")
+                if fish.death_progress >= 1.0:
+                    dead_pids.append(pid)
+                    print(f"💀 魚の死亡処理完了: PID {pid} ({fish.process_name}) - 削除対象")
 
+        # 死亡中の魚の進行状況を定期的に表示（最大5匹まで）
+        if dying_fish_details:
+            print(f"⏰ 死亡進行中: {', '.join(dying_fish_details[:5])}{'...' if len(dying_fish_details) > 5 else ''}")
+
+        print(f"📊 現在の魚数: {len(self.fishes)}, 削除対象: {len(dead_pids)}, 総プロセス数: {len(process_data)}")
+        
         for pid in dead_pids:
+            fish_name = self.fishes[pid].process_name
             del self.fishes[pid]
+            print(f"🗑️ 魚を削除完了: PID {pid} ({fish_name})")
+            
+        if dead_pids:
+            print(f"📊 削除後の魚数: {len(self.fishes)}")
 
     def _remove_oldest_fish(self):
         """最も古い魚を削除してパフォーマンスを維持"""
@@ -759,10 +780,18 @@ class Aquarium:
         fish_list = list(self.fishes.values())
         update_interval = self.performance_monitor['adaptive_fish_update_interval']
 
+        dying_fish_updated = 0
+        total_fish_updated = 0
         for i, fish in enumerate(fish_list):
             # 適応的更新：魚の数が多い場合は一部の魚のみ更新
-            if len(fish_list) > 50 and i % update_interval != (int(current_time * 10) % update_interval):
+            # ただし、死亡中の魚は常に更新して削除処理を確実に行う
+            should_update = fish.is_dying or len(fish_list) <= 50 or i % update_interval == (int(current_time * 10) % update_interval)
+            if not should_update:
                 continue
+            
+            if fish.is_dying:
+                dying_fish_updated += 1
+            total_fish_updated += 1
 
             # 近くの魚を検索（最適化：距離の事前チェック）
             nearby_fish = []
@@ -776,6 +805,10 @@ class Aquarium:
                             nearby_fish.append(other_fish)
 
             fish.update_position(self.width, self.height, nearby_fish)
+
+        # 魚の更新統計をログ出力（デバッグ用）
+        if dying_fish_updated > 0 or total_fish_updated < len(fish_list):
+            print(f"🔄 魚更新統計: 総数{len(fish_list)}, 更新数{total_fish_updated}, 死亡中更新数{dying_fish_updated}")
 
         # 定期的なキャッシュクリーンアップ
         if current_time - self.last_cache_cleanup > self.cache_cleanup_interval:

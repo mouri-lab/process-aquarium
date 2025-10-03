@@ -186,9 +186,10 @@ class Fish:
         self.color = self._generate_color()
 
     def set_death_event(self):
-        """死亡イベントの設定"""
-        self.is_dying = True
-        self.death_progress = 0.0
+        """死亡イベントの設定（既に死亡中の場合は進行状況をリセットしない）"""
+        if not self.is_dying:  # 初回のみリセット
+            self.is_dying = True
+            self.death_progress = 0.0
 
     def update_position(self, screen_width: int, screen_height: int, nearby_fish: List['Fish'] = None):
         """位置の更新とバウンド処理（群れ行動対応版）"""
@@ -204,7 +205,13 @@ class Fish:
 
         # 死亡時のアニメーション
         if self.is_dying:
+            old_progress = self.death_progress
             self.death_progress += 0.03
+            # デバッグ用：進行状況を定期的に出力
+            if int(old_progress * 10) != int(self.death_progress * 10):  # 0.1刻みで出力
+                print(f"💀 死亡進行: PID {self.pid} ({self.process_name}) - {old_progress:.2f} -> {self.death_progress:.2f}")
+            if self.death_progress >= 1.0 and old_progress < 1.0:
+                print(f"💀 魚の死亡完了: PID {self.pid} ({self.process_name}) - progress {old_progress:.2f} -> {self.death_progress:.2f}")
             return self.death_progress < 1.0
 
         # 特殊エフェクトのタイマー更新
