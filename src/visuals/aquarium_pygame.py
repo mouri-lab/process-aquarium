@@ -16,7 +16,7 @@ try:
     from ..core.sources import EbpfProcessSource
 except Exception:  # pragma: no cover - 安全なフォールバック
     EbpfProcessSource = None  # type: ignore
-from .fish import Fish
+from .fish_pygame import Fish
 
 # 文字エンコーディングの設定
 import locale
