@@ -71,3 +71,42 @@ Use cases:
 Optional flags:
 * `--width / --height` still accepted (affects internal surfaces only)
 * `--headless-interval <seconds>` controls stats print frequency (default 1.0)
+
+## eBPF Source (Experimental)
+
+You can switch the backend from psutil polling to an experimental eBPF based
+event stream (Linux only):
+
+```
+pip install bcc   # if not installed; requires kernel headers & privileges
+sudo python main.py --source ebpf
+```
+
+Or via environment variable:
+
+```
+export AQUARIUM_SOURCE=ebpf
+python main.py
+```
+
+If eBPF initialization fails (missing bcc, insufficient privileges, unsupported
+kernel) the application automatically falls back to the psutil source and logs
+a warning.
+
+Currently captured via eBPF (MVP):
+* fork (as spawn + inferred fork relation)
+* exec
+* exit
+
+Planned additions:
+* Socket connect / accept
+* Unix / pipe IPC mapping
+* Hybrid enrichment: psutil metrics fused with eBPF lifecycle precision
+
+Security / Permissions:
+* Running under root or with CAP_BPF/CAP_SYS_ADMIN may be required depending on distro
+* For production, consider a minimal privileged sidecar emitting events over a UNIX socket
+
+Fallback Behavior:
+* Any failure during BPF load → logged lifecycle event (pid=0) + revert to psutil
+* Headless mode works the same: `--headless --source ebpf`

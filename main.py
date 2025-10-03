@@ -28,8 +28,11 @@ def main_cli():
     parser.add_argument("--headless-interval", type=float, default=1.0, help="Interval seconds between stats prints in headless mode")
     parser.add_argument("--width", type=int, default=1200)
     parser.add_argument("--height", type=int, default=800)
+    parser.add_argument("--source", choices=["psutil", "ebpf"], default=None, help="Process data source backend")
     args = parser.parse_args()
 
+    if args.source:
+        os.environ["AQUARIUM_SOURCE"] = args.source
     aquarium = Aquarium(width=args.width, height=args.height, headless=args.headless, headless_interval=args.headless_interval)
     aquarium.run()
 

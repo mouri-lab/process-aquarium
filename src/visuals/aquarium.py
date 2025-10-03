@@ -86,6 +86,18 @@ class Aquarium:
         # EbpfProcessSource を注入できるようにする予定。
         # 例: if os.environ.get("AQUARIUM_SOURCE") == "ebpf": source = EbpfProcessSource()
         source = None
+        chosen = os.environ.get("AQUARIUM_SOURCE", "psutil").lower()
+        if chosen == "ebpf":
+            try:
+                from ..core.sources import EbpfProcessSource
+                eb = EbpfProcessSource()
+                if getattr(eb, 'available', False):
+                    source = eb
+                    print("[eBPF] EbpfProcessSource 有効化")
+                else:
+                    print("[eBPF] 利用不可のため psutil にフォールバック")
+            except Exception as e:
+                print(f"[eBPF] 初期化失敗: {e} -> psutil フォールバック")
         self.process_manager = ProcessManager(max_processes=max_processes, source=source)
         self.fishes: Dict[int, Fish] = {}  # PID -> Fish
 

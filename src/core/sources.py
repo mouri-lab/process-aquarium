@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set, Callable
 import psutil
 from datetime import datetime
 
@@ -209,26 +209,159 @@ class PsutilProcessSource(IProcessSource):
 
 
 class EbpfProcessSource(IProcessSource):
-    """Placeholder eBPF source.
+    """eBPF ベースのプロセスイベントソース (fork/exec/exit MVP)。
 
-    The real implementation will:
-      - Load BPF programs (fork/exec/exit, tcp/udp connect, unix sockets, pipes)
-      - Read events from perf/ring buffers
-      - Maintain a process map (can be sparse; complement with psutil if needed)
-    For now this just raises NotImplementedError to show plug point.
+    BCC を利用して kernel tracepoint からイベントを取得し lifecycle events
+    を生成する。詳細メトリクス(CPU/MEM)は保持しないため、必要なら上位で
+    ハイブリッド構成 (psutil 併用) を行う想定。
     """
 
-    def __init__(self):
-        self._processes: Dict[int, ProcessInfo] = {}
+    BPF_PROGRAM = r"""
+    struct fork_event_t { u64 ts; u32 ppid; u32 pid; };
+    struct exec_event_t { u64 ts; u32 pid; };
+    struct exit_event_t { u64 ts; u32 pid; };
 
+    BPF_PERF_OUTPUT(fork_events);
+    BPF_PERF_OUTPUT(exec_events);
+    BPF_PERF_OUTPUT(exit_events);
+
+    TRACEPOINT_PROBE(sched, sched_process_fork) {
+        struct fork_event_t evt = {}; 
+        evt.ts = bpf_ktime_get_ns();
+        evt.ppid = args->parent_pid;
+        evt.pid = args->child_pid;
+        fork_events.perf_submit(args, &evt, sizeof(evt));
+        return 0;
+    }
+
+    TRACEPOINT_PROBE(sched, sched_process_exec) {
+        struct exec_event_t evt = {};
+        evt.ts = bpf_ktime_get_ns();
+        evt.pid = args->pid;
+        exec_events.perf_submit(args, &evt, sizeof(evt));
+        return 0;
+    }
+
+    TRACEPOINT_PROBE(sched, sched_process_exit) {
+        struct exit_event_t evt = {};
+        evt.ts = bpf_ktime_get_ns();
+        evt.pid = args->pid;
+        exit_events.perf_submit(args, &evt, sizeof(evt));
+        return 0;
+    }
+    """
+
+    def __init__(self, enable: bool = True):
+        self.available = False
+        self._processes: Dict[int, ProcessInfo] = {}
+        self._lifecycle_buffer: List[ProcessLifecycleEvent] = []
+        self._last_poll = 0.0
+        self.poll_interval = 0.2  # seconds (perf buffer drain)
+        if not enable:
+            return
+        try:
+            from bcc import BPF  # type: ignore
+        except Exception as e:  # bcc 未インストール or 権限不足
+            self._lifecycle_buffer.append(ProcessLifecycleEvent(
+                event_type="exec", pid=0, ppid=None, timestamp=time.time(),
+                details={"warning": f"bcc unavailable: {e}"}
+            ))
+            return
+        try:
+            self._bpf = BPF(text=self.BPF_PROGRAM)
+            self._bpf["fork_events"].open_perf_buffer(self._handle_fork)
+            self._bpf["exec_events"].open_perf_buffer(self._handle_exec)
+            self._bpf["exit_events"].open_perf_buffer(self._handle_exit)
+            self.available = True
+        except Exception as e:
+            # ロード失敗（カーネルサポート/権限の問題）
+            self._lifecycle_buffer.append(ProcessLifecycleEvent(
+                event_type="exec", pid=0, ppid=None, timestamp=time.time(),
+                details={"error": f"eBPF load failed: {e}"}
+            ))
+            self.available = False
+
+    # ---------- perf buffer handlers ---------- #
+    def _handle_fork(self, cpu, data, size):  # type: ignore[override]
+        from bcc import BPF  # type: ignore
+        evt = self._bpf["fork_events"].event(data)
+        now = time.time()
+        self._lifecycle_buffer.append(ProcessLifecycleEvent(
+            event_type="spawn", pid=evt.pid, ppid=evt.ppid, timestamp=now,
+            details={"source": "ebpf", "raw_ts": evt.ts}
+        ))
+        # spawn直後に psutil で補完（短命プロセスを捕捉したいのでベストエフォート）
+        self._populate_process(evt.pid, evt.ppid)
+
+    def _handle_exec(self, cpu, data, size):  # type: ignore[override]
+        evt = self._bpf["exec_events"].event(data)
+        now = time.time()
+        self._lifecycle_buffer.append(ProcessLifecycleEvent(
+            event_type="exec", pid=evt.pid, ppid=self._processes.get(evt.pid).ppid if evt.pid in self._processes else None,
+            timestamp=now, details={"source": "ebpf", "raw_ts": evt.ts}
+        ))
+        # exec後に名称/コマンドラインをリフレッシュ
+        self._populate_process(evt.pid)
+
+    def _handle_exit(self, cpu, data, size):  # type: ignore[override]
+        evt = self._bpf["exit_events"].event(data)
+        now = time.time()
+        ppid = self._processes.get(evt.pid).ppid if evt.pid in self._processes else None
+        self._lifecycle_buffer.append(ProcessLifecycleEvent(
+            event_type="exit", pid=evt.pid, ppid=ppid, timestamp=now,
+            details={"source": "ebpf", "raw_ts": evt.ts}
+        ))
+        # 終了したプロセスは保持し続けず簡潔化
+        if evt.pid in self._processes:
+            self._processes[evt.pid].is_dying = True
+
+    # ---------- helpers ---------- #
+    def _populate_process(self, pid: int, ppid_hint: Optional[int] = None):
+        try:
+            p = psutil.Process(pid)
+            with p.oneshot():
+                info = ProcessInfo(
+                    pid=pid,
+                    ppid=p.ppid() if ppid_hint is None else ppid_hint,
+                    name=p.name(),
+                    exe=p.exe() if p.info.get('exe') else '',
+                    memory_percent=p.memory_percent() or 0.0,
+                    cpu_percent=0.0,  # CPU% は後で外部で更新され得る
+                    num_threads=p.num_threads(),
+                    create_time=p.create_time(),
+                    status=p.status(),
+                    cmdline=p.cmdline(),
+                    birth_time=datetime.now(),
+                    last_update=datetime.now(),
+                    is_new=True
+                )
+                self._processes[pid] = info
+        except Exception:
+            # 短命 or 権限不足は無視
+            pass
+
+    # ---------- IProcessSource API ---------- #
     def update(self) -> None:  # type: ignore[override]
-        raise NotImplementedError("eBPF source not implemented yet")
+        if not self.available:
+            return
+        now = time.time()
+        if now - self._last_poll < self.poll_interval:
+            return
+        self._last_poll = now
+        try:
+            # non-blocking poll
+            self._bpf.perf_buffer_poll(timeout=0)
+        except Exception:
+            pass
 
     def get_processes(self) -> Dict[int, ProcessInfo]:  # type: ignore[override]
-        return self._processes
+        return self._processes.copy()
 
     def drain_lifecycle_events(self) -> List[ProcessLifecycleEvent]:  # type: ignore[override]
-        return []
+        buf = self._lifecycle_buffer
+        self._lifecycle_buffer = []
+        return buf
 
     def get_ipc_connections(self, limit: int = 20) -> List[IPCConnection]:  # type: ignore[override]
+        # IPC は未実装 (TODO: ソケット tracepoint / kprobe 拡張)
         return []
