@@ -1,3 +1,112 @@
 # Process Aquarium
 
 Process Aquarium is an application visualizing processes as fish in an aquarium. Each fish represents a running process on your system.
+
+## eBPF Integration (Design Draft)
+
+This branch introduces an abstraction layer to allow future event–driven
+monitoring using eBPF instead of (or combined with) psutil polling.
+
+### Current Layers
+
+| Layer | Responsibility |
+|-------|----------------|
+| `src/core/types.py` | Shared dataclasses (`ProcessInfo`, lifecycle / IPC events) |
+| `src/core/sources.py` | `IProcessSource` interface + `PsutilProcessSource` implementation |
+| `src/core/process_manager.py` | Backwards compatible wrapper exposing legacy API |
+| `src/visuals/*` | Visualization & interaction (unchanged public contract) |
+
+### Lifecycle Events
+`ProcessLifecycleEvent` normalizes: `spawn`, `fork` (derived), `exec`, `exit`.
+The psutil source synthesizes `spawn` & `exec`; `fork` is inferred when a
+`spawn` has a known parent already present. An eBPF source will map directly to
+`sched_process_fork`, `sched_process_exec`, `sched_process_exit` for near-zero
+loss.
+
+### IPC Abstraction
+`IPCConnection(kind= ...)` allows heterogeneous comms (tcp, unix, pipe,
+parent-child) to be rendered uniformly. The psutil implementation keeps the
+existing simplified heuristic; eBPF can add richer socket / pipe attribution.
+
+### Why eBPF?
+
+| Aspect | Polling (psutil) | eBPF (planned) |
+|--------|------------------|---------------|
+| Fork/Exec latency | Up to poll interval | Near real-time (sub-ms) |
+| Short-lived process capture | Often missed | Captured reliably |
+| IPC visibility | Limited (loopback & unix aggregate) | Fine grained sockets / pipes / future shared mem |
+| Overhead pattern | Periodic full scan O(N) | Event-driven incremental |
+| Complexity | Low | Higher (toolchain, kernel features) |
+
+### Hybrid Strategy
+1. eBPF emits high fidelity lifecycle + socket events.
+2. Lightweight periodic psutil snapshot fills in CPU%, memory%, thread counts.
+3. Merge by PID into unified `ProcessInfo` map.
+
+### Next Steps
+1. Implement `EbpfProcessSource` skeleton: load BPF programs (fork/exec/exit).
+2. Add ring buffer consumer & translation to `ProcessLifecycleEvent`.
+3. Hybrid merger (enrich eBPF-only processes with periodic psutil metrics).
+4. Extended IPC kinds (pipe, unix, tcp, udp) color-coding in visualization.
+5. Optional config toggle: `AQUARIUM_SOURCE=ebpf`.
+
+If you are interested in contributing the eBPF backend, start from
+`src/core/sources.py::EbpfProcessSource`.
+
+## Headless Mode
+
+The aquarium can run on servers / CI without a display:
+
+```
+python main.py --headless --headless-interval 2.0
+```
+
+Environment fallback: when `--headless` is used we set `SDL_VIDEODRIVER=dummy`
+and only print periodic aggregate stats (process count, memory %, avg CPU, etc.).
+Use cases:
+* Remote monitoring via `tmux` / `ssh`
+* Data capture pipeline (redirect stdout to log)
+* CI regression check for lifecycle event tracking
+
+Optional flags:
+* `--width / --height` still accepted (affects internal surfaces only)
+* `--headless-interval <seconds>` controls stats print frequency (default 1.0)
+
+## eBPF Source (Experimental)
+
+You can switch the backend from psutil polling to an experimental eBPF based
+event stream (Linux only):
+
+```
+pip install bcc   # if not installed; requires kernel headers & privileges
+sudo python main.py --source ebpf
+```
+
+Or via environment variable:
+
+```
+export AQUARIUM_SOURCE=ebpf
+python main.py
+```
+
+If eBPF initialization fails (missing bcc, insufficient privileges, unsupported
+kernel) the application automatically falls back to the psutil source and logs
+a warning.
+
+Currently captured via eBPF (MVP):
+* fork (as spawn + inferred fork relation)
+* exec
+* exit
+
+Planned additions:
+* Socket connect / accept
+* Unix / pipe IPC mapping
+* Hybrid enrichment: psutil metrics fused with eBPF lifecycle precision
+
+Security / Permissions:
+* Running under root or with CAP_BPF/CAP_SYS_ADMIN may be required depending on distro
+* For production, consider a minimal privileged sidecar emitting events over a UNIX socket
+
+Fallback Behavior:
+* Any failure during BPF load → logged lifecycle event (pid=0) + revert to psutil
+* Headless mode works the same: `--headless --source ebpf`

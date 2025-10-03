@@ -11,6 +11,11 @@ import math
 import os
 from typing import Dict, List, Optional, Tuple
 from ..core.process_manager import ProcessManager
+try:
+    # eBPF ソースが実装された際に差し替え可能な拡張ポイント
+    from ..core.sources import EbpfProcessSource
+except Exception:  # pragma: no cover - 安全なフォールバック
+    EbpfProcessSource = None  # type: ignore
 from .fish import Fish
 
 # 文字エンコーディングの設定
@@ -29,8 +34,13 @@ class Aquarium:
     プロセス監視とビジュアライゼーションを統合管理
     """
 
-    def __init__(self, width: int = 1200, height: int = 800):
+    def __init__(self, width: int = 1200, height: int = 800, headless: bool = False, headless_interval: float = 1.0):
         # Pygameの初期化
+        self.headless = headless
+        self.headless_interval = headless_interval
+        if self.headless:
+            # ダミードライバでウィンドウ生成を抑制
+            os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
         pygame.init()
         try:
             pygame.mixer.init()
@@ -40,11 +50,10 @@ class Aquarium:
             pass
 
         # macOS Retina対応の環境変数設定
-        import os
         os.environ['SDL_VIDEO_HIGHDPI_DISABLED'] = '0'  # 高DPI有効化
 
         # 環境変数から設定を読み取り（制限を大幅に緩和）
-        max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '500'))  # 100から500に増加
+        max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '2000'))  # 500から2000に増加
         target_fps = int(os.environ.get('AQUARIUM_FPS', '30'))
 
         # 画面設定
@@ -61,15 +70,46 @@ class Aquarium:
         # Retinaスケール情報を取得
         self.retina_info = self.detect_retina_scaling()
 
-        self.screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption("Digital Life Aquarium - デジタル生命の水族館")
+        if not self.headless:
+            self.screen = pygame.display.set_mode((width, height))
+            pygame.display.set_caption("Digital Life Aquarium - デジタル生命の水族館")
+        else:
+            # ヘッドレス時は描画用のダミーサーフェスを用意
+            self.screen = pygame.Surface((width, height))
 
         # 時計とFPS
         self.clock = pygame.time.Clock()
-        self.fps = target_fps
+        self.fps = target_fps if not self.headless else int(1.0 / max(headless_interval, 0.001))
 
         # プロセス管理
-        self.process_manager = ProcessManager(max_processes=max_processes)
+        # 将来的に eBPF を有効化する場合は、起動パラメータや環境変数で
+        # EbpfProcessSource を注入できるようにする予定。
+        # 例: if os.environ.get("AQUARIUM_SOURCE") == "ebpf": source = EbpfProcessSource()
+        source = None
+        chosen = os.environ.get("AQUARIUM_SOURCE", "psutil").lower()
+        if chosen == "ebpf":
+            try:
+                from ..core.sources import EbpfProcessSource
+                eb = EbpfProcessSource(enable=True, hybrid_mode=True)
+                if getattr(eb, 'available', False):
+                    source = eb
+                    print("[eBPF] EbpfProcessSource 有効化（ハイブリッドモード）")
+                else:
+                    # エラー詳細をライフサイクルイベントから取得
+                    error_details = ""
+                    try:
+                        events = eb.drain_lifecycle_events()
+                        for event in events:
+                            if event.details and ('error' in event.details or 'warning' in event.details):
+                                error_msg = event.details.get('error') or event.details.get('warning')
+                                error_details = f" - 理由: {error_msg}"
+                                break
+                    except:
+                        pass
+                    print(f"[eBPF] 利用不可のため psutil にフォールバック{error_details}")
+            except Exception as e:
+                print(f"[eBPF] 初期化失敗: {e} -> psutil フォールバック")
+        self.process_manager = ProcessManager(max_processes=max_processes, source=source)
         self.fishes: Dict[int, Fish] = {}  # PID -> Fish
 
         # パフォーマンス最適化（制限緩和）
@@ -102,7 +142,8 @@ class Aquarium:
         # 背景とエフェクト（動的パーティクル数）
         self.background_particles = []
         self.particle_count = self.performance_monitor['adaptive_particle_count']
-        self.init_background_particles()
+        if not self.headless:
+            self.init_background_particles()
 
         # プロセス関連統計
         self.total_processes = 0
@@ -128,6 +169,8 @@ class Aquarium:
 
         # 実行状態
         self.running = True
+        if self.headless:
+            print("[Headless] モードで起動しました。統計情報のみを出力します。Ctrl+Cで終了。")
 
     def init_background_particles(self):
         """背景の水泡パーティクルを初期化（適応的）"""
@@ -230,6 +273,9 @@ class Aquarium:
 
                 fish = Fish(pid, proc.name, x, y)
                 self.fishes[pid] = fish
+                
+                # プロセス誕生ログ
+                print(f"🐟 新しいプロセス誕生: PID {pid} ({proc.name})")
 
                 # 親子関係があれば分裂エフェクト
                 if proc.ppid in self.fishes:
@@ -238,6 +284,7 @@ class Aquarium:
                     # 子プロセスは親の近くに配置
                     fish.x = parent_fish.x + random.uniform(-50, 50)
                     fish.y = parent_fish.y + random.uniform(-50, 50)
+                    print(f"👨‍👦 親子関係検出: 親PID {proc.ppid} → 子PID {pid}")
 
         # exec検出とエフェクト
         exec_processes = self.process_manager.detect_exec()
@@ -255,6 +302,7 @@ class Aquarium:
         self._apply_ipc_attraction()
 
         # 既存のFishデータ更新
+        processes_marked_for_death = []
         for pid, fish in self.fishes.items():
             if pid in process_data:
                 proc = process_data[pid]
@@ -266,16 +314,36 @@ class Aquarium:
                 )
             else:
                 # プロセスが消滅した場合
+                # print(f"🔥 プロセス消失を検出: PID {pid} ({fish.process_name}) - 死亡フラグ設定")
                 fish.set_death_event()
+                processes_marked_for_death.append(pid)
+
+        # if processes_marked_for_death:
+        #     print(f"📊 死亡フラグ設定済みプロセス数: {len(processes_marked_for_death)}")
 
         # 死んだFishの除去
         dead_pids = []
+        dying_fish_details = []
         for pid, fish in self.fishes.items():
-            if fish.is_dying and fish.death_progress >= 1.0:
-                dead_pids.append(pid)
+            if fish.is_dying:
+                dying_fish_details.append(f"PID {pid}: {fish.death_progress:.2f}")
+                if fish.death_progress >= 1.0:
+                    dead_pids.append(pid)
+                    # print(f"💀 魚の死亡処理完了: PID {pid} ({fish.process_name}) - 削除対象")
 
+        # 死亡中の魚の進行状況を定期的に表示（最大5匹まで）
+        # if dying_fish_details:
+        #     print(f"⏰ 死亡進行中: {', '.join(dying_fish_details[:5])}{'...' if len(dying_fish_details) > 5 else ''}")
+
+        # print(f"📊 現在の魚数: {len(self.fishes)}, 削除対象: {len(dead_pids)}, 総プロセス数: {len(process_data)}")
+        
         for pid in dead_pids:
+            fish_name = self.fishes[pid].process_name
             del self.fishes[pid]
+            # print(f"🗑️ 魚を削除完了: PID {pid} ({fish_name})")
+            
+        # if dead_pids:
+        #     print(f"📊 削除後の魚数: {len(self.fishes)}")
 
     def _remove_oldest_fish(self):
         """最も古い魚を削除してパフォーマンスを維持"""
@@ -284,7 +352,7 @@ class Aquarium:
 
         # 作成時刻でソートして最も古い魚を特定
         oldest_fish = min(self.fishes.values(), key=lambda f: f.creation_time)
-        print(f"🗑️ 古い魚を削除: PID {oldest_fish.pid} ({oldest_fish.process_name})")
+        # print(f"🗑️ 古い魚を削除: PID {oldest_fish.pid} ({oldest_fish.process_name})")
         del self.fishes[oldest_fish.pid]
 
     def _update_schooling_behavior(self):
@@ -356,6 +424,8 @@ class Aquarium:
 
     def draw_ui(self):
         """UI情報の描画"""
+        if self.headless:
+            return  # ヘッドレスではUI描画をスキップ
         current_fps = self.clock.get_fps()
 
         # 統計情報（パフォーマンス情報を含む）
@@ -497,7 +567,7 @@ class Aquarium:
 
     def draw_ipc_connections(self):
         """IPC接続の描画（デジタル神経網のような線で）"""
-        if not self.show_ipc:
+        if self.headless or not self.show_ipc:
             return
 
         connection_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
@@ -543,10 +613,11 @@ class Aquarium:
 
     def handle_events(self):
         """イベント処理"""
+        if self.headless:
+            return
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
-
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
@@ -557,10 +628,8 @@ class Aquarium:
                     print(f"IPC可視化: {'オン' if self.show_ipc else 'オフ'}")
                 elif event.key == pygame.K_f or event.key == pygame.K_F11:
                     self.toggle_fullscreen()
-
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # 左クリック
-                    self.handle_mouse_click(event.pos)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self.handle_mouse_click(event.pos)
 
     def toggle_fullscreen(self):
         """フルスクリーンモードの切り替え"""
@@ -676,7 +745,7 @@ class Aquarium:
         # 背景キャッシュをクリア
         self.background_cache = None
 
-        print(f"🧹 キャッシュクリーンアップ完了 (削除: {old_cache_size}アイテム)")
+        # print(f"🧹 キャッシュクリーンアップ完了 (削除: {old_cache_size}アイテム)")
 
         # ガベージコレクションを明示的に実行
         import gc
@@ -684,6 +753,10 @@ class Aquarium:
 
     def update(self):
         """フレーム更新"""
+        if self.headless:
+            # 描画を行わないので最小限の更新のみ
+            self.update_process_data()
+            return
         current_time = time.time()
 
         # パフォーマンス監視
@@ -711,10 +784,18 @@ class Aquarium:
         fish_list = list(self.fishes.values())
         update_interval = self.performance_monitor['adaptive_fish_update_interval']
 
+        dying_fish_updated = 0
+        total_fish_updated = 0
         for i, fish in enumerate(fish_list):
             # 適応的更新：魚の数が多い場合は一部の魚のみ更新
-            if len(fish_list) > 50 and i % update_interval != (int(current_time * 10) % update_interval):
+            # ただし、死亡中の魚は常に更新して削除処理を確実に行う
+            should_update = fish.is_dying or len(fish_list) <= 50 or i % update_interval == (int(current_time * 10) % update_interval)
+            if not should_update:
                 continue
+            
+            if fish.is_dying:
+                dying_fish_updated += 1
+            total_fish_updated += 1
 
             # 近くの魚を検索（最適化：距離の事前チェック）
             nearby_fish = []
@@ -729,6 +810,10 @@ class Aquarium:
 
             fish.update_position(self.width, self.height, nearby_fish)
 
+        # 魚の更新統計をログ出力（デバッグ用）
+        # if dying_fish_updated > 0 or total_fish_updated < len(fish_list):
+        #     print(f"🔄 魚更新統計: 総数{len(fish_list)}, 更新数{total_fish_updated}, 死亡中更新数{dying_fish_updated}")
+
         # 定期的なキャッシュクリーンアップ
         if current_time - self.last_cache_cleanup > self.cache_cleanup_interval:
             self._cleanup_caches()
@@ -736,6 +821,8 @@ class Aquarium:
 
     def draw(self):
         """描画処理"""
+        if self.headless:
+            return  # 完全スキップ
         # 背景
         self.draw_background()
 
@@ -780,26 +867,46 @@ class Aquarium:
 
     def run(self):
         """メインループ"""
-        print("=== Digital Life Aquarium を開始します ===")
-        print("🐠 プロセスが生命体として水族館に現れるまでお待ちください...")
-        print("💡 ヒント: プロセス名によって色が決まり、CPU使用時に光ります")
+        if not self.headless:
+            print("=== Digital Life Aquarium を開始します ===")
+            print("🐠 プロセスが生命体として水族館に現れるまでお待ちください...")
+            print("💡 ヒント: プロセス名によって色が決まり、CPU使用時に光ります")
+            while self.running:
+                self.handle_events()
+                self.update()
+                self.draw()
+                self.clock.tick(self.fps)
+            pygame.quit()
+            print("🌙 水族館を閉館しました。お疲れさまでした！")
+            return
 
-        while self.running:
-            # イベント処理
-            self.handle_events()
-
-            # 更新
-            self.update()
-
-            # 描画
-            self.draw()
-
-            # FPS制御
-            self.clock.tick(self.fps)
-
-        # 終了処理
-        pygame.quit()
-        print("🌙 水族館を閉館しました。お疲れさまでした！")
+        # ヘッドレスループ
+        last_print = 0.0
+        try:
+            while self.running:
+                start = time.time()
+                self.process_manager.update()
+                stats = self.process_manager.get_process_statistics()
+                now = time.time()
+                if now - last_print >= self.headless_interval:
+                    last_print = now
+                    data_source = stats.get('data_source', 'unknown')
+                    base_stats = f"procs={stats['total_processes']} new={stats['new_processes']} dying={stats['dying_processes']} mem={stats['total_memory_percent']:.2f}% cpu_avg={stats['average_cpu_percent']:.2f}% threads={stats['total_threads']}"
+                    
+                    # eBPFの場合はイベント統計も表示
+                    if 'ebpf_events' in stats:
+                        print(f"[stats|{data_source}] {base_stats} events=[{stats['ebpf_events']}]")
+                    else:
+                        print(f"[stats|{data_source}] {base_stats}")
+                # シンプルスリープ（イベント駆動化は今後 eBPF 実装時に検討）
+                elapsed = time.time() - start
+                remaining = self.headless_interval - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
+        except KeyboardInterrupt:
+            print("[Headless] 中断されました。終了します。")
+        finally:
+            pygame.quit()
 
     def _print_display_info(self):
         """ディスプレイ情報をデバッグ表示"""
