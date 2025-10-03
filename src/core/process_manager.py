@@ -1,68 +1,95 @@
-"""
-Digital Life Aquarium - プロセス管理モジュール
+"""Digital Life Aquarium - プロセス管理モジュール
 
-OSのプロセス情報をリアルタイムで取得・管理するクラス群
+従来のポーリング方式(psutil)による実装に加えて、今後 eBPF ベースの
+イベント駆動ソースへ差し替え可能な抽象レイヤを導入するための
+互換ラッパークラス。
+
+新設: ``src.core.sources`` に `IProcessSource` 抽象と `PsutilProcessSource` を
+定義し、ここではレガシー API (`update()`, `get_process_statistics()` など) を
+保ったまま内部的にソースへ委譲する。
 """
 
 import psutil
 import time
 import random
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Any
 from dataclasses import dataclass
 from datetime import datetime
 import random
 
+try:
+    # 新しい抽象層 (存在しない場合でも旧来構造で動作できるよう try)
+    from .sources import IProcessSource, PsutilProcessSource
+    from .types import ProcessInfo as UnifiedProcessInfo, ProcessLifecycleEvent, IPCConnection
+except Exception:
+    IProcessSource = None  # type: ignore
+    PsutilProcessSource = None  # type: ignore
+    UnifiedProcessInfo = None  # type: ignore
+    ProcessLifecycleEvent = None  # type: ignore
+    IPCConnection = None  # type: ignore
 
-@dataclass
-class ProcessInfo:
-    """プロセス情報を格納するデータクラス"""
-    pid: int
-    ppid: int
-    name: str
-    exe: str
-    memory_percent: float
-    cpu_percent: float
-    num_threads: int
-    create_time: float
-    status: str
-    cmdline: List[str]
 
-    # 生命体としての属性
-    birth_time: datetime
-    last_update: datetime
-    is_new: bool = False
-    is_dying: bool = False
+if UnifiedProcessInfo is None:
+    # フォールバック: 旧来データクラス (新しい types.py が見つからない場合用)
+    @dataclass
+    class ProcessInfo:  # type: ignore
+        pid: int
+        ppid: int
+        name: str
+        exe: str
+        memory_percent: float
+        cpu_percent: float
+        num_threads: int
+        create_time: float
+        status: str
+        cmdline: List[str]
+        birth_time: datetime
+        last_update: datetime
+        is_new: bool = False
+        is_dying: bool = False
+else:
+    # 新しい統一型を再エクスポート
+    ProcessInfo = UnifiedProcessInfo  # type: ignore
 
 
 class ProcessManager:
-    """プロセス情報を管理するメインクラス"""
+    """プロセス情報を管理するメインクラス (互換ラッパー)。
 
-    def __init__(self, max_processes: int = 100):
+    既存コードとの互換性維持のため public API は保持しつつ、内部で
+    `IProcessSource` に委譲する。指定されなければ psutil ベースを使用。
+    """
+
+    def __init__(self, max_processes: int = 100, source: Optional[Any] = None):  # source: IProcessSource | None
+        self.max_processes = max_processes
+        self._external_source = source
+
+        # 旧来フィールド（互換目的 / 一部ロジックで参照される）
         self.processes: Dict[int, ProcessInfo] = {}
         self.previous_pids: Set[int] = set()
-        self.previous_process_exes: Dict[int, str] = {}  # exec検出用
-        self.update_interval = 1.0  # 更新間隔を1秒に延長
+        self.previous_process_exes: Dict[int, str] = {}
+        self.update_interval = 1.0
         self.last_update = time.time()
-        self.max_processes = max_processes  # 表示する最大プロセス数
-        
+
         # プロセス関係追跡
-        self.process_families: Dict[int, List[int]] = {}  # 親→子リスト
-        self.recent_forks: List[tuple] = []  # 最近のfork履歴
-        self.recent_execs: List[int] = []    # 最近のexec履歴
-        
-        # 重要なプロセス名のフィルタ（優先表示）
+        self.process_families: Dict[int, List[int]] = {}
+        self.recent_forks: List[tuple] = []
+        self.recent_execs: List[int] = []
+
+        # 重要/除外フィルタ (psutil直利用時のみ使用)
         self.important_processes = {
             'python', 'chrome', 'firefox', 'safari', 'code', 'terminal',
             'finder', 'dock', 'systemuiserver', 'windowserver', 'kernel_task',
             'launchd', 'zoom', 'slack', 'discord', 'spotify', 'photoshop',
             'illustrator', 'aftereffects', 'node', 'java', 'docker'
         }
-        
-        # 除外するプロセス（システムの細かなデーモン等）
         self.excluded_processes = {
             'com.apple.', 'cfprefsd', 'distnoted', 'trustd', 'secd',
             'bluetoothd', 'audiomxd', 'logd_helper', 'deleted'
         }
+
+        # ソース確立
+        if self._external_source is None and PsutilProcessSource is not None:
+            self._external_source = PsutilProcessSource(max_processes=max_processes)
 
     def get_all_processes(self) -> Dict[int, ProcessInfo]:
         """全プロセス情報を取得"""
@@ -73,78 +100,80 @@ class ProcessManager:
         return self.processes.get(pid)
 
     def update(self) -> None:
-        """プロセス情報を更新"""
+        """プロセス情報を更新 (抽象ソース経由)。"""
+        if self._external_source is not None:
+            # 新実装経路
+            self._external_source.update()
+            snapshot = self._external_source.get_processes()
+
+            # 互換フィールドへ反映
+            self.processes = snapshot
+            current_pids = set(snapshot.keys())
+            self.previous_pids = current_pids
+            # 家族関係再構築
+            self._update_process_families(snapshot)
+
+            # exec / fork 検出: lifecycle events を利用
+            if hasattr(self._external_source, 'drain_lifecycle_events'):
+                try:
+                    events = self._external_source.drain_lifecycle_events()
+                except Exception:
+                    events = []
+                for ev in events:
+                    if ev.event_type == 'exec':
+                        self.recent_execs.append(ev.pid)
+                    elif ev.event_type == 'spawn':
+                        # spawn + 親存在なら fork とみなす
+                        if ev.ppid and ev.ppid in snapshot:
+                            parent = snapshot[ev.ppid]
+                            child = snapshot.get(ev.pid)
+                            if parent and child:
+                                self.recent_forks.append((parent, child))
+                                self.recent_forks = self.recent_forks[-10:]
+            return
+
+        # フォールバック：旧来ロジック（sources が無い環境用）
         current_time = time.time()
         if current_time - self.last_update < self.update_interval:
             return
-
-        current_pids = set()
-        new_processes = {}
-        current_process_exes = {}
-
-        # 現在のプロセス一覧を取得
-        for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'memory_percent',
-                                       'cpu_percent', 'num_threads', 'create_time',
-                                       'status', 'cmdline']):
+        # （旧実装を保持するのは冗長なので最小限。将来的に削除可能）
+        new_snapshot: Dict[int, ProcessInfo] = {}
+        current_pids: Set[int] = set()
+        current_exe: Dict[int, str] = {}
+        for proc in psutil.process_iter(['pid','ppid','name','exe','memory_percent','cpu_percent','num_threads','create_time','status','cmdline']):
             try:
                 info = proc.info
                 pid = info['pid']
                 name = info['name'] or 'unknown'
                 exe = info['exe'] or ''
-                memory_percent = info['memory_percent'] or 0.0
-                cpu_percent = info['cpu_percent'] or 0.0
-                
-                # プロセスフィルタリング
-                if not self._should_include_process(name, memory_percent, cpu_percent):
+                mem = info['memory_percent'] or 0.0
+                cpu = info['cpu_percent'] or 0.0
+                if not self._should_include_process(name, mem, cpu):
                     continue
-                
                 current_pids.add(pid)
-                current_process_exes[pid] = exe
-
-                # 新しいプロセスかどうかをチェック
+                current_exe[pid] = exe
                 is_new = pid not in self.previous_pids
-
-                # プロセス情報を作成
-                process_info = ProcessInfo(
-                    pid=pid,
-                    ppid=info['ppid'] or 0,
-                    name=name,
-                    exe=exe,
-                    memory_percent=memory_percent,
-                    cpu_percent=cpu_percent,
+                pinfo = ProcessInfo(
+                    pid=pid, ppid=info['ppid'] or 0, name=name, exe=exe,
+                    memory_percent=mem, cpu_percent=cpu,
                     num_threads=info['num_threads'] or 1,
                     create_time=info['create_time'] or 0.0,
                     status=info['status'] or 'unknown',
                     cmdline=info['cmdline'] or [],
-                    birth_time=datetime.now() if is_new else (
-                        self.processes[pid].birth_time if pid in self.processes
-                        else datetime.now()
-                    ),
-                    last_update=datetime.now(),
-                    is_new=is_new
+                    birth_time=datetime.now() if is_new else (self.processes[pid].birth_time if pid in self.processes else datetime.now()),
+                    last_update=datetime.now(), is_new=is_new
                 )
-
-                new_processes[pid] = process_info
-
+                new_snapshot[pid] = pinfo
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                # プロセスがアクセス不可または既に終了している場合はスキップ
                 continue
-
-        # exec検出
-        self._detect_exec_events(current_process_exes)
-        
-        # 家族関係の更新
-        self._update_process_families(new_processes)
-
-        # 消滅したプロセスをマーク
+        self._detect_exec_events(current_exe)
+        self._update_process_families(new_snapshot)
         for pid in self.previous_pids:
             if pid not in current_pids and pid in self.processes:
                 self.processes[pid].is_dying = True
-
-        # プロセス情報を更新
-        self.processes = new_processes
+        self.processes = new_snapshot
         self.previous_pids = current_pids
-        self.previous_process_exes = current_process_exes
+        self.previous_process_exes = current_exe
         self.last_update = current_time
 
     def _should_include_process(self, process_name: str, memory_percent: float, cpu_percent: float) -> bool:
