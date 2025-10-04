@@ -659,7 +659,7 @@ class Aquarium:
         # 選択されたFishの詳細情報（右上・左上パネルと同じスタイル）
         if self.selected_fish:
             info_lines = [
-                f"選択された生命体:",
+                f"選択されたプロセス:",
                 f"PID: {self.selected_fish.pid}",
                 f"名前: {self.selected_fish.name}",
                 f"メモリ: {self.selected_fish.memory_percent:.2f}%",
@@ -697,7 +697,7 @@ class Aquarium:
                 self.screen.blit(text_surface, (text_x, text_y))        # 操作説明
         help_lines = [
             "操作方法:",
-            "クリック: 生命体を選択",
+            "クリック: プロセスを選択",
             "C: カメラモード切替",
             "ホイール: ズーム",
             "右クリック+ドラッグ: パン",
@@ -1490,7 +1490,7 @@ class Aquarium:
         """メインループ"""
         if not self.headless:
             print("=== Digital Life Aquarium を開始します ===")
-            print("🐠 プロセスが生命体として水族館に現れるまでお待ちください...")
+            print("🐠 プロセスがプロセスとして水族館に現れるまでお待ちください...")
             print("💡 ヒント: プロセス名によって色が決まり、CPU使用時に光ります")
             while self.running:
                 self.handle_events()
