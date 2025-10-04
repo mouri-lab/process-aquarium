@@ -213,6 +213,7 @@ class Aquarium:
 
         # フルスクリーン管理
         self.original_size = (width, height)
+        self._windowed_size = (width, height)
 
         # 実行状態
         self.running = True
@@ -712,6 +713,8 @@ class Aquarium:
                         self.width, self.height = new_width, new_height
                         self._update_gpu_render_size(self.width, self.height)
                         self._after_display_resize()
+                        if not self.fullscreen:
+                            self._windowed_size = (self.width, self.height)
                         print(f"🪟 GPUウィンドウサイズ変更: {self.width}x{self.height}")
                 elif self._windowevent_close is not None and event.event == self._windowevent_close:
                     self.running = False
@@ -722,6 +725,8 @@ class Aquarium:
                     self.width, self.height = new_width, new_height
                     self._update_gpu_render_size(self.width, self.height)
                     self._after_display_resize()
+                    if not self.fullscreen:
+                        self._windowed_size = (self.width, self.height)
                     print(f"🪟 GPUウィンドウサイズ変更(VIDEORESIZE): {self.width}x{self.height}")
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
@@ -747,21 +752,15 @@ class Aquarium:
 
     def toggle_fullscreen(self):
         """フルスクリーンモードの切り替え"""
-        self.fullscreen = not self.fullscreen
+        target_state = not self.fullscreen
+        previous_state = self.fullscreen
+        if target_state:
+            self._windowed_size = (self.width, self.height)
+        self.fullscreen = target_state
 
         if self.use_gpu and self.gpu_window is not None:
-            try:
-                if self.fullscreen:
-                    self.gpu_window.fullscreen = True
-                else:
-                    self.gpu_window.fullscreen = False
-                    self.gpu_window.size = self.original_size
-                self.width, self.height = self.gpu_window.size
-                self._update_gpu_render_size(self.width, self.height)
-                self._after_display_resize()
-                print(f"📐 現在の画面サイズ: {self.width}x{self.height}")
-            except Exception as e:
-                print(f"❌ GPUフルスクリーン設定エラー: {e}")
+            if not self._apply_gpu_fullscreen_state(target_state):
+                self.fullscreen = previous_state
             return
 
         if self.fullscreen:
@@ -794,13 +793,78 @@ class Aquarium:
                 print(f"🖥️ フォールバック解像度: {self.width}x{self.height}")
         else:
             # ウィンドウモードに戻す
-            self.width = self.base_width
-            self.height = self.base_height
+            restore_width, restore_height = self._windowed_size or (self.base_width, self.base_height)
+            self.width, self.height = restore_width, restore_height
             self.screen = pygame.display.set_mode((self.width, self.height))
             print(f"🪟 ウィンドウモード: {self.width}x{self.height}")
 
         self._after_display_resize()
         print(f"📐 現在の画面サイズ: {self.screen.get_width()}x{self.screen.get_height()}")
+
+    def _apply_gpu_fullscreen_state(self, enable: bool) -> bool:
+        """GPUレンダラ用ウィンドウのフルスクリーン切り替えを実施"""
+        if not self.use_gpu or self.gpu_window is None:
+            return False
+
+        desktop_size: Optional[Tuple[int, int]] = None
+        restore_size: Optional[Tuple[int, int]] = None
+
+        try:
+            if enable:
+                desktop_size = self._get_gpu_desktop_size()
+                if desktop_size:
+                    try:
+                        self.gpu_window.size = desktop_size
+                    except Exception as size_err:
+                        print(f"⚠️ GPUフルスクリーン用サイズ設定失敗: {size_err}")
+                try:
+                    # pygame-ce 2.5.x provides set_fullscreen(desktop=False)
+                    self.gpu_window.set_fullscreen(desktop=True)
+                except TypeError:
+                    # older signature without keyword support
+                    self.gpu_window.set_fullscreen(True)
+                except Exception as flag_err:
+                    print(f"❌ GPUフルスクリーン切替失敗: {flag_err}")
+                    return False
+            else:
+                try:
+                    self.gpu_window.set_fullscreen(False)
+                except Exception as flag_err:
+                    print(f"⚠️ GPUフルスクリーン解除失敗: {flag_err}")
+                restore_size = self._windowed_size or self.original_size
+                try:
+                    self.gpu_window.size = restore_size
+                except Exception as size_err:
+                    print(f"⚠️ GPUウィンドウサイズ復元失敗: {size_err}")
+
+            pygame.event.pump()
+            updated_size = getattr(self.gpu_window, "size", None)
+            if isinstance(updated_size, tuple) and len(updated_size) == 2:
+                self.width, self.height = updated_size
+            elif enable and desktop_size:
+                self.width, self.height = desktop_size
+            elif not enable and restore_size:
+                self.width, self.height = restore_size
+
+            self._update_gpu_render_size(self.width, self.height)
+            self._after_display_resize()
+            print(f"🖥️ GPUフルスクリーン{'ON' if enable else 'OFF'}: {self.width}x{self.height}")
+            return True
+        except Exception as e:
+            print(f"❌ GPUフルスクリーン切替失敗: {e}")
+            return False
+
+    def _get_gpu_desktop_size(self) -> Optional[Tuple[int, int]]:
+        """現在のディスプレイにおけるデスクトップ解像度を取得"""
+        try:
+            sizes = pygame.display.get_desktop_sizes()
+            if sizes:
+                index = getattr(self.gpu_window, "display_index", 0) or 0
+                index = max(0, min(index, len(sizes) - 1))
+                return sizes[index]
+        except Exception as e:
+            print(f"⚠️ デスクトップ解像度取得失敗: {e}")
+        return None
 
     def adjust_fish_positions_for_screen_resize(self):
         """画面サイズ変更時に魚の位置を調整"""

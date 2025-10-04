@@ -174,7 +174,7 @@ class Fish:
         else:
             memory_factor = 1.0
         self.current_size = self.base_size * memory_factor
-        
+
         # メモリ巨大魚の判定（メモリ使用率5%以上または、サイズが基本の5倍以上）
         self.is_memory_giant = memory_percent >= 5.0 or memory_factor >= 5.0
 
@@ -214,7 +214,7 @@ class Fish:
         """位置の更新とバウンド処理（群れ行動対応版）"""
         # 年齢を増やす
         self.age += 1
-        
+
         # メモリ巨大魚の脈動エフェクト
         if self.is_memory_giant:
             self.pulsation_phase += 0.15  # 脈動速度
@@ -233,10 +233,10 @@ class Fish:
             old_progress = self.death_progress
             self.death_progress += 0.03
             # デバッグ用：進行状況を定期的に出力
-            if int(old_progress * 10) != int(self.death_progress * 10):  # 0.1刻みで出力
-                print(f"💀 死亡進行: PID {self.pid} ({self.process_name}) - {old_progress:.2f} -> {self.death_progress:.2f}")
-            if self.death_progress >= 1.0 and old_progress < 1.0:
-                print(f"💀 魚の死亡完了: PID {self.pid} ({self.process_name}) - progress {old_progress:.2f} -> {self.death_progress:.2f}")
+            # if int(old_progress * 10) != int(self.death_progress * 10):  # 0.1刻みで出力
+            #     print(f"💀 死亡進行: PID {self.pid} ({self.process_name}) - {old_progress:.2f} -> {self.death_progress:.2f}")
+            # if self.death_progress >= 1.0 and old_progress < 1.0:
+            #     print(f"💀 魚の死亡完了: PID {self.pid} ({self.process_name}) - progress {old_progress:.2f} -> {self.death_progress:.2f}")
             return self.death_progress < 1.0
 
         # 特殊エフェクトのタイマー更新
@@ -249,7 +249,7 @@ class Fish:
             self.exec_timer -= 1
             if self.exec_timer == 0:
                 self.exec_transition = False
-                
+
         # 会話タイマーの更新
         if self.talk_timer > 0:
             self.talk_timer -= 1
@@ -395,22 +395,22 @@ class Fish:
         """メモリ巨大魚用の特別エフェクト（波紋など）"""
         # 波紋エフェクト：3つの同心円
         ripple_color = (255, 100, 100, max(30, alpha // 4))  # 赤っぽい半透明
-        
+
         for i in range(4):  # 波紋を4つに増加
             # 各波紋の半径と透明度を脈動に合わせて変化（より大きな範囲）
             ripple_phase = self.pulsation_phase + i * (math.pi / 4)
             # 波紋の範囲を2倍に拡大：巨大魚に相応しいスケール
             ripple_radius = self.current_size * (3.0 + i * 1.2) * (1.0 + 0.5 * math.sin(ripple_phase))
             ripple_alpha = max(8, int((alpha // 8) * (1.0 - i * 0.2)))
-            
+
             # 半透明の円を描画
             if ripple_radius > 0 and ripple_alpha > 0:
                 try:
                     # 一時的なサーフェスを作成して半透明描画
                     temp_surface = pygame.Surface((ripple_radius * 2 + 4, ripple_radius * 2 + 4), pygame.SRCALPHA)
-                    pygame.draw.circle(temp_surface, (*ripple_color[:3], ripple_alpha), 
+                    pygame.draw.circle(temp_surface, (*ripple_color[:3], ripple_alpha),
                                      (ripple_radius + 2, ripple_radius + 2), int(ripple_radius), 2)
-                    screen.blit(temp_surface, (self.x - ripple_radius - 2, self.y - ripple_radius - 2), 
+                    screen.blit(temp_surface, (self.x - ripple_radius - 2, self.y - ripple_radius - 2),
                                special_flags=pygame.BLEND_ALPHA_SDL2)
                 except (ValueError, pygame.error):
                     pass  # 描画エラーを無視
@@ -419,13 +419,13 @@ class Fish:
         """超巨大魚用の雷エフェクト（メモリ使用率20%以上）"""
         if not hasattr(self, 'lightning_timer'):
             self.lightning_timer = 0
-        
+
         self.lightning_timer += 1
-        
+
         # ランダムに雷を発生（30フレームに1回程度）
         if self.lightning_timer % 30 == 0 or random.random() < 0.1:
             lightning_color = (255, 255, 150, max(100, alpha // 2))  # 明るい黄色
-            
+
             # 魚の周りに3-5本の雷を描画
             num_bolts = random.randint(3, 5)
             for _ in range(num_bolts):
@@ -433,12 +433,12 @@ class Fish:
                 angle = random.uniform(0, 2 * math.pi)
                 start_radius = self.current_size * 0.8
                 end_radius = self.current_size * 2.5
-                
+
                 start_x = self.x + math.cos(angle) * start_radius
                 start_y = self.y + math.sin(angle) * start_radius
                 end_x = self.x + math.cos(angle) * end_radius
                 end_y = self.y + math.sin(angle) * end_radius
-                
+
                 # ジグザグの雷を描画
                 try:
                     points = [(start_x, start_y)]
@@ -452,7 +452,7 @@ class Fish:
                         offset_y = random.uniform(-20, 20)
                         points.append((mid_x + offset_x, mid_y + offset_y))
                     points.append((end_x, end_y))
-                    
+
                     # 雷の線を描画
                     if len(points) >= 2:
                         pygame.draw.lines(screen, lightning_color[:3], False, points, 2)
@@ -468,7 +468,7 @@ class Fish:
             # 指数関数でスレッド数による衛星数を計算
             satellite_factor = (math.exp(2 * thread_normalized) - 1) / (math.exp(2) - 1)
             satellite_count = max(1, min(int((self.thread_count - 1) * (1 + satellite_factor)), 16))
-            
+
             for i in range(satellite_count):
                 angle = (2 * math.pi * i) / satellite_count + self.age * 0.02
                 # スレッド数が多いほど衛星が遠くに配置される
@@ -498,17 +498,17 @@ class Fish:
 
         # 泳ぎのアニメーション（速度に応じて変化）
         speed = math.sqrt(self.vx**2 + self.vy**2)
-        
+
         # CPU使用率に応じて泳ぎの激しさを指数関数的に調整
         cpu_factor = 1.0
         if hasattr(self, 'cpu_percent'):
             cpu_normalized = self.cpu_percent / 100.0
             # 指数関数でCPU使用率による激しさを計算
             cpu_factor = 1.0 + (math.exp(2 * cpu_normalized) - 1) / (math.exp(2) - 1) * 4.0
-            
+
         swim_speed = (0.1 + speed * 0.1) * cpu_factor
         self.swim_cycle += swim_speed
-        
+
         # 尻尾の振りもCPU使用率に応じて激しく
         tail_intensity = (0.2 + speed * 0.1) * cpu_factor
         self.tail_swing = math.sin(self.swim_cycle) * min(tail_intensity, 1.0)  # 最大1.0で制限
@@ -983,35 +983,35 @@ class Fish:
             except Exception:
                 return
         text_rect = text_surface.get_rect()
-        
+
         # 吹き出しの位置とサイズ
         bubble_margin = 5
         bubble_width = text_rect.width + bubble_margin * 2
         bubble_height = text_rect.height + bubble_margin * 2
-        
+
         # 魚の上に吹き出しを配置
         bubble_x = self.x - bubble_width // 2
         bubble_y = self.y - bubble_height - 20
-        
+
         # 画面外に出ないように調整
         bubble_x = max(5, min(bubble_x, screen.get_width() - bubble_width - 5))
         bubble_y = max(5, bubble_y)
-        
+
         # 吹き出しのクリック領域を記録
         self.bubble_rect = (bubble_x, bubble_y, bubble_width, bubble_height)
-        
+
         # 吹き出しの背景
         bubble_surface = pygame.Surface((bubble_width, bubble_height), pygame.SRCALPHA)
-        pygame.draw.rect(bubble_surface, (0, 0, 0, 180), 
+        pygame.draw.rect(bubble_surface, (0, 0, 0, 180),
                         (0, 0, bubble_width, bubble_height), border_radius=8)
         pygame.draw.rect(bubble_surface, (255, 255, 255, 220),
                         (2, 2, bubble_width-4, bubble_height-4), border_radius=6)
-        
+
         # テキストを描画
         text_x = bubble_margin
         text_y = bubble_margin
         bubble_surface.blit(text_surface, (text_x, text_y))
-        
+
         # 吹き出しの尻尾（三角形）
         tail_points = [
             (bubble_width // 2, bubble_height),
@@ -1019,6 +1019,6 @@ class Fish:
             (bubble_width // 2 + 8, bubble_height + 10)
         ]
         pygame.draw.polygon(bubble_surface, (255, 255, 255, 220), tail_points)
-        
+
         # 画面に描画
         screen.blit(bubble_surface, (bubble_x, bubble_y))
