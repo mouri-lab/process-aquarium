@@ -656,7 +656,7 @@ class Aquarium:
             text_y = panel_y + panel_padding_y + i * line_height
             self.screen.blit(text_surface, (text_x, text_y))
 
-        # 選択されたFishの詳細情報
+        # 選択されたFishの詳細情報（右上・左上パネルと同じスタイル）
         if self.selected_fish:
             info_lines = [
                 f"選択された生命体:",
@@ -668,17 +668,33 @@ class Aquarium:
                 f"年齢: {self.selected_fish.age}フレーム"
             ]
 
-            info_height = len(info_lines) * 22 + 10
-            info_surface = pygame.Surface((250, info_height), pygame.SRCALPHA)
-            info_surface.fill((0, 50, 100, 180))
-            self.screen.blit(info_surface, (self.width - 260, 10))
+            # 左上パネルと同じ方式で動的サイズ計算
+            info_padding_x = 10
+            info_padding_y = 10
+            info_line_height = max(int(font_linesize * 1.15), font_linesize)
+            max_info_width = 0
+            for line in info_lines:
+                text_width, _ = self.small_font.size(line)
+                if text_width > max_info_width:
+                    max_info_width = text_width
 
+            info_panel_width = max(250, max_info_width + info_padding_x * 2)
+            info_panel_height = len(info_lines) * info_line_height + info_padding_y * 2
+            info_panel_surface = pygame.Surface((info_panel_width, info_panel_height), pygame.SRCALPHA)
+            info_panel_surface.fill((0, 50, 100, 180))
+
+            # 右上に配置
+            info_panel_x = self.width - info_panel_width - 10
+            info_panel_y = 10
+            self.screen.blit(info_panel_surface, (info_panel_x, info_panel_y))
+
+            # 詳細情報テキスト
             for i, line in enumerate(info_lines):
                 color = (255, 255, 255) if i == 0 else (200, 200, 200)
                 text_surface = self._render_text(line, self.small_font, color)
-                self.screen.blit(text_surface, (self.width - 250, 15 + i * 22))
-
-        # 操作説明
+                text_x = info_panel_x + info_padding_x
+                text_y = info_panel_y + info_padding_y + i * info_line_height
+                self.screen.blit(text_surface, (text_x, text_y))        # 操作説明
         help_lines = [
             "操作方法:",
             "クリック: 生命体を選択",
@@ -695,15 +711,33 @@ class Aquarium:
             "O: ソート順序切替"
         ]
 
-        help_height = len(help_lines) * 20 + 10
-        help_surface = pygame.Surface((200, help_height), pygame.SRCALPHA)
-        help_surface.fill((0, 0, 0, 100))
-        self.screen.blit(help_surface, (10, self.height - help_height - 10))
+        # ヘルプ（左上パネルと同じスタイルで動的サイズ計算）
+        help_padding_x = 10
+        help_padding_y = 10
+        help_line_height = max(int(font_linesize * 1.15), font_linesize)
+        max_help_width = 0
+        for line in help_lines:
+            text_width, _ = self.small_font.size(line)
+            if text_width > max_help_width:
+                max_help_width = text_width
 
+        help_panel_width = max(200, max_help_width + help_padding_x * 2)
+        help_panel_height = len(help_lines) * help_line_height + help_padding_y * 2
+        help_panel_surface = pygame.Surface((help_panel_width, help_panel_height), pygame.SRCALPHA)
+        help_panel_surface.fill((0, 0, 0, 128))
+
+        # 左下に配置
+        help_panel_x = 10
+        help_panel_y = self.height - help_panel_height - 10
+        self.screen.blit(help_panel_surface, (help_panel_x, help_panel_y))
+
+        # ヘルプテキスト
         for i, line in enumerate(help_lines):
             color = (255, 255, 150) if i == 0 else (200, 200, 200)
             text_surface = self._render_text(line, self.small_font, color)
-            self.screen.blit(text_surface, (15, self.height - help_height - 5 + i * 20))
+            text_x = help_panel_x + help_padding_x
+            text_y = help_panel_y + help_padding_y + i * help_line_height
+            self.screen.blit(text_surface, (text_x, text_y))
 
     def draw_parent_child_connections(self):
         """親子関係の描画（淡い線で接続）"""
