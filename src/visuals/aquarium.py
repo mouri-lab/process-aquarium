@@ -492,6 +492,30 @@ class Aquarium:
         # 関連プロセス群を取得して群れを形成
         processed_pids = set()
 
+        # 同じプロセス名のものを群れにする
+        process_name_groups = {}
+        all_processes = self.process_manager.get_all_processes()
+
+        # プロセス名ごとにグループ化
+        for process in all_processes.values():
+            if process.pid in self.fishes:
+                name = process.name
+                if name not in process_name_groups:
+                    process_name_groups[name] = []
+                process_name_groups[name].append(process.pid)
+
+        # 同名プロセスが複数ある場合のみ群れを形成
+        for name, pids in process_name_groups.items():
+            if len(pids) > 1:
+                leader_pid = min(pids)  # PIDが最小のものをリーダーに
+
+                for pid in pids:
+                    if pid in self.fishes:
+                        is_leader = (pid == leader_pid)
+                        self.fishes[pid].set_school_members(pids, is_leader)
+                        processed_pids.add(pid)
+
+        # 通常の関連プロセス群を形成
         for pid, fish in self.fishes.items():
             if pid in processed_pids:
                 continue

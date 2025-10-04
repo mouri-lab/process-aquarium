@@ -9,7 +9,7 @@ import random
 import time
 from typing import Tuple, Optional, List
 
-WORD_SIZE = 1000
+WORD_SIZE = 3000
 
 MAX_THREAD_SATELLITES = 14
 """Maximum number of thread satellites rendered around a fish."""
@@ -368,15 +368,22 @@ class Fish:
                                 avoidance_x += (dx_avoid / dist_avoid) * avoidance_strength
                                 avoidance_y += (dy_avoid / dist_avoid) * avoidance_strength
 
-        # 目標位置に向かう力（軽量化版）
+        # 目標位置に向かう力（自然な定速運動）
         dx = self.target_x - self.x
         dy = self.target_y - self.y
         # 平方根計算をスキップして距離の2乗で判定
         distance_sq = dx*dx + dy*dy
 
         if distance_sq > 25:  # distance > 5 の2乗
-            self.vx += dx * 0.0008
-            self.vy += dy * 0.0008
+            # 距離によらず一定の力で目標に向かう（自然な泳ぎ）
+            distance = math.sqrt(distance_sq)
+            normalized_dx = dx / distance
+            normalized_dy = dy / distance
+
+            # 一定の速度で目標に向かう（距離に関係なく）
+            target_force = 0.4
+            self.vx += normalized_dx * target_force
+            self.vy += normalized_dy * target_force
 
         # 回避力を適用（群れ魚・単独魚共通）
         self.vx += avoidance_x
