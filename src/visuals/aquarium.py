@@ -34,13 +34,41 @@ class Aquarium:
     プロセス監視とビジュアライゼーションを統合管理
     """
 
-    def __init__(self, width: int = 1200, height: int = 800, headless: bool = False, headless_interval: float = 1.0):
+    def __init__(self, width: int = 1200, height: int = 800, headless: bool = False,
+                 headless_interval: float = 1.0, use_gpu: Optional[bool] = None):
         # Pygameの初期化
         self.headless = headless
         self.headless_interval = headless_interval
         if self.headless:
             # ダミードライバでウィンドウ生成を抑制
             os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
+        self._gpu_texture_type = None
+        self.gpu_renderer = None
+        self.gpu_window = None
+        self.gpu_texture = None
+        self.requested_gpu = use_gpu if use_gpu is not None else self._env_flag("AQUARIUM_GPU", False)
+        if self.headless and self.requested_gpu:
+            print("[GPU] ヘッドレスモードのためGPUレンダラは無効化されます。")
+            self.requested_gpu = False
+        self.gpu_driver_hint = os.environ.get("AQUARIUM_GPU_DRIVER")
+        if self.requested_gpu and self.gpu_driver_hint:
+            os.environ.setdefault("SDL_HINT_RENDER_DRIVER", self.gpu_driver_hint)
+        self.use_gpu = False
+        self.enable_adaptive_quality = self._env_flag("AQUARIUM_ENABLE_ADAPTIVE_QUALITY", False)
+        self.render_quality = "full"
+        self._quality_thresholds = (None, None)
+        recovery_margin_env = os.environ.get("AQUARIUM_QUALITY_RECOVERY_MARGIN")
+        try:
+            recovery_margin = float(recovery_margin_env) if recovery_margin_env else 3.0
+        except ValueError:
+            recovery_margin = 3.0
+        self._quality_recovery_margin = max(0.0, min(recovery_margin, 10.0))
+        self._suppress_spawn_logs = False
+        self._quality_message_shown = set()
+        self._windowevent_type = getattr(pygame, "WINDOWEVENT", None)
+        self._windowevent_resized = getattr(pygame, "WINDOWEVENT_RESIZED", None)
+        self._windowevent_size_changed = getattr(pygame, "WINDOWEVENT_SIZE_CHANGED", None)
+        self._windowevent_close = getattr(pygame, "WINDOWEVENT_CLOSE", None)
         pygame.init()
         try:
             pygame.mixer.init()
@@ -71,8 +99,11 @@ class Aquarium:
         self.retina_info = self.detect_retina_scaling()
 
         if not self.headless:
-            self.screen = pygame.display.set_mode((width, height))
-            pygame.display.set_caption("Digital Life Aquarium - デジタル生命の水族館")
+            if self.requested_gpu:
+                self._init_gpu_renderer(width, height)
+            if not self.use_gpu:
+                self.screen = pygame.display.set_mode((width, height))
+                pygame.display.set_caption("Digital Life Aquarium - デジタル生命の水族館")
         else:
             # ヘッドレス時は描画用のダミーサーフェスを用意
             self.screen = pygame.Surface((width, height))
@@ -80,6 +111,7 @@ class Aquarium:
         # 時計とFPS
         self.clock = pygame.time.Clock()
         self.fps = target_fps if not self.headless else int(1.0 / max(headless_interval, 0.001))
+        self._configure_quality_thresholds()
 
         # プロセス管理
         # 将来的に eBPF を有効化する場合は、起動パラメータや環境変数で
@@ -117,7 +149,7 @@ class Aquarium:
         self.process_limit = int(limit_str) if limit_str else None
         self.sort_by = os.environ.get("AQUARIUM_SORT_BY", "cpu")
         self.sort_order = os.environ.get("AQUARIUM_SORT_ORDER", "desc")
-        
+
         # ProcessManagerに設定を反映
         if self.process_limit is not None:
             self.process_manager.set_process_limit(self.process_limit)
@@ -139,16 +171,20 @@ class Aquarium:
             'adaptive_particle_count': 50,
             'adaptive_fish_update_interval': 1
         }
+        self._neighbor_cell_size = 120  # 近傍検索用のグリッドサイズ（ピクセル）
 
         # UI状態
         self.selected_fish: Optional[Fish] = None
 
-        # 動的フォントスケーリング
+        # 日本語フォント管理と動的スケーリング
+        self._preferred_font_name: Optional[str] = None
+        self._preferred_font_path: Optional[str] = None
+        self._font_cache: Dict[int, pygame.font.Font] = {}
         self.font_scale = 1.0
         self._update_font_scale()
         self.font = self._get_japanese_font(int(24 * self.font_scale))
         self.small_font = self._get_japanese_font(int(18 * self.font_scale))
-        self.bubble_font = self._get_japanese_font(10)  # IPC会話吹き出し用の小さなフォント
+        self.bubble_font = self._get_japanese_font(self._determine_bubble_font_size())  # IPC会話吹き出し用フォント
 
         # 背景とエフェクト（動的パーティクル数）
         self.background_particles = []
@@ -171,12 +207,13 @@ class Aquarium:
         self.show_debug = False  # デフォルトでデバッグ表示をオフ
         self.show_ipc = True    # IPC可視化をオン
         self.debug_text_lines = []
-        
+
         # 通信相手のハイライト
         self.highlighted_partners = []  # ハイライトする通信相手のPIDリスト
 
         # フルスクリーン管理
         self.original_size = (width, height)
+        self._windowed_size = (width, height)
 
         # 実行状態
         self.running = True
@@ -284,9 +321,13 @@ class Aquarium:
 
                 fish = Fish(pid, proc.name, x, y)
                 self.fishes[pid] = fish
-                
+
                 # プロセス誕生ログ
-                print(f"🐟 新しいプロセス誕生: PID {pid} ({proc.name})")
+                if not self._suppress_spawn_logs:
+                    print(f"🐟 新しいプロセス誕生: PID {pid} ({proc.name})")
+                elif "spawn_logs_suppressed" not in self._quality_message_shown:
+                    print("🐟 新規プロセス発生ログは高負荷モードのため抑制されています。")
+                    self._quality_message_shown.add("spawn_logs_suppressed")
 
                 # 親子関係があれば分裂エフェクト
                 if proc.ppid in self.fishes:
@@ -308,7 +349,7 @@ class Aquarium:
 
         # IPC接続の更新
         self._update_ipc_connections()
-        
+
         # IPC吸引力の適用
         self._apply_ipc_attraction()
 
@@ -347,12 +388,12 @@ class Aquarium:
         #     print(f"⏰ 死亡進行中: {', '.join(dying_fish_details[:5])}{'...' if len(dying_fish_details) > 5 else ''}")
 
         # print(f"📊 現在の魚数: {len(self.fishes)}, 削除対象: {len(dead_pids)}, 総プロセス数: {len(process_data)}")
-        
+
         for pid in dead_pids:
             fish_name = self.fishes[pid].process_name
             del self.fishes[pid]
             # print(f"🗑️ 魚を削除完了: PID {pid} ({fish_name})")
-            
+
         # if dead_pids:
         #     print(f"📊 削除後の魚数: {len(self.fishes)}")
 
@@ -393,7 +434,7 @@ class Aquarium:
     def handle_mouse_click(self, pos: Tuple[int, int]):
         """マウスクリックによるFish選択と吹き出しクリック処理"""
         x, y = pos
-        
+
         # まず吹き出しのクリック判定をチェック
         for fish in self.fishes.values():
             if fish.bubble_rect and fish.is_talking:
@@ -402,7 +443,7 @@ class Aquarium:
                     # 吹き出しがクリックされた場合、通信相手をハイライト
                     self._highlight_communication_partners(fish)
                     return
-        
+
         # 吹き出しがクリックされなかった場合、通常のFish選択
         self.selected_fish = None
         self.highlighted_partners = []  # 通信相手のハイライトをクリア
@@ -418,14 +459,14 @@ class Aquarium:
     def _highlight_communication_partners(self, fish):
         """通信相手をハイライト表示"""
         self.highlighted_partners = fish.talk_partners.copy()
-        
+
         # 通信相手の情報を表示
         partner_names = []
         for partner_pid in fish.talk_partners:
             if partner_pid in self.fishes:
                 partner_fish = self.fishes[partner_pid]
                 partner_names.append(f"{partner_fish.name} (PID:{partner_pid})")
-        
+
         if partner_names:
             print(f"プロセス {fish.name} (PID:{fish.pid}) の通信相手:")
             for name in partner_names:
@@ -440,6 +481,11 @@ class Aquarium:
         current_fps = self.clock.get_fps()
 
         # 統計情報（パフォーマンス情報を含む）
+        if self.enable_adaptive_quality:
+            quality_label = f"{self.render_quality} (自動)"
+        else:
+            quality_label = "full (固定)"
+
         stats_lines = [
             f"総プロセス数: {self.total_processes}",
             f"表示中の魚: {len(self.fishes)}",
@@ -448,12 +494,18 @@ class Aquarium:
             f"総スレッド数: {self.total_threads}",
             f"FPS: {current_fps:.1f}",
             f"パーティクル数: {self.performance_monitor['adaptive_particle_count']}",
+            f"描画品質: {quality_label}",
         ]
+
+        if self.enable_adaptive_quality:
+            reduced_threshold, minimal_threshold = self._quality_thresholds
+            if reduced_threshold is not None and minimal_threshold is not None:
+                stats_lines.append(f"品質閾値: 簡易≦{reduced_threshold:.1f}fps／最小≦{minimal_threshold:.1f}fps")
 
         # プロセス制限とソート情報を追加
         limit_str = "無制限" if self.process_limit is None else str(self.process_limit)
         stats_lines.append(f"制限: {limit_str}")
-        
+
         field_names = {"cpu": "CPU", "memory": "メモリ", "name": "名前", "pid": "PID"}
         order_symbol = "↓" if self.sort_order == "desc" else "↑"
         stats_lines.append(f"ソート: {field_names.get(self.sort_by, self.sort_by)} {order_symbol}")
@@ -463,16 +515,30 @@ class Aquarium:
             stats_lines.append(f"Retina: {self.retina_info['scale_factor']:.1f}x")
 
         # 背景パネル
-        panel_height = len(stats_lines) * 25 + 10
-        panel_surface = pygame.Surface((280, panel_height), pygame.SRCALPHA)
+        panel_padding_x = 10
+        panel_padding_y = 10
+        font_linesize = self.small_font.get_linesize()
+        line_height = max(int(font_linesize * 1.15), font_linesize)
+        max_text_width = 0
+        for line in stats_lines:
+            text_width, _ = self.small_font.size(line)
+            if text_width > max_text_width:
+                max_text_width = text_width
+
+        panel_width = max(280, max_text_width + panel_padding_x * 2)
+        panel_height = len(stats_lines) * line_height + panel_padding_y * 2
+        panel_surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
         panel_surface.fill((0, 0, 0, 128))
-        self.screen.blit(panel_surface, (10, 10))
+        panel_x, panel_y = 10, 10
+        self.screen.blit(panel_surface, (panel_x, panel_y))
 
         # 統計テキスト
         for i, line in enumerate(stats_lines):
             color = (255, 100, 100) if current_fps < self.fps * 0.7 else (255, 255, 255)  # 低FPS時は赤
             text_surface = self._render_text(line, self.small_font, color)
-            self.screen.blit(text_surface, (15, 15 + i * 25))
+            text_x = panel_x + panel_padding_x
+            text_y = panel_y + panel_padding_y + i * line_height
+            self.screen.blit(text_surface, (text_x, text_y))
 
         # 選択されたFishの詳細情報
         if self.selected_fish:
@@ -546,18 +612,18 @@ class Aquarium:
         for fish in self.fishes.values():
             fish.ipc_attraction_x = 0.0
             fish.ipc_attraction_y = 0.0
-            
+
         # IPC接続ペアに対して吸引力を適用
         for proc1, proc2 in self.ipc_connections:
             if proc1.pid in self.fishes and proc2.pid in self.fishes:
                 fish1 = self.fishes[proc1.pid]
                 fish2 = self.fishes[proc2.pid]
-                
+
                 # 距離を計算
                 dx = fish2.x - fish1.x
                 dy = fish2.y - fish1.y
                 distance = math.sqrt(dx*dx + dy*dy)
-                
+
                 if distance > 5:  # 極端に近い場合は無視
                     # 吸引力の強さを距離に応じて調整
                     attraction_strength = 0.002  # 基本の吸引力
@@ -565,17 +631,17 @@ class Aquarium:
                         attraction_strength *= 0.5
                     elif distance > 300:  # 遠い場合は強く
                         attraction_strength *= 2.0
-                    
+
                     # 正規化された方向ベクトル
                     force_x = (dx / distance) * attraction_strength
                     force_y = (dy / distance) * attraction_strength
-                    
+
                     # 両方の魚に吸引力を適用
                     fish1.ipc_attraction_x += force_x
                     fish1.ipc_attraction_y += force_y
                     fish2.ipc_attraction_x -= force_x
                     fish2.ipc_attraction_y -= force_y
-                    
+
                     # 近距離で会話フラグをセット
                     if distance < 80:  # 80ピクセル以内で会話
                         fish1.is_talking = True
@@ -640,6 +706,28 @@ class Aquarium:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
+            elif self.use_gpu and self._windowevent_type and event.type == self._windowevent_type:
+                if event.event in tuple(x for x in (self._windowevent_size_changed, self._windowevent_resized) if x is not None):
+                    new_width, new_height = event.data1, event.data2
+                    if (new_width, new_height) != (self.width, self.height):
+                        self.width, self.height = new_width, new_height
+                        self._update_gpu_render_size(self.width, self.height)
+                        self._after_display_resize()
+                        if not self.fullscreen:
+                            self._windowed_size = (self.width, self.height)
+                        print(f"🪟 GPUウィンドウサイズ変更: {self.width}x{self.height}")
+                elif self._windowevent_close is not None and event.event == self._windowevent_close:
+                    self.running = False
+            elif self.use_gpu and event.type == pygame.VIDEORESIZE and not self._windowevent_type:
+                # pygame-ce without WINDOWEVENT constants may still emit legacy VIDEORESIZE events
+                new_width, new_height = event.w, event.h
+                if (new_width, new_height) != (self.width, self.height):
+                    self.width, self.height = new_width, new_height
+                    self._update_gpu_render_size(self.width, self.height)
+                    self._after_display_resize()
+                    if not self.fullscreen:
+                        self._windowed_size = (self.width, self.height)
+                    print(f"🪟 GPUウィンドウサイズ変更(VIDEORESIZE): {self.width}x{self.height}")
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
@@ -664,7 +752,16 @@ class Aquarium:
 
     def toggle_fullscreen(self):
         """フルスクリーンモードの切り替え"""
-        self.fullscreen = not self.fullscreen
+        target_state = not self.fullscreen
+        previous_state = self.fullscreen
+        if target_state:
+            self._windowed_size = (self.width, self.height)
+        self.fullscreen = target_state
+
+        if self.use_gpu and self.gpu_window is not None:
+            if not self._apply_gpu_fullscreen_state(target_state):
+                self.fullscreen = previous_state
+            return
 
         if self.fullscreen:
             # フルスクリーンモードに切り替え
@@ -696,27 +793,83 @@ class Aquarium:
                 print(f"🖥️ フォールバック解像度: {self.width}x{self.height}")
         else:
             # ウィンドウモードに戻す
-            self.width = self.base_width
-            self.height = self.base_height
+            restore_width, restore_height = self._windowed_size or (self.base_width, self.base_height)
+            self.width, self.height = restore_width, restore_height
             self.screen = pygame.display.set_mode((self.width, self.height))
             print(f"🪟 ウィンドウモード: {self.width}x{self.height}")
 
+        self._after_display_resize()
         print(f"📐 現在の画面サイズ: {self.screen.get_width()}x{self.screen.get_height()}")
 
-        # 背景パーティクルを新しいサイズに合わせて再初期化
-        self.init_background_particles()
+    def _apply_gpu_fullscreen_state(self, enable: bool) -> bool:
+        """GPUレンダラ用ウィンドウのフルスクリーン切り替えを実施"""
+        if not self.use_gpu or self.gpu_window is None:
+            return False
 
-        # 魚の位置を新しい画面サイズに合わせて調整
-        self.adjust_fish_positions_for_screen_resize()
+        desktop_size: Optional[Tuple[int, int]] = None
+        restore_size: Optional[Tuple[int, int]] = None
 
-        # フォントサイズも画面サイズに合わせて調整
-        font_scale = min(self.width / self.base_width, self.height / self.base_height)
-        base_font_size = 24
-        small_font_size = 18
+        try:
+            if enable:
+                desktop_size = self._get_gpu_desktop_size()
+                if desktop_size:
+                    try:
+                        self.gpu_window.size = desktop_size
+                    except Exception as size_err:
+                        print(f"⚠️ GPUフルスクリーン用サイズ設定失敗: {size_err}")
+                try:
+                    # pygame-ce 2.5.x provides set_fullscreen(desktop=False)
+                    self.gpu_window.set_fullscreen(desktop=True)
+                except TypeError:
+                    try:
+                        self.gpu_window.set_fullscreen(True)
+                    except TypeError:
+                        self.gpu_window.set_fullscreen()
+                except Exception as flag_err:
+                    print(f"❌ GPUフルスクリーン切替失敗: {flag_err}")
+                    return False
+            else:
+                try:
+                    if hasattr(self.gpu_window, "set_windowed"):
+                        self.gpu_window.set_windowed()
+                    else:
+                        self.gpu_window.set_fullscreen(False)
+                except Exception as flag_err:
+                    print(f"⚠️ GPUフルスクリーン解除失敗: {flag_err}")
+                restore_size = self._windowed_size or self.original_size
+                try:
+                    self.gpu_window.size = restore_size
+                except Exception as size_err:
+                    print(f"⚠️ GPUウィンドウサイズ復元失敗: {size_err}")
 
-        self.font = self._get_japanese_font(int(base_font_size * font_scale))
-        self.small_font = self._get_japanese_font(int(small_font_size * font_scale))
-        self.bubble_font = self._get_japanese_font(10)  # IPC会話吹き出し用は固定サイズ
+            pygame.event.pump()
+            updated_size = getattr(self.gpu_window, "size", None)
+            if isinstance(updated_size, tuple) and len(updated_size) == 2:
+                self.width, self.height = updated_size
+            elif enable and desktop_size:
+                self.width, self.height = desktop_size
+            elif not enable and restore_size:
+                self.width, self.height = restore_size
+
+            self._update_gpu_render_size(self.width, self.height)
+            self._after_display_resize()
+            print(f"🖥️ GPUフルスクリーン{'ON' if enable else 'OFF'}: {self.width}x{self.height}")
+            return True
+        except Exception as e:
+            print(f"❌ GPUフルスクリーン切替失敗: {e}")
+            return False
+
+    def _get_gpu_desktop_size(self) -> Optional[Tuple[int, int]]:
+        """現在のディスプレイにおけるデスクトップ解像度を取得"""
+        try:
+            sizes = pygame.display.get_desktop_sizes()
+            if sizes:
+                index = getattr(self.gpu_window, "display_index", 0) or 0
+                index = max(0, min(index, len(sizes) - 1))
+                return sizes[index]
+        except Exception as e:
+            print(f"⚠️ デスクトップ解像度取得失敗: {e}")
+        return None
 
     def adjust_fish_positions_for_screen_resize(self):
         """画面サイズ変更時に魚の位置を調整"""
@@ -737,7 +890,7 @@ class Aquarium:
 
     def _cycle_process_limit(self):
         """プロセス制限を切り替え"""
-        limits = [None, 10, 20, 50, 100, 200]
+        limits = [None, 10, 20, 50, 100, 200, 400]
         current_index = limits.index(self.process_limit) if self.process_limit in limits else 0
         next_index = (current_index + 1) % len(limits)
         self.process_limit = limits[next_index]
@@ -761,6 +914,39 @@ class Aquarium:
         self.process_manager.set_sort_config(self.sort_by, self.sort_order)
         order_name = "昇順" if self.sort_order == "asc" else "降順"
         print(f"🔄 ソート順序: {order_name}")
+
+    def _configure_quality_thresholds(self):
+        """FPSベースの品質閾値を設定"""
+        if not self.enable_adaptive_quality:
+            self._quality_thresholds = (None, None)
+            return
+
+        target_fps = float(self.fps or 30)
+        reduced_default = max(target_fps * 0.75, target_fps - 5.0)
+        minimal_default = max(target_fps * 0.5, target_fps - 12.0)
+
+        reduced_env = os.environ.get("AQUARIUM_QUALITY_REDUCED_FPS")
+        minimal_env = os.environ.get("AQUARIUM_QUALITY_MINIMAL_FPS")
+
+        reduced_threshold = self._parse_fps_threshold(reduced_env, reduced_default, target_fps)
+        minimal_threshold = self._parse_fps_threshold(minimal_env, minimal_default, target_fps)
+
+        if minimal_threshold >= reduced_threshold:
+            minimal_threshold = max(1.0, min(reduced_threshold - 2.0, reduced_threshold * 0.7))
+        reduced_threshold = max(minimal_threshold + 1.0, reduced_threshold)
+
+        self._quality_thresholds = (reduced_threshold, minimal_threshold)
+
+    def _parse_fps_threshold(self, value: Optional[str], default: float, target_fps: float) -> float:
+        if not value:
+            return default
+        try:
+            threshold = float(value)
+            if 0 < threshold <= 1.0:
+                threshold = target_fps * threshold
+        except ValueError:
+            return default
+        return max(1.0, threshold)
 
     def _adjust_performance(self):
         """動的パフォーマンス調整"""
@@ -793,6 +979,69 @@ class Aquarium:
             if self.performance_monitor['adaptive_fish_update_interval'] > 1:
                 self.performance_monitor['adaptive_fish_update_interval'] -= 1
                 print(f"🚀 パフォーマンス調整: 魚更新間隔を{self.performance_monitor['adaptive_fish_update_interval']}に減少")
+
+    def _update_render_quality(self):
+        """描画品質の自動調整（必要な場合のみ）"""
+        if not self.enable_adaptive_quality:
+            if self.render_quality != "full":
+                self.render_quality = "full"
+                self._suppress_spawn_logs = False
+            return
+
+        reduced_threshold, minimal_threshold = self._quality_thresholds
+        if reduced_threshold is None or minimal_threshold is None:
+            return
+
+        fps_samples = self.performance_monitor['fps_history'][-60:]
+        if len(fps_samples) < 15:
+            return
+
+        avg_fps = sum(fps_samples) / len(fps_samples)
+        previous = self.render_quality
+
+        quality = "full"
+        if avg_fps <= minimal_threshold:
+            quality = "minimal"
+        elif avg_fps <= reduced_threshold:
+            quality = "reduced"
+
+        margin = self._quality_recovery_margin
+        if quality == "full":
+            if previous == "minimal" and avg_fps < minimal_threshold + margin:
+                quality = "minimal"
+            elif previous == "reduced" and avg_fps < reduced_threshold + margin:
+                quality = "reduced"
+        elif quality == "reduced" and previous == "minimal" and avg_fps < minimal_threshold + margin:
+            quality = "minimal"
+
+        if quality == previous:
+            return
+
+        self.render_quality = quality
+        if quality == "full":
+            self._suppress_spawn_logs = False
+            if "quality_full" not in self._quality_message_shown:
+                print(f"🎨 描画品質: フル品質に復帰しました (平均FPS {avg_fps:.1f} > {reduced_threshold + margin:.1f})。")
+                self._quality_message_shown.add("quality_full")
+            self._quality_message_shown.discard("quality_reduced")
+            self._quality_message_shown.discard("quality_minimal")
+        elif quality == "reduced":
+            self._suppress_spawn_logs = True
+            self.performance_monitor['adaptive_particle_count'] = min(self.performance_monitor['adaptive_particle_count'], 35)
+            self.performance_monitor['adaptive_fish_update_interval'] = max(self.performance_monitor['adaptive_fish_update_interval'], 2)
+            if "quality_reduced" not in self._quality_message_shown:
+                print(f"🎨 描画品質: FPS低下のため簡易品質に切り替えました (平均FPS {avg_fps:.1f} ≤ {reduced_threshold:.1f})。")
+                print("   → 波紋・雷エフェクトを削減し、群れ演算を軽量化します。")
+                self._quality_message_shown.add("quality_reduced")
+            self._quality_message_shown.discard("quality_minimal")
+        else:  # minimal
+            self._suppress_spawn_logs = True
+            self.performance_monitor['adaptive_particle_count'] = min(self.performance_monitor['adaptive_particle_count'], 20)
+            self.performance_monitor['adaptive_fish_update_interval'] = max(self.performance_monitor['adaptive_fish_update_interval'], 3)
+            if "quality_minimal" not in self._quality_message_shown:
+                print(f"🎨 描画品質: FPSが大きく低下したため超過密モードに切り替えました (平均FPS {avg_fps:.1f} ≤ {minimal_threshold:.1f})。")
+                print("   → 群れ行動や装飾エフェクトを停止してパフォーマンスを確保します。")
+                self._quality_message_shown.add("quality_minimal")
 
     def _cleanup_caches(self):
         """キャッシュクリーンアップ"""
@@ -834,6 +1083,7 @@ class Aquarium:
 
         # プロセスデータの更新
         self.update_process_data()
+        self._update_render_quality()
 
         # 背景パーティクルの更新
         self.update_background_particles()
@@ -844,27 +1094,51 @@ class Aquarium:
 
         dying_fish_updated = 0
         total_fish_updated = 0
+        enable_nearby_search = (self.render_quality == "full")
+        spatial_grid = None
+        cell_size = self._neighbor_cell_size
+        if enable_nearby_search and fish_list:
+            spatial_grid = {}
+            for fish in fish_list:
+                cell_key = (int(fish.x // cell_size), int(fish.y // cell_size))
+                spatial_grid.setdefault(cell_key, []).append(fish)
+
         for i, fish in enumerate(fish_list):
             # 適応的更新：魚の数が多い場合は一部の魚のみ更新
             # ただし、死亡中の魚は常に更新して削除処理を確実に行う
             should_update = fish.is_dying or len(fish_list) <= 50 or i % update_interval == (int(current_time * 10) % update_interval)
             if not should_update:
                 continue
-            
+
             if fish.is_dying:
                 dying_fish_updated += 1
             total_fish_updated += 1
 
             # 近くの魚を検索（最適化：距離の事前チェック）
             nearby_fish = []
-            for other_fish in fish_list:
-                if other_fish.pid != fish.pid:
-                    dx = fish.x - other_fish.x
-                    dy = fish.y - other_fish.y
-                    if abs(dx) < 100 and abs(dy) < 100:  # 事前チェック
-                        distance_sq = dx * dx + dy * dy
-                        if distance_sq < 10000:  # 100^2
-                            nearby_fish.append(other_fish)
+            if enable_nearby_search and spatial_grid is not None:
+                cell_x = int(fish.x // cell_size)
+                cell_y = int(fish.y // cell_size)
+                visited = set()
+                for dx_cell in (-1, 0, 1):
+                    for dy_cell in (-1, 0, 1):
+                        candidate_cell = (cell_x + dx_cell, cell_y + dy_cell)
+                        for other_fish in spatial_grid.get(candidate_cell, []):
+                            if other_fish.pid == fish.pid or other_fish.pid in visited:
+                                continue
+                            dx = fish.x - other_fish.x
+                            dy = fish.y - other_fish.y
+                            if abs(dx) < 100 and abs(dy) < 100:
+                                distance_sq = dx * dx + dy * dy
+                                if distance_sq < 10000:
+                                    nearby_fish.append(other_fish)
+                                    visited.add(other_fish.pid)
+                                    if len(nearby_fish) >= 16:
+                                        break
+                        if len(nearby_fish) >= 16:
+                            break
+                    if len(nearby_fish) >= 16:
+                        break
 
             fish.update_position(self.width, self.height, nearby_fish)
 
@@ -893,7 +1167,8 @@ class Aquarium:
 
         # 全てのFishを描画
         for fish in self.fishes.values():
-            fish.draw(self.screen, self.bubble_font)
+            fish.draw(self.screen, self.bubble_font, quality=self.render_quality,
+                      text_renderer=self._render_text)
 
         # 選択されたFishのハイライト
         if self.selected_fish:
@@ -921,7 +1196,10 @@ class Aquarium:
         self.draw_ui()
 
         # 画面更新
-        pygame.display.flip()
+        if self.use_gpu:
+            self._present_gpu_frame()
+        else:
+            pygame.display.flip()
 
     def run(self):
         """メインループ"""
@@ -950,7 +1228,7 @@ class Aquarium:
                     last_print = now
                     data_source = stats.get('data_source', 'unknown')
                     base_stats = f"procs={stats['total_processes']} new={stats['new_processes']} dying={stats['dying_processes']} mem={stats['total_memory_percent']:.2f}% cpu_avg={stats['average_cpu_percent']:.2f}% threads={stats['total_threads']}"
-                    
+
                     # eBPFの場合はイベント統計も表示
                     if 'ebpf_events' in stats:
                         print(f"[stats|{data_source}] {base_stats} events=[{stats['ebpf_events']}]")
@@ -1033,149 +1311,219 @@ class Aquarium:
         # 最小スケールを設定（読みやすさを保証）
         self.font_scale = max(0.5, min(2.0, self.font_scale))
 
+    def _determine_bubble_font_size(self) -> int:
+        """IPC吹き出し用フォントサイズを計算"""
+        base_size = 14
+        scaled_size = int(base_size * self.font_scale)
+        return max(12, min(24, scaled_size))
+
     def _validate_japanese_font(self, font: pygame.font.Font, test_texts: list, font_name: str) -> bool:
         """フォントが日本語文字を正しく描画できるかを検証"""
         try:
+            fallback_surfaces = {}
+
             for test_text in test_texts:
+                if not test_text:
+                    continue
+
+                contains_non_ascii = any(ord(ch) > 127 for ch in test_text)
                 try:
                     test_surface = font.render(test_text, True, (255, 255, 255))
-                    
-                    # 基本的な描画チェック
-                    if test_surface.get_width() == 0 or test_surface.get_height() == 0:
-                        continue
-                    
-                    # 文字数と幅の関係をチェック（日本語文字は一定の幅を持つべき）
-                    expected_min_width = len(test_text) * (font.get_height() * 0.5)  # 文字数 × フォント高さの半分
-                    if test_surface.get_width() < expected_min_width:
-                        continue  # 幅が小さすぎる = 文字が適切に描画されていない
-                    
-                    # 少なくとも1つのテキストで有効な描画ができた
-                    return True
-                        
                 except Exception:
                     continue
-            
-            # すべてのテストテキストで失敗
+
+                if test_surface.get_width() <= 0 or test_surface.get_height() <= 0:
+                    continue
+
+                bounding = test_surface.get_bounding_rect()
+                if bounding.width == 0 or bounding.height == 0:
+                    continue
+
+                metrics_valid = False
+                try:
+                    metrics = font.metrics(test_text)
+                except Exception:
+                    metrics = None
+
+                if metrics:
+                    for metric in metrics:
+                        if metric and len(metric) >= 5:
+                            advance = metric[4]
+                            if isinstance(advance, (int, float)) and advance > 0:
+                                metrics_valid = True
+                                break
+
+                if not metrics_valid:
+                    identical_to_fallback = False
+                    for fallback_char in ("?", "□"):
+                        key = (fallback_char, font.size(fallback_char * len(test_text)))
+                        if key not in fallback_surfaces:
+                            try:
+                                fallback_surfaces[key] = font.render(fallback_char * len(test_text), True, (255, 255, 255))
+                            except Exception:
+                                fallback_surfaces[key] = None
+                        fallback_surface = fallback_surfaces.get(key)
+                        if fallback_surface is None:
+                            continue
+                        if fallback_surface.get_size() == test_surface.get_size():
+                            try:
+                                if pygame.image.tostring(test_surface, "RGBA") == pygame.image.tostring(fallback_surface, "RGBA"):
+                                    identical_to_fallback = True
+                                    break
+                            except Exception:
+                                pass
+                    if identical_to_fallback:
+                        continue
+
+                if contains_non_ascii:
+                    return True
+
             return False
-            
+
         except Exception:
             return False
 
     def _get_japanese_font(self, size: int) -> pygame.font.Font:
         """日本語対応フォントを取得（クロスプラットフォーム対応）"""
+        cached = self._font_cache.get(size)
+        if cached:
+            return cached
+
         import platform
         system = platform.system()
-        
-        # プラットフォーム別の日本語フォントリスト（優先順）
-        if system == "Darwin":  # macOS
-            japanese_fonts = [
-                # macOS Monterey以降
-                "SF Pro Display",
-                "SF Pro Text",
-                # macOS標準の日本語フォント
-                "Hiragino Sans",
-                "Hiragino Kaku Gothic ProN",
-                "Hiragino Kaku Gothic Pro",
-                # バックアップフォント
-                "Arial Unicode MS",
-                "Helvetica Neue",
-                "Arial",
+
+        candidate_specs: List[Tuple[str, str]] = []
+        seen_candidates: set[Tuple[str, str]] = set()
+
+        def add_candidate(kind: str, identifier: Optional[str]) -> None:
+            if not identifier:
+                return
+            if kind == "path" and not os.path.exists(identifier):
+                return
+            key = (kind, identifier)
+            if key in seen_candidates:
+                return
+            candidate_specs.append(key)
+            seen_candidates.add(key)
+
+        # ユーザー指定または以前成功したフォントを最優先
+        add_candidate("path", os.environ.get("AQUARIUM_FONT_PATH"))
+        add_candidate("sysfont", os.environ.get("AQUARIUM_FONT_NAME"))
+        add_candidate("path", getattr(self, "_preferred_font_path", None))
+        add_candidate("sysfont", getattr(self, "_preferred_font_name", None))
+
+        # プラットフォーム固有のフォント候補
+        if system == "Darwin":
+            name_aliases = [
+                "hiragino", "hiraginokakugothic", "hiraginomarugothic",
+                "sfpro", "sfcompact", "applegothic", "osaka",
+                "noto", "arialunicodems"
             ]
-            font_paths = [
+            path_candidates = [
                 "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+                "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+                "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
                 "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/Apple Color Emoji.ttc",
                 "/Library/Fonts/Arial Unicode.ttf",
-                "/System/Library/Fonts/Arial.ttf",
             ]
-        elif system == "Linux":  # Linux
-            japanese_fonts = [
-                # Noto CJK フォント（推奨）
-                "Noto Sans CJK JP",
-                "Noto Serif CJK JP",
-                "Noto Sans CJK SC",
-                # DejaVu フォント
-                "DejaVu Sans",
-                # その他のLinux標準フォント
-                "Liberation Sans",
-                "FreeSans",
-                "Arial",
+            fallback_names = [
+                "SF Pro Display", "SF Pro Text", "Hiragino Sans",
+                "Hiragino Kaku Gothic ProN", "Hiragino Kaku Gothic Pro",
+                "Hiragino Maru Gothic ProN", "Arial Unicode MS",
+                "Helvetica Neue", "Arial"
             ]
-            font_paths = [
+        elif system == "Linux":
+            name_aliases = [
+                "notosanscjk", "notoserifcjk", "vlgothic", "migu", "takao",
+                "ipamg", "ipag", "ipamincho", "ume", "sazanami"
+            ]
+            path_candidates = [
                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+                "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Medium.otf",
+                "/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf",
+                "/usr/share/fonts/truetype/ipafont/ipag.ttf",
+                "/usr/share/fonts/truetype/ipafont/ipam.ttf",
             ]
-        elif system == "Windows":  # Windows
-            japanese_fonts = [
-                # Windows標準日本語フォント
-                "Yu Gothic UI",
-                "Yu Gothic",
-                "Meiryo UI",
-                "Meiryo",
-                "MS Gothic",
-                "MS PGothic",
-                # Unicode対応フォント
-                "Arial Unicode MS",
-                "Segoe UI",
-                "Arial",
+            fallback_names = [
+                "Noto Sans CJK JP", "Noto Serif CJK JP", "Noto Sans CJK SC",
+                "VL Gothic", "IPAGothic", "IPAMincho",
+                "DejaVu Sans", "Liberation Sans", "Arial"
             ]
-            font_paths = [
+        elif system == "Windows":
+            name_aliases = [
+                "yugoth", "meiryo", "msgothic", "mspgothic",
+                "msmincho", "mspmincho", "malgungothic", "mingliu"
+            ]
+            path_candidates = [
                 "C:/Windows/Fonts/yugothic.ttf",
+                "C:/Windows/Fonts/yu-gothic.ttf",
                 "C:/Windows/Fonts/meiryo.ttc",
                 "C:/Windows/Fonts/msgothic.ttc",
+                "C:/Windows/Fonts/msmincho.ttc",
                 "C:/Windows/Fonts/arialuni.ttf",
-                "C:/Windows/Fonts/segoeui.ttf",
             ]
-        else:  # その他のOS用フォールバック
-            japanese_fonts = [
-                "Arial Unicode MS",
-                "DejaVu Sans",
-                "Liberation Sans",
-                "Arial",
+            fallback_names = [
+                "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo",
+                "MS Gothic", "MS PGothic", "MS Mincho", "MS PMincho",
+                "Arial Unicode MS", "Segoe UI", "Arial"
             ]
-            font_paths = []
+        else:
+            name_aliases = ["noto", "dejavu", "liberation", "arialunicodems"]
+            path_candidates = []
+            fallback_names = [
+                "Arial Unicode MS", "DejaVu Sans", "Liberation Sans", "Arial"
+            ]
 
-        # まずシステムフォントを試行
-        for font_name in japanese_fonts:
+        # 直接パス候補
+        for font_path in path_candidates:
+            add_candidate("path", font_path)
+
+        # pygameが認識しているフォント名からエイリアスに一致するものを追加
+        available_fonts = pygame.font.get_fonts()
+        for alias in name_aliases:
+            alias_lower = alias.lower()
+            for registered_name in available_fonts:
+                if alias_lower in registered_name:
+                    matched_path = pygame.font.match_font(registered_name, bold=False, italic=False)
+                    add_candidate("path", matched_path)
+
+        # フォールバックとして明示的なフォント名も登録
+        for font_name in fallback_names:
+            add_candidate("sysfont", font_name)
+
+        test_texts = ["あいう", "アイウ", "日本語", "テスト", "通信中...", "データ送信"]
+
+        for kind, identifier in candidate_specs:
             try:
-                font = pygame.font.SysFont(font_name, size)
-                # 日本語文字でテスト（ひらがな、カタカナ、漢字）
-                test_texts = ["あいう", "アイウ", "日本語", "テスト"]
-                
-                # フォントが日本語文字を正しく描画できるかテスト
-                valid_font = self._validate_japanese_font(font, test_texts, font_name)
-                if valid_font:
-                    print(f"✅ 日本語フォント '{font_name}' を使用します (サイズ: {size}) - {system}")
+                if kind == "sysfont":
+                    font = pygame.font.SysFont(identifier, size)
+                else:
+                    font = pygame.font.Font(identifier, size)
+
+                if self._validate_japanese_font(font, test_texts, identifier):
+                    self._font_cache[size] = font
+                    if kind == "sysfont":
+                        self._preferred_font_name = identifier
+                        print(f"✅ 日本語フォント '{identifier}' を使用します (サイズ: {size}) - {system}")
+                    else:
+                        self._preferred_font_path = identifier
+                        print(f"✅ フォントファイル '{identifier}' を使用します (サイズ: {size})")
                     return font
-                    
             except Exception as e:
-                print(f"❌ フォント '{font_name}' の読み込みに失敗: {e}")
+                print(f"❌ フォント '{identifier}' の読み込みに失敗: {e}")
                 continue
 
-        # 次にフォントファイルパスを試行
-        for font_path in font_paths:
-            try:
-                if os.path.exists(font_path):
-                    font = pygame.font.Font(font_path, size)
-                    # 簡単なテスト
-                    if self._validate_japanese_font(font, ["テスト"], font_path):
-                        print(f"✅ フォントファイル '{font_path}' を使用します")
-                        return font
-            except Exception as e:
-                print(f"❌ フォントファイル '{font_path}' の読み込みに失敗: {e}")
-                continue
-
-        # 最終的なフォールバック: pygame.font.get_default_font()
         try:
             default_font_path = pygame.font.get_default_font()
-            font = pygame.font.Font(default_font_path, size)
+            fallback_font = pygame.font.Font(default_font_path, size)
             print(f"⚠️  デフォルトフォント '{default_font_path}' を使用します（日本語表示不可）")
-            return font
-        except:
-            # 最後の手段: Noneフォント
+        except Exception:
             print("❌ フォント読み込み完全失敗。Noneフォントを使用します")
-            return pygame.font.Font(None, size)
+            fallback_font = pygame.font.Font(None, size)
+
+        return fallback_font
 
     def _render_text(self, text: str, font: pygame.font.Font, color: Tuple[int, int, int]) -> pygame.Surface:
         """日本語テキストを安全にレンダリング"""
@@ -1248,6 +1596,74 @@ class Aquarium:
                 'scale_factor': 1.0,
                 'is_retina': False
             }
+
+    def _env_flag(self, name: str, default: bool = False) -> bool:
+        value = os.environ.get(name)
+        if value is None:
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    def _init_gpu_renderer(self, width: int, height: int):
+        try:
+            from pygame._sdl2.video import Window, Renderer, Texture
+
+            self.gpu_window = Window("Digital Life Aquarium - デジタル生命の水族館 (GPUモード)",
+                                     size=(width, height), resizable=True)
+            vsync_enabled = self._env_flag("AQUARIUM_VSYNC", True)
+            self.gpu_renderer = Renderer(self.gpu_window, -1, True, vsync_enabled)
+            if hasattr(self.gpu_renderer, "logical_size"):
+                self.gpu_renderer.logical_size = (width, height)
+            self._gpu_texture_type = Texture
+            self.screen = pygame.Surface((width, height), flags=pygame.SRCALPHA, depth=32)
+            self.gpu_texture = None
+            self.use_gpu = True
+            print("[GPU] SDL2アクセラレータを有効化しました (vsync={}).".format(vsync_enabled))
+        except Exception as exc:
+            print(f"[GPU] アクセラレータ初期化に失敗しました: {exc}\n       ソフトウェアモードにフォールバックします。")
+            self.use_gpu = False
+            self.gpu_renderer = None
+            self.gpu_window = None
+            self.gpu_texture = None
+
+    def _present_gpu_frame(self):
+        if not self.use_gpu or self.gpu_renderer is None:
+            return
+        try:
+            if self.gpu_texture is None or getattr(self.gpu_texture, "size", None) != (self.width, self.height):
+                self.gpu_texture = self._gpu_texture_type.from_surface(self.gpu_renderer, self.screen)
+            else:
+                self.gpu_texture.update(self.screen)
+            self.gpu_renderer.draw_color = (0, 0, 0, 255)
+            self.gpu_renderer.clear()
+            # pygame-ce 2.5.x exposes texture drawing via Texture.draw()
+            self.gpu_texture.draw()
+            self.gpu_renderer.present()
+        except Exception as exc:
+            print(f"[GPU] 描画更新でエラーが発生したためフォールバックします: {exc}")
+            self.use_gpu = False
+            self.gpu_renderer = None
+            self.gpu_window = None
+            pygame.display.set_caption("Digital Life Aquarium - デジタル生命の水族館")
+            self.screen = pygame.display.set_mode((self.width, self.height))
+
+    def _update_gpu_render_size(self, width: int, height: int):
+        if not self.use_gpu:
+            return
+        self.screen = pygame.Surface((width, height), flags=pygame.SRCALPHA, depth=32)
+        if self.gpu_renderer is not None and hasattr(self.gpu_renderer, "logical_size"):
+            self.gpu_renderer.logical_size = (width, height)
+        self.gpu_texture = None
+
+    def _after_display_resize(self):
+        """画面サイズ変更後の共通処理"""
+        self.init_background_particles()
+        self.adjust_fish_positions_for_screen_resize()
+        self._update_font_scale()
+        base_font_size = 24
+        small_font_size = 18
+        self.font = self._get_japanese_font(int(base_font_size * self.font_scale))
+        self.small_font = self._get_japanese_font(int(small_font_size * self.font_scale))
+        self.bubble_font = self._get_japanese_font(self._determine_bubble_font_size())
 
 def main():
     """メイン関数"""

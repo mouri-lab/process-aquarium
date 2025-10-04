@@ -9,6 +9,19 @@ import random
 import time
 from typing import Tuple, Optional, List
 
+
+MAX_THREAD_SATELLITES = 14
+"""Maximum number of thread satellites rendered around a fish."""
+
+SATELLITE_RADIUS_BASE_MULTIPLIER = 1.8
+"""Baseline spacing multiplier applied to the fish size for thread satellites."""
+
+SATELLITE_RADIUS_LINEAR_FACTOR = 0.16
+"""Linear scaling factor applied per effective thread to widen the orbit."""
+
+SATELLITE_RADIUS_EASING_FACTOR = 0.06
+"""Logarithmic easing factor that adds gentle extra spacing as threads increase."""
+
 class Fish:
     """
     プロセスを表現するデジタル生命体クラス
@@ -155,28 +168,32 @@ class Fish:
             return 'fish'
 
     def update_process_data(self, memory_percent: float, cpu_percent: float,
-                          thread_count: int, parent_pid: Optional[int] = None):
+                          thread_count: int, parent_pid: Optional[int] = None,
+                          memory_peak: Optional[float] = None):
         """プロセスデータの更新"""
+        memory_percent = max(memory_percent, 0.0)
         self.memory_percent = memory_percent
         self.cpu_percent = cpu_percent
         self.thread_count = thread_count
         self.parent_pid = parent_pid
 
-        # メモリ使用量に基づくサイズ調整（非常に急激な指数関数）
-        memory_normalized = memory_percent / 100.0  # 0.0-1.0に正規化
-        # より急激な指数関数でサイズを計算：exp(8 * memory) を使用
-        # 0%で1倍、1%で約1.2倍、5%で約1.8倍、10%で約3.2倍、50%で約81倍、100%で約6561倍！
-        if memory_normalized > 0:
-            # 指数関数：e^(8x) - わずかなメモリ使用でも劇的に大きくなる
-            raw_factor = math.exp(8 * memory_normalized)
-            # ただし画面に収まるよう最大60倍で制限（超巨大魚！）
-            memory_factor = min(raw_factor, 60.0)
+        # メモリ使用量に応じたサイズ調整（相対シェアと対数圧縮のブレンド）
+        memory_normalized = memory_percent / 100.0
+        if memory_peak is not None and memory_peak > 0:
+            relative_share = min(memory_percent / max(memory_peak, 1e-6), 1.0)
         else:
-            memory_factor = 1.0
+            relative_share = min(memory_normalized, 1.0)
+
+        relative_component = math.pow(relative_share, 0.65)
+        absolute_component = math.log1p(memory_percent / 6.0)
+
+        memory_factor = 1.0 + relative_component * 2.8 + absolute_component * 2.2
+        memory_factor = max(1.0, min(memory_factor, 9.0))
         self.current_size = self.base_size * memory_factor
-        
-        # メモリ巨大魚の判定（メモリ使用率5%以上または、サイズが基本の5倍以上）
-        self.is_memory_giant = memory_percent >= 5.0 or memory_factor >= 5.0
+
+        # メモリ巨大魚の判定（より抑制された閾値）
+        # self.is_memory_giant = memory_percent >= 8.0 or memory_factor >= 5.5
+        self.is_memory_giant = memory_percent >= 2.0 or memory_factor >= 5.5
 
         # CPU使用率に基づく光り方（指数関数的に強調）
         cpu_normalized = cpu_percent / 100.0
@@ -214,7 +231,7 @@ class Fish:
         """位置の更新とバウンド処理（群れ行動対応版）"""
         # 年齢を増やす
         self.age += 1
-        
+
         # メモリ巨大魚の脈動エフェクト
         if self.is_memory_giant:
             self.pulsation_phase += 0.15  # 脈動速度
@@ -233,10 +250,10 @@ class Fish:
             old_progress = self.death_progress
             self.death_progress += 0.03
             # デバッグ用：進行状況を定期的に出力
-            if int(old_progress * 10) != int(self.death_progress * 10):  # 0.1刻みで出力
-                print(f"💀 死亡進行: PID {self.pid} ({self.process_name}) - {old_progress:.2f} -> {self.death_progress:.2f}")
-            if self.death_progress >= 1.0 and old_progress < 1.0:
-                print(f"💀 魚の死亡完了: PID {self.pid} ({self.process_name}) - progress {old_progress:.2f} -> {self.death_progress:.2f}")
+            # if int(old_progress * 10) != int(self.death_progress * 10):  # 0.1刻みで出力
+            #     print(f"💀 死亡進行: PID {self.pid} ({self.process_name}) - {old_progress:.2f} -> {self.death_progress:.2f}")
+            # if self.death_progress >= 1.0 and old_progress < 1.0:
+            #     print(f"💀 魚の死亡完了: PID {self.pid} ({self.process_name}) - progress {old_progress:.2f} -> {self.death_progress:.2f}")
             return self.death_progress < 1.0
 
         # 特殊エフェクトのタイマー更新
@@ -249,7 +266,7 @@ class Fish:
             self.exec_timer -= 1
             if self.exec_timer == 0:
                 self.exec_transition = False
-                
+
         # 会話タイマーの更新
         if self.talk_timer > 0:
             self.talk_timer -= 1
@@ -395,22 +412,22 @@ class Fish:
         """メモリ巨大魚用の特別エフェクト（波紋など）"""
         # 波紋エフェクト：3つの同心円
         ripple_color = (255, 100, 100, max(30, alpha // 4))  # 赤っぽい半透明
-        
-        for i in range(4):  # 波紋を4つに増加
+
+        for i in range(3):  # 波紋を3層に抑制
             # 各波紋の半径と透明度を脈動に合わせて変化（より大きな範囲）
             ripple_phase = self.pulsation_phase + i * (math.pi / 4)
             # 波紋の範囲を2倍に拡大：巨大魚に相応しいスケール
             ripple_radius = self.current_size * (3.0 + i * 1.2) * (1.0 + 0.5 * math.sin(ripple_phase))
             ripple_alpha = max(8, int((alpha // 8) * (1.0 - i * 0.2)))
-            
+
             # 半透明の円を描画
             if ripple_radius > 0 and ripple_alpha > 0:
                 try:
                     # 一時的なサーフェスを作成して半透明描画
                     temp_surface = pygame.Surface((ripple_radius * 2 + 4, ripple_radius * 2 + 4), pygame.SRCALPHA)
-                    pygame.draw.circle(temp_surface, (*ripple_color[:3], ripple_alpha), 
+                    pygame.draw.circle(temp_surface, (*ripple_color[:3], ripple_alpha),
                                      (ripple_radius + 2, ripple_radius + 2), int(ripple_radius), 2)
-                    screen.blit(temp_surface, (self.x - ripple_radius - 2, self.y - ripple_radius - 2), 
+                    screen.blit(temp_surface, (self.x - ripple_radius - 2, self.y - ripple_radius - 2),
                                special_flags=pygame.BLEND_ALPHA_SDL2)
                 except (ValueError, pygame.error):
                     pass  # 描画エラーを無視
@@ -419,13 +436,13 @@ class Fish:
         """超巨大魚用の雷エフェクト（メモリ使用率20%以上）"""
         if not hasattr(self, 'lightning_timer'):
             self.lightning_timer = 0
-        
+
         self.lightning_timer += 1
-        
+
         # ランダムに雷を発生（30フレームに1回程度）
         if self.lightning_timer % 30 == 0 or random.random() < 0.1:
             lightning_color = (255, 255, 150, max(100, alpha // 2))  # 明るい黄色
-            
+
             # 魚の周りに3-5本の雷を描画
             num_bolts = random.randint(3, 5)
             for _ in range(num_bolts):
@@ -433,12 +450,12 @@ class Fish:
                 angle = random.uniform(0, 2 * math.pi)
                 start_radius = self.current_size * 0.8
                 end_radius = self.current_size * 2.5
-                
+
                 start_x = self.x + math.cos(angle) * start_radius
                 start_y = self.y + math.sin(angle) * start_radius
                 end_x = self.x + math.cos(angle) * end_radius
                 end_y = self.y + math.sin(angle) * end_radius
-                
+
                 # ジグザグの雷を描画
                 try:
                     points = [(start_x, start_y)]
@@ -452,7 +469,7 @@ class Fish:
                         offset_y = random.uniform(-20, 20)
                         points.append((mid_x + offset_x, mid_y + offset_y))
                     points.append((end_x, end_y))
-                    
+
                     # 雷の線を描画
                     if len(points) >= 2:
                         pygame.draw.lines(screen, lightning_color[:3], False, points, 2)
@@ -460,19 +477,24 @@ class Fish:
                     pass
 
     def get_thread_satellites(self) -> list:
-        """スレッド数に応じた衛星の位置を計算（指数関数的に強調）"""
+        """スレッド数に応じた衛星の位置を計算"""
         satellites = []
         if self.thread_count > 1:
-            # スレッド数を指数関数的に視覚化：最大16個まで表示
-            thread_normalized = min(self.thread_count / 16.0, 1.0)
-            # 指数関数でスレッド数による衛星数を計算
-            satellite_factor = (math.exp(2 * thread_normalized) - 1) / (math.exp(2) - 1)
-            satellite_count = max(1, min(int((self.thread_count - 1) * (1 + satellite_factor)), 16))
-            
+            capped_threads = min(self.thread_count - 1, MAX_THREAD_SATELLITES)
+            if capped_threads <= 0:
+                return satellites
+
+            satellite_count = max(1, capped_threads)
+
+            effective_threads = min(self.thread_count, MAX_THREAD_SATELLITES + 1)
+
             for i in range(satellite_count):
-                angle = (2 * math.pi * i) / satellite_count + self.age * 0.02
-                # スレッド数が多いほど衛星が遠くに配置される
-                radius_multiplier = 1.5 + (self.thread_count / 16.0) * 2.0
+                angle = (2 * math.pi * i) / satellite_count + self.age * 0.018
+                radius_multiplier = (
+                    SATELLITE_RADIUS_BASE_MULTIPLIER
+                    + effective_threads * SATELLITE_RADIUS_LINEAR_FACTOR
+                    + math.log1p(effective_threads) * SATELLITE_RADIUS_EASING_FACTOR
+                )
                 radius = self.current_size * radius_multiplier
                 sat_x = self.x + math.cos(angle) * radius
                 sat_y = self.y + math.sin(angle) * radius
@@ -498,17 +520,17 @@ class Fish:
 
         # 泳ぎのアニメーション（速度に応じて変化）
         speed = math.sqrt(self.vx**2 + self.vy**2)
-        
+
         # CPU使用率に応じて泳ぎの激しさを指数関数的に調整
         cpu_factor = 1.0
         if hasattr(self, 'cpu_percent'):
             cpu_normalized = self.cpu_percent / 100.0
             # 指数関数でCPU使用率による激しさを計算
             cpu_factor = 1.0 + (math.exp(2 * cpu_normalized) - 1) / (math.exp(2) - 1) * 4.0
-            
+
         swim_speed = (0.1 + speed * 0.1) * cpu_factor
         self.swim_cycle += swim_speed
-        
+
         # 尻尾の振りもCPU使用率に応じて激しく
         tail_intensity = (0.2 + speed * 0.1) * cpu_factor
         self.tail_swing = math.sin(self.swim_cycle) * min(tail_intensity, 1.0)  # 最大1.0で制限
@@ -532,7 +554,8 @@ class Fish:
         else:
             self._draw_generic_fish(screen, color, alpha, body_length, body_width)
 
-    def draw(self, screen: pygame.Surface, font: pygame.font.Font = None):
+    def draw(self, screen: pygame.Surface, font: pygame.font.Font = None, quality: str = "full",
+             text_renderer=None):
         """Fishの描画（魚らしい見た目版）"""
         if self.death_progress >= 1.0:
             return
@@ -542,12 +565,22 @@ class Fish:
         alpha = self.get_display_alpha()
         size = self.get_display_size()
 
+        if quality not in {"full", "reduced", "minimal"}:
+            quality = "full"
+
         # サイズが小さすぎる場合はスキップ
         if size < 2:
             return
 
+        if quality == "minimal":
+            # 超過密モードではシンプルな円のみ描画
+            radius = max(2, min(int(size), 24))
+            pygame.draw.circle(screen, color, (int(self.x), int(self.y)), radius)
+            return
+
         # メモリ巨大魚の波紋エフェクト（メモリ使用率5%以上）
-        if self.is_memory_giant and hasattr(self, 'memory_percent'):
+        enable_memory_fx = (quality == "full")
+        if enable_memory_fx and self.is_memory_giant and hasattr(self, 'memory_percent'):
             if self.memory_percent >= 5.0:
                 self._draw_memory_giant_effects(screen, alpha)
             # 超巨大魚（20%以上）には追加の雷エフェクト
@@ -559,20 +592,20 @@ class Fish:
             self._draw_fish_shape(screen, color, alpha, size)
 
         # スレッド衛星の描画（小魚の群れとして）
-        if self.thread_count > 1 and size > 5:
+        if quality == "full" and self.thread_count > 1 and size > 5:
             satellites = self.get_thread_satellites()
-            # スレッド数に応じて表示数を増加（最大12個まで）
-            max_display = min(len(satellites), max(4, self.thread_count // 2))
+            # スレッド数に応じて表示数を増加（制限は MAX_THREAD_SATELLITES で一元管理）
+            max_display = min(len(satellites), MAX_THREAD_SATELLITES)
             for i, (sat_x, sat_y) in enumerate(satellites[:max_display]):
                 # スレッド数が多いほど衛星サイズも大きく
-                thread_size_factor = 1.0 + (self.thread_count / 16.0) * 1.5
-                sat_size = max(2, size * 0.2 * thread_size_factor)
+                thread_size_factor = 1.0 + (self.thread_count / 20.0)
+                sat_size = max(1.5, min(size * 0.20 * thread_size_factor, size * 0.7))
                 # 小さな魚として描画
                 self._draw_small_fish(screen, color, alpha//2, sat_x, sat_y, sat_size)
 
         # 会話吹き出しの描画
-        if self.is_talking and self.talk_message:
-            self._draw_speech_bubble(screen, self.talk_message, font)
+        if quality != "minimal" and self.is_talking and self.talk_message:
+            self._draw_speech_bubble(screen, self.talk_message, font, text_renderer)
 
     def _draw_small_fish(self, screen: pygame.Surface, color: Tuple[int, int, int],
                         alpha: int, x: float, y: float, size: float):
@@ -946,50 +979,61 @@ class Fish:
 
         return 0.0, 0.0
 
-    def _draw_speech_bubble(self, screen: pygame.Surface, message: str, font: pygame.font.Font = None):
+    def _draw_speech_bubble(self, screen: pygame.Surface, message: str,
+                             font: pygame.font.Font = None, text_renderer=None):
         """会話吹き出しの描画"""
         if not message:
             return
-            
+
         # フォントの設定（引数で指定されたフォントを優先）
         if font is None:
             try:
-                font = pygame.font.Font(None, 10)
-            except:
-                font = pygame.font.SysFont("Arial", 10)
-            
+                font = pygame.font.Font(None, 12)
+            except Exception:
+                font = pygame.font.SysFont("Arial", 12)
+
         # テキストのレンダリング
-        text_surface = font.render(message, True, (0, 0, 0))
+        try:
+            if text_renderer:
+                text_surface = text_renderer(message, font, (0, 0, 0))
+            else:
+                text_surface = font.render(message, True, (0, 0, 0))
+        except Exception:
+            safe_message = message.encode('ascii', 'replace').decode('ascii')
+            try:
+                text_surface = font.render(safe_message, True, (0, 0, 0))
+            except Exception:
+                return
         text_rect = text_surface.get_rect()
-        
+
         # 吹き出しの位置とサイズ
         bubble_margin = 5
         bubble_width = text_rect.width + bubble_margin * 2
         bubble_height = text_rect.height + bubble_margin * 2
-        
+
         # 魚の上に吹き出しを配置
         bubble_x = self.x - bubble_width // 2
         bubble_y = self.y - bubble_height - 20
-        
+
         # 画面外に出ないように調整
         bubble_x = max(5, min(bubble_x, screen.get_width() - bubble_width - 5))
         bubble_y = max(5, bubble_y)
-        
+
         # 吹き出しのクリック領域を記録
         self.bubble_rect = (bubble_x, bubble_y, bubble_width, bubble_height)
-        
+
         # 吹き出しの背景
         bubble_surface = pygame.Surface((bubble_width, bubble_height), pygame.SRCALPHA)
-        pygame.draw.rect(bubble_surface, (0, 0, 0, 180), 
+        pygame.draw.rect(bubble_surface, (0, 0, 0, 180),
                         (0, 0, bubble_width, bubble_height), border_radius=8)
         pygame.draw.rect(bubble_surface, (255, 255, 255, 220),
                         (2, 2, bubble_width-4, bubble_height-4), border_radius=6)
-        
+
         # テキストを描画
         text_x = bubble_margin
         text_y = bubble_margin
         bubble_surface.blit(text_surface, (text_x, text_y))
-        
+
         # 吹き出しの尻尾（三角形）
         tail_points = [
             (bubble_width // 2, bubble_height),
@@ -997,6 +1041,6 @@ class Fish:
             (bubble_width // 2 + 8, bubble_height + 10)
         ]
         pygame.draw.polygon(bubble_surface, (255, 255, 255, 220), tail_points)
-        
+
         # 画面に描画
         screen.blit(bubble_surface, (bubble_x, bubble_y))

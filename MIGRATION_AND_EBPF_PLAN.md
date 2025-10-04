@@ -1,7 +1,7 @@
 # Process Aquarium Migration & eBPF Plan
 
 ## 1. 現状サマリ (feat/ebpf_monitor ブランチ)
-- 可視化: `pygame` によるプロセス群ビジュアライゼーション (魚エンティティ)
+- 可視化: `pygame-ce` によるプロセス群ビジュアライゼーション (魚エンティティ)
 - データ取得: 既定は `psutil` ポーリング (1s)
 - 抽象化導入:
   - `src/core/types.py`: `ProcessInfo`, `ProcessLifecycleEvent`, `IPCConnection`
@@ -33,7 +33,7 @@
 ### A. 新環境 (標準 Ubuntu カーネル) セットアップ
 ```bash
 sudo apt update
-sudo apt install -y bpfcc-tools python3-bpfcc linux-headers-$(uname -r) \
+sudo apt install -y python3-bpfcc linux-headers-$(uname -r) \
     libbpf-dev clang llvm make gcc python3-venv
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt  # (bcc が必要なら requirements に追記可)

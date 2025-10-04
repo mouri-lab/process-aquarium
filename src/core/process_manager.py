@@ -189,10 +189,10 @@ class ProcessManager:
                 new_snapshot[pid] = pinfo
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
-        
+
         # ソートと制限を適用
         new_snapshot = self._apply_sort_and_limit(new_snapshot)
-        
+
         self._detect_exec_events(current_exe)
         self._update_process_families(new_snapshot)
         dying_processes = []
@@ -202,14 +202,14 @@ class ProcessManager:
                 # print(f"⚰️ ProcessManager: プロセス終了検出 PID {pid} ({process_name}) - is_dying=True設定")
                 self.processes[pid].is_dying = True
                 dying_processes.append(pid)
-        
+
         # if dying_processes:
         #     print(f"📊 ProcessManager: 今回のサイクルで{len(dying_processes)}個のプロセス終了を検出")
         prev_count = len(self.processes)
         self.processes = new_snapshot
         new_count = len(self.processes)
         # print(f"📊 ProcessManager更新: {prev_count} → {new_count} プロセス (現在PID数: {len(current_pids)})")
-        
+
         self.previous_pids = current_pids
         self.previous_process_exes = current_exe
         self.last_update = current_time
@@ -223,21 +223,21 @@ class ProcessManager:
             cpu_percent = 0.0
         if process_name is None:
             process_name = "unknown"
-        
+
         # 除外リストのチェック
         for excluded in self.excluded_processes:
             if excluded in process_name.lower():
                 return False
-        
+
         # 重要なプロセスは常に含める
         for important in self.important_processes:
             if important in process_name.lower():
                 return True
-        
+
         # リソース使用量が一定以上のプロセスは含める
         if memory_percent > 0.1 or cpu_percent > 0.5:  # 閾値を下げる
             return True
-        
+
         # その他のプロセスも高確率で選択（制限解除）
         return random.random() < 0.8  # 30%から80%に増加
 
@@ -308,16 +308,16 @@ class ProcessManager:
             'dying_processes': len(self.get_dying_processes()),
             'data_source': self.get_data_source()
         }
-        
+
         # eBPFソースの場合はイベント統計を含める
-        if (self._external_source is not None and 
+        if (self._external_source is not None and
             hasattr(self._external_source, '_event_stats')):
             event_stats = self._external_source._event_stats
             if event_stats.get('initial_scan', 0) > 0:
                 stats['ebpf_events'] = f"initial:{event_stats['initial_scan']} spawn:{event_stats['spawn']} exec:{event_stats['exec']} exit:{event_stats['exit']} captured:{event_stats['captured']}"
             else:
                 stats['ebpf_events'] = f"spawn:{event_stats['spawn']} exec:{event_stats['exec']} exit:{event_stats['exit']} captured:{event_stats['captured']}"
-        
+
         return stats
 
     def detect_fork(self) -> List[tuple]:
@@ -327,12 +327,12 @@ class ProcessManager:
             if proc.ppid in self.processes:
                 parent = self.processes[proc.ppid]
                 forks.append((parent, proc))
-        
+
         # 最近のfork履歴を更新
         self.recent_forks.extend(forks)
         # 履歴は最大10個まで保持
         self.recent_forks = self.recent_forks[-10:]
-        
+
         return forks
 
     def detect_exec(self) -> List[ProcessInfo]:
@@ -342,12 +342,12 @@ class ProcessManager:
         for pid in self.recent_execs:
             if pid in self.processes:
                 execs.append(self.processes[pid])
-        
+
         # 履歴をクリア（一度検出したらクリア）
         self.recent_execs.clear()
-        
+
         return execs
-    
+
     def _detect_exec_events(self, current_process_exes: Dict[int, str]):
         """exec操作を検知する内部メソッド"""
         for pid, current_exe in current_process_exes.items():
@@ -356,7 +356,7 @@ class ProcessManager:
                 # 実行ファイルパスが変更された場合はexecとみなす
                 if previous_exe and current_exe and previous_exe != current_exe:
                     self.recent_execs.append(pid)
-    
+
     def _update_process_families(self, new_processes: Dict[int, ProcessInfo]):
         """プロセスファミリー（親子関係）を更新"""
         self.process_families.clear()
@@ -365,72 +365,89 @@ class ProcessManager:
                 if proc.ppid not in self.process_families:
                     self.process_families[proc.ppid] = []
                 self.process_families[proc.ppid].append(proc.pid)
-    
+
     def get_process_children(self, pid: int) -> List[ProcessInfo]:
         """指定されたプロセスの子プロセス一覧を取得"""
         if pid not in self.process_families:
             return []
-        
+
         children = []
         for child_pid in self.process_families[pid]:
             if child_pid in self.processes:
                 children.append(self.processes[child_pid])
         return children
-    
+
     def get_related_processes(self, pid: int, max_distance: int = 2) -> List[ProcessInfo]:
         """指定されたプロセスに関連するプロセス群を取得（群れ行動用）"""
         related = []
         visited = set()
-        
+
         def collect_related(current_pid: int, distance: int):
             if distance > max_distance or current_pid in visited:
                 return
-            
+
             visited.add(current_pid)
             if current_pid in self.processes:
                 related.append(self.processes[current_pid])
-            
+
             # 子プロセスを追加
             for child_pid in self.process_families.get(current_pid, []):
                 collect_related(child_pid, distance + 1)
-            
+
             # 兄弟プロセスを追加
             if current_pid in self.processes:
                 parent_pid = self.processes[current_pid].ppid
                 for sibling_pid in self.process_families.get(parent_pid, []):
                     if sibling_pid != current_pid:
                         collect_related(sibling_pid, distance + 1)
-        
+
         collect_related(pid, 0)
         return related
-    
+
     def detect_ipc_connections(self) -> List[tuple]:
         """プロセス間通信（IPC）接続を検出
-        
+
         Returns:
             List[tuple]: (ProcessInfo, ProcessInfo)のタプルリスト
         """
+        if self._external_source is not None and hasattr(self._external_source, 'get_ipc_connections'):
+            try:
+                source_conns = self._external_source.get_ipc_connections(limit=20)
+                if source_conns:
+                    # source からの形式を (ProcessInfo, ProcessInfo) に変換
+                    mapped = []
+                    for conn in source_conns:
+                        if hasattr(conn, 'pid_a') and hasattr(conn, 'pid_b'):
+                            proc_a = self.processes.get(conn.pid_a)
+                            proc_b = self.processes.get(conn.pid_b)
+                            if proc_a and proc_b and proc_a != proc_b:
+                                mapped.append((proc_a, proc_b))
+                    if mapped:
+                        return mapped[:20]
+            except Exception:
+                pass
+
         connections = []
-        
+
         try:
             # ネットワーク接続からプロセス間通信を推定
             net_connections = psutil.net_connections(kind='inet')
-            
+
             # ローカル接続を抽出
             local_connections = {}
             for conn in net_connections:
-                if (conn.laddr and conn.raddr and 
+                if (conn.laddr and conn.raddr and
                     conn.laddr.ip in ['127.0.0.1', '::1'] and
                     conn.raddr.ip in ['127.0.0.1', '::1'] and
                     conn.pid):
-                    
-                    key = (min(conn.laddr.port, conn.raddr.port), 
+
+                    key = (min(conn.laddr.port, conn.raddr.port),
                            max(conn.laddr.port, conn.raddr.port))
-                    
+
                     if key not in local_connections:
                         local_connections[key] = []
                     local_connections[key].append(conn.pid)
-            
+
             # 同じポートペアを使用するプロセス同士を接続として扱う
             for port_pair, pids in local_connections.items():
                 if len(pids) >= 2:
@@ -447,14 +464,14 @@ class ProcessManager:
             try:
                 unix_connections = psutil.net_connections(kind='unix')
                 unix_socket_map = {}
-                
+
                 for conn in unix_connections:
                     if conn.laddr and conn.pid and conn.pid in self.processes:
                         socket_path = conn.laddr
                         if socket_path not in unix_socket_map:
                             unix_socket_map[socket_path] = []
                         unix_socket_map[socket_path].append(conn.pid)
-                
+
                 # 同じUnixソケットパスを使用するプロセス同士を接続として扱う
                 for socket_path, pids in unix_socket_map.items():
                     if len(pids) >= 2:
@@ -466,34 +483,48 @@ class ProcessManager:
                                     proc1 = self.processes[pid1]
                                     proc2 = self.processes[pid2]
                                     # 既に追加されていない場合のみ追加
-                                    if not any((p1.pid == proc1.pid and p2.pid == proc2.pid) or 
-                                              (p1.pid == proc2.pid and p2.pid == proc1.pid) 
+                                    if not any((p1.pid == proc1.pid and p2.pid == proc2.pid) or
+                                              (p1.pid == proc2.pid and p2.pid == proc1.pid)
                                               for p1, p2 in connections):
                                         connections.append((proc1, proc2))
-                                        
+
             except (psutil.AccessDenied, OSError):
                 # Unixソケットへのアクセス権限がない場合はスキップ
                 pass
-            
+
             # 親子関係も一種のIPC接続として扱う
             for proc in self.processes.values():
                 if proc.ppid in self.processes:
                     parent = self.processes[proc.ppid]
                     # 既に追加されていない場合のみ追加
-                    if not any((p1.pid == parent.pid and p2.pid == proc.pid) or 
-                              (p1.pid == proc.pid and p2.pid == parent.pid) 
+                    if not any((p1.pid == parent.pid and p2.pid == proc.pid) or
+                              (p1.pid == proc.pid and p2.pid == parent.pid)
                               for p1, p2 in connections):
                         connections.append((parent, proc))
-                        
+
         except (psutil.AccessDenied, psutil.NoSuchProcess) as e:
             # アクセス権限がない場合は親子関係のみ返す
             for proc in self.processes.values():
                 if proc.ppid in self.processes:
                     parent = self.processes[proc.ppid]
                     connections.append((parent, proc))
-        
+
         # 接続数を制限（パフォーマンス考慮）
         return connections[:20]
+
+    def shutdown(self) -> None:
+        """バックエンドソースを安全に停止"""
+        if self._external_source is not None and hasattr(self._external_source, "shutdown"):
+            try:
+                self._external_source.shutdown()
+            except Exception:
+                pass
+
+    def __del__(self):
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
 def test_process_manager():
     """ProcessManagerのテスト関数"""

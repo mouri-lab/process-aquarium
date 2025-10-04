@@ -2,6 +2,13 @@
 
 Process Aquarium is an application visualizing processes as fish in an aquarium. Each fish represents a running process on your system.
 
+## Requirements
+
+- Python 3.10+
+- `pygame-ce` (installed automatically via `pip install -e .` or `pip install pygame-ce`)
+
+If you previously used the legacy `pygame` package, uninstall it before installing `pygame-ce` to avoid binary conflicts.
+
 ## eBPF Integration (Design Draft)
 
 This branch introduces an abstraction layer to allow future event–driven
@@ -71,6 +78,79 @@ Use cases:
 Optional flags:
 * `--width / --height` still accepted (affects internal surfaces only)
 * `--headless-interval <seconds>` controls stats print frequency (default 1.0)
+
+## GPU Acceleration (SDL2 Renderer)
+
+`pygame-ce` exposes the SDL2 GPU renderer. You can opt-in to it for smoother animation on capable hardware:
+
+```bash
+python main.py --gpu
+```
+
+Environment-based toggle:
+
+```bash
+export AQUARIUM_GPU=1
+python main.py
+```
+
+Additional knobs:
+
+* `--gpu-driver <name>` or `AQUARIUM_GPU_DRIVER=<metal|opengl|direct3d|vulkan>` to hint SDL which backend to prefer.
+* `AQUARIUM_VSYNC=0` to disable vsync (defaults to `1`).
+* Resizing the GPU window now resizes the renderer and UI automatically.
+
+If the accelerated renderer fails to initialize (driver mismatch, unsupported GPU, etc.) the application automatically falls back to the classic software surface path.
+
+## Japanese Font Hints (macOS / Linux / Windows)
+
+SDL_ttf relies on system fonts to render the on-screen statistics and IPC speech bubbles. もし日本語が豆腐（□）になってしまう場合は、環境変数で利用するフォントを明示してください。
+
+```bash
+# 例: macOS でヒラギノ角ゴシックを使う場合
+export AQUARIUM_FONT_PATH="/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"
+
+# 例: 環境変数でフォント名を指定（pygame の SysFont 経由）
+export AQUARIUM_FONT_NAME="Hiragino Sans"
+
+python main.py --gpu
+```
+
+優先順位は `AQUARIUM_FONT_PATH` → `AQUARIUM_FONT_NAME` → 既に検出済みのフォント → システム探索の順です。指定したパス／フォント名が見つからなかった場合は、自動的に他の候補を探し、最終的には pygame のデフォルトフォントにフォールバックしますが、この場合は日本語が表示されません。
+
+## Adaptive Quality Modes (optional)
+
+By default the aquarium now keeps the full visual experience and relies on faster neighbour searches plus CPU-side optimisations to stay responsive. If you prefer adaptive quality that reacts to FPS drops, enable it via environment variable or CLI:
+
+```bash
+export AQUARIUM_ENABLE_ADAPTIVE_QUALITY=1
+python main.py
+# or
+python main.py --adaptive-quality
+```
+
+When enabled, the aquarium automatically downshifts visual complexity based on the rolling average FPS:
+
+| Render quality | Trigger (average FPS) | Changes |
+|----------------|-----------------------|---------|
+| `full`         | Above reduced threshold | All effects enabled (ripples, lightning, satellites, flocking). |
+| `reduced`      | ≤ reduced threshold     | Disables ripple/lightning effects and throttles neighbour searches. |
+| `minimal`      | ≤ minimal threshold     | Draws simple circles, skips flocking, and minimizes background particles. |
+
+Defaults assume a 30 FPS target: `reduced` engages at ~22.5 FPS (75% of target) and `minimal` at ~15 FPS (50%).
+
+You can override the thresholds via environment variables (interpreted as FPS; values between 0 and 1 are treated as a ratio of the target FPS):
+
+```bash
+export AQUARIUM_QUALITY_REDUCED_FPS=22.5   # switch to reduced quality when FPS ≤ 22.5
+export AQUARIUM_QUALITY_MINIMAL_FPS=0.5    # drop to minimal when FPS ≤ 50% of target FPS
+export AQUARIUM_QUALITY_RECOVERY_MARGIN=3  # hysteresis in FPS before restoring higher quality
+python main.py --gpu
+```
+
+To force the classic full-quality rendering even when the environment enables the feature, run `python main.py --no-adaptive-quality`.
+
+The active quality level (or “full (固定)” when the feature is disabled) is shown in the on-screen statistics panel (`描画品質`).
 
 ## Process Limiting and Sorting
 
