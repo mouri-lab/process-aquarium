@@ -33,7 +33,7 @@
 ### A. 新環境 (標準 Ubuntu カーネル) セットアップ
 ```bash
 sudo apt update
-sudo apt install -y bpfcc-tools python3-bpfcc linux-headers-$(uname -r) \
+sudo apt install -y python3-bpfcc linux-headers-$(uname -r) \
     libbpf-dev clang llvm make gcc python3-venv
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt  # (bcc が必要なら requirements に追記可)
