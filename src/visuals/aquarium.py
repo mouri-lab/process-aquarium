@@ -54,6 +54,17 @@ class Aquarium:
         if self.requested_gpu and self.gpu_driver_hint:
             os.environ.setdefault("SDL_HINT_RENDER_DRIVER", self.gpu_driver_hint)
         self.use_gpu = False
+        self.enable_adaptive_quality = self._env_flag("AQUARIUM_ENABLE_ADAPTIVE_QUALITY", False)
+        self.render_quality = "full"
+        self._quality_thresholds = (None, None)
+        recovery_margin_env = os.environ.get("AQUARIUM_QUALITY_RECOVERY_MARGIN")
+        try:
+            recovery_margin = float(recovery_margin_env) if recovery_margin_env else 3.0
+        except ValueError:
+            recovery_margin = 3.0
+        self._quality_recovery_margin = max(0.0, min(recovery_margin, 10.0))
+        self._suppress_spawn_logs = False
+        self._quality_message_shown = set()
         self._windowevent_type = getattr(pygame, "WINDOWEVENT", None)
         self._windowevent_resized = getattr(pygame, "WINDOWEVENT_RESIZED", None)
         self._windowevent_size_changed = getattr(pygame, "WINDOWEVENT_SIZE_CHANGED", None)
@@ -100,6 +111,7 @@ class Aquarium:
         # 時計とFPS
         self.clock = pygame.time.Clock()
         self.fps = target_fps if not self.headless else int(1.0 / max(headless_interval, 0.001))
+        self._configure_quality_thresholds()
 
         # プロセス管理
         # 将来的に eBPF を有効化する場合は、起動パラメータや環境変数で
@@ -159,6 +171,7 @@ class Aquarium:
             'adaptive_particle_count': 50,
             'adaptive_fish_update_interval': 1
         }
+        self._neighbor_cell_size = 120  # 近傍検索用のグリッドサイズ（ピクセル）
 
         # UI状態
         self.selected_fish: Optional[Fish] = None
@@ -306,7 +319,11 @@ class Aquarium:
                 self.fishes[pid] = fish
 
                 # プロセス誕生ログ
-                print(f"🐟 新しいプロセス誕生: PID {pid} ({proc.name})")
+                if not self._suppress_spawn_logs:
+                    print(f"🐟 新しいプロセス誕生: PID {pid} ({proc.name})")
+                elif "spawn_logs_suppressed" not in self._quality_message_shown:
+                    print("🐟 新規プロセス発生ログは高負荷モードのため抑制されています。")
+                    self._quality_message_shown.add("spawn_logs_suppressed")
 
                 # 親子関係があれば分裂エフェクト
                 if proc.ppid in self.fishes:
@@ -460,6 +477,11 @@ class Aquarium:
         current_fps = self.clock.get_fps()
 
         # 統計情報（パフォーマンス情報を含む）
+        if self.enable_adaptive_quality:
+            quality_label = f"{self.render_quality} (自動)"
+        else:
+            quality_label = "full (固定)"
+
         stats_lines = [
             f"総プロセス数: {self.total_processes}",
             f"表示中の魚: {len(self.fishes)}",
@@ -468,7 +490,13 @@ class Aquarium:
             f"総スレッド数: {self.total_threads}",
             f"FPS: {current_fps:.1f}",
             f"パーティクル数: {self.performance_monitor['adaptive_particle_count']}",
+            f"描画品質: {quality_label}",
         ]
+
+        if self.enable_adaptive_quality:
+            reduced_threshold, minimal_threshold = self._quality_thresholds
+            if reduced_threshold is not None and minimal_threshold is not None:
+                stats_lines.append(f"品質閾値: 簡易≤{reduced_threshold:.1f}fps／最小≤{minimal_threshold:.1f}fps")
 
         # プロセス制限とソート情報を追加
         limit_str = "無制限" if self.process_limit is None else str(self.process_limit)
@@ -801,6 +829,39 @@ class Aquarium:
         order_name = "昇順" if self.sort_order == "asc" else "降順"
         print(f"🔄 ソート順序: {order_name}")
 
+    def _configure_quality_thresholds(self):
+        """FPSベースの品質閾値を設定"""
+        if not self.enable_adaptive_quality:
+            self._quality_thresholds = (None, None)
+            return
+
+        target_fps = float(self.fps or 30)
+        reduced_default = max(target_fps * 0.75, target_fps - 5.0)
+        minimal_default = max(target_fps * 0.5, target_fps - 12.0)
+
+        reduced_env = os.environ.get("AQUARIUM_QUALITY_REDUCED_FPS")
+        minimal_env = os.environ.get("AQUARIUM_QUALITY_MINIMAL_FPS")
+
+        reduced_threshold = self._parse_fps_threshold(reduced_env, reduced_default, target_fps)
+        minimal_threshold = self._parse_fps_threshold(minimal_env, minimal_default, target_fps)
+
+        if minimal_threshold >= reduced_threshold:
+            minimal_threshold = max(1.0, min(reduced_threshold - 2.0, reduced_threshold * 0.7))
+        reduced_threshold = max(minimal_threshold + 1.0, reduced_threshold)
+
+        self._quality_thresholds = (reduced_threshold, minimal_threshold)
+
+    def _parse_fps_threshold(self, value: Optional[str], default: float, target_fps: float) -> float:
+        if not value:
+            return default
+        try:
+            threshold = float(value)
+            if 0 < threshold <= 1.0:
+                threshold = target_fps * threshold
+        except ValueError:
+            return default
+        return max(1.0, threshold)
+
     def _adjust_performance(self):
         """動的パフォーマンス調整"""
         if not self.performance_monitor['fps_history']:
@@ -832,6 +893,69 @@ class Aquarium:
             if self.performance_monitor['adaptive_fish_update_interval'] > 1:
                 self.performance_monitor['adaptive_fish_update_interval'] -= 1
                 print(f"🚀 パフォーマンス調整: 魚更新間隔を{self.performance_monitor['adaptive_fish_update_interval']}に減少")
+
+    def _update_render_quality(self):
+        """描画品質の自動調整（必要な場合のみ）"""
+        if not self.enable_adaptive_quality:
+            if self.render_quality != "full":
+                self.render_quality = "full"
+                self._suppress_spawn_logs = False
+            return
+
+        reduced_threshold, minimal_threshold = self._quality_thresholds
+        if reduced_threshold is None or minimal_threshold is None:
+            return
+
+        fps_samples = self.performance_monitor['fps_history'][-60:]
+        if len(fps_samples) < 15:
+            return
+
+        avg_fps = sum(fps_samples) / len(fps_samples)
+        previous = self.render_quality
+
+        quality = "full"
+        if avg_fps <= minimal_threshold:
+            quality = "minimal"
+        elif avg_fps <= reduced_threshold:
+            quality = "reduced"
+
+        margin = self._quality_recovery_margin
+        if quality == "full":
+            if previous == "minimal" and avg_fps < minimal_threshold + margin:
+                quality = "minimal"
+            elif previous == "reduced" and avg_fps < reduced_threshold + margin:
+                quality = "reduced"
+        elif quality == "reduced" and previous == "minimal" and avg_fps < minimal_threshold + margin:
+            quality = "minimal"
+
+        if quality == previous:
+            return
+
+        self.render_quality = quality
+        if quality == "full":
+            self._suppress_spawn_logs = False
+            if "quality_full" not in self._quality_message_shown:
+                print(f"🎨 描画品質: フル品質に復帰しました (平均FPS {avg_fps:.1f} > {reduced_threshold + margin:.1f})。")
+                self._quality_message_shown.add("quality_full")
+            self._quality_message_shown.discard("quality_reduced")
+            self._quality_message_shown.discard("quality_minimal")
+        elif quality == "reduced":
+            self._suppress_spawn_logs = True
+            self.performance_monitor['adaptive_particle_count'] = min(self.performance_monitor['adaptive_particle_count'], 35)
+            self.performance_monitor['adaptive_fish_update_interval'] = max(self.performance_monitor['adaptive_fish_update_interval'], 2)
+            if "quality_reduced" not in self._quality_message_shown:
+                print(f"🎨 描画品質: FPS低下のため簡易品質に切り替えました (平均FPS {avg_fps:.1f} ≤ {reduced_threshold:.1f})。")
+                print("   → 波紋・雷エフェクトを削減し、群れ演算を軽量化します。")
+                self._quality_message_shown.add("quality_reduced")
+            self._quality_message_shown.discard("quality_minimal")
+        else:  # minimal
+            self._suppress_spawn_logs = True
+            self.performance_monitor['adaptive_particle_count'] = min(self.performance_monitor['adaptive_particle_count'], 20)
+            self.performance_monitor['adaptive_fish_update_interval'] = max(self.performance_monitor['adaptive_fish_update_interval'], 3)
+            if "quality_minimal" not in self._quality_message_shown:
+                print(f"🎨 描画品質: FPSが大きく低下したため超過密モードに切り替えました (平均FPS {avg_fps:.1f} ≤ {minimal_threshold:.1f})。")
+                print("   → 群れ行動や装飾エフェクトを停止してパフォーマンスを確保します。")
+                self._quality_message_shown.add("quality_minimal")
 
     def _cleanup_caches(self):
         """キャッシュクリーンアップ"""
@@ -873,6 +997,7 @@ class Aquarium:
 
         # プロセスデータの更新
         self.update_process_data()
+        self._update_render_quality()
 
         # 背景パーティクルの更新
         self.update_background_particles()
@@ -883,6 +1008,15 @@ class Aquarium:
 
         dying_fish_updated = 0
         total_fish_updated = 0
+        enable_nearby_search = (self.render_quality == "full")
+        spatial_grid = None
+        cell_size = self._neighbor_cell_size
+        if enable_nearby_search and fish_list:
+            spatial_grid = {}
+            for fish in fish_list:
+                cell_key = (int(fish.x // cell_size), int(fish.y // cell_size))
+                spatial_grid.setdefault(cell_key, []).append(fish)
+
         for i, fish in enumerate(fish_list):
             # 適応的更新：魚の数が多い場合は一部の魚のみ更新
             # ただし、死亡中の魚は常に更新して削除処理を確実に行う
@@ -896,14 +1030,29 @@ class Aquarium:
 
             # 近くの魚を検索（最適化：距離の事前チェック）
             nearby_fish = []
-            for other_fish in fish_list:
-                if other_fish.pid != fish.pid:
-                    dx = fish.x - other_fish.x
-                    dy = fish.y - other_fish.y
-                    if abs(dx) < 100 and abs(dy) < 100:  # 事前チェック
-                        distance_sq = dx * dx + dy * dy
-                        if distance_sq < 10000:  # 100^2
-                            nearby_fish.append(other_fish)
+            if enable_nearby_search and spatial_grid is not None:
+                cell_x = int(fish.x // cell_size)
+                cell_y = int(fish.y // cell_size)
+                visited = set()
+                for dx_cell in (-1, 0, 1):
+                    for dy_cell in (-1, 0, 1):
+                        candidate_cell = (cell_x + dx_cell, cell_y + dy_cell)
+                        for other_fish in spatial_grid.get(candidate_cell, []):
+                            if other_fish.pid == fish.pid or other_fish.pid in visited:
+                                continue
+                            dx = fish.x - other_fish.x
+                            dy = fish.y - other_fish.y
+                            if abs(dx) < 100 and abs(dy) < 100:
+                                distance_sq = dx * dx + dy * dy
+                                if distance_sq < 10000:
+                                    nearby_fish.append(other_fish)
+                                    visited.add(other_fish.pid)
+                                    if len(nearby_fish) >= 16:
+                                        break
+                        if len(nearby_fish) >= 16:
+                            break
+                    if len(nearby_fish) >= 16:
+                        break
 
             fish.update_position(self.width, self.height, nearby_fish)
 
@@ -932,7 +1081,7 @@ class Aquarium:
 
         # 全てのFishを描画
         for fish in self.fishes.values():
-            fish.draw(self.screen, self.bubble_font)
+            fish.draw(self.screen, self.bubble_font, quality=self.render_quality)
 
         # 選択されたFishのハイライト
         if self.selected_fish:

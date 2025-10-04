@@ -102,6 +102,40 @@ Additional knobs:
 
 If the accelerated renderer fails to initialize (driver mismatch, unsupported GPU, etc.) the application automatically falls back to the classic software surface path.
 
+## Adaptive Quality Modes (optional)
+
+By default the aquarium now keeps the full visual experience and relies on faster neighbour searches plus CPU-side optimisations to stay responsive. If you prefer adaptive quality that reacts to FPS drops, enable it via environment variable or CLI:
+
+```bash
+export AQUARIUM_ENABLE_ADAPTIVE_QUALITY=1
+python main.py
+# or
+python main.py --adaptive-quality
+```
+
+When enabled, the aquarium automatically downshifts visual complexity based on the rolling average FPS:
+
+| Render quality | Trigger (average FPS) | Changes |
+|----------------|-----------------------|---------|
+| `full`         | Above reduced threshold | All effects enabled (ripples, lightning, satellites, flocking). |
+| `reduced`      | ≤ reduced threshold     | Disables ripple/lightning effects and throttles neighbour searches. |
+| `minimal`      | ≤ minimal threshold     | Draws simple circles, skips flocking, and minimizes background particles. |
+
+Defaults assume a 30 FPS target: `reduced` engages at ~22.5 FPS (75% of target) and `minimal` at ~15 FPS (50%).
+
+You can override the thresholds via environment variables (interpreted as FPS; values between 0 and 1 are treated as a ratio of the target FPS):
+
+```bash
+export AQUARIUM_QUALITY_REDUCED_FPS=22.5   # switch to reduced quality when FPS ≤ 22.5
+export AQUARIUM_QUALITY_MINIMAL_FPS=0.5    # drop to minimal when FPS ≤ 50% of target FPS
+export AQUARIUM_QUALITY_RECOVERY_MARGIN=3  # hysteresis in FPS before restoring higher quality
+python main.py --gpu
+```
+
+To force the classic full-quality rendering even when the environment enables the feature, run `python main.py --no-adaptive-quality`.
+
+The active quality level (or “full (固定)” when the feature is disabled) is shown in the on-screen statistics panel (`描画品質`).
+
 ## Process Limiting and Sorting
 
 You can limit the number of processes displayed and sort them by various criteria:

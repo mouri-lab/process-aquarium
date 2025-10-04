@@ -532,7 +532,7 @@ class Fish:
         else:
             self._draw_generic_fish(screen, color, alpha, body_length, body_width)
 
-    def draw(self, screen: pygame.Surface, font: pygame.font.Font = None):
+    def draw(self, screen: pygame.Surface, font: pygame.font.Font = None, quality: str = "full"):
         """Fishの描画（魚らしい見た目版）"""
         if self.death_progress >= 1.0:
             return
@@ -542,12 +542,22 @@ class Fish:
         alpha = self.get_display_alpha()
         size = self.get_display_size()
 
+        if quality not in {"full", "reduced", "minimal"}:
+            quality = "full"
+
         # サイズが小さすぎる場合はスキップ
         if size < 2:
             return
 
+        if quality == "minimal":
+            # 超過密モードではシンプルな円のみ描画
+            radius = max(2, min(int(size), 24))
+            pygame.draw.circle(screen, color, (int(self.x), int(self.y)), radius)
+            return
+
         # メモリ巨大魚の波紋エフェクト（メモリ使用率5%以上）
-        if self.is_memory_giant and hasattr(self, 'memory_percent'):
+        enable_memory_fx = (quality == "full")
+        if enable_memory_fx and self.is_memory_giant and hasattr(self, 'memory_percent'):
             if self.memory_percent >= 5.0:
                 self._draw_memory_giant_effects(screen, alpha)
             # 超巨大魚（20%以上）には追加の雷エフェクト
@@ -559,7 +569,7 @@ class Fish:
             self._draw_fish_shape(screen, color, alpha, size)
 
         # スレッド衛星の描画（小魚の群れとして）
-        if self.thread_count > 1 and size > 5:
+        if quality == "full" and self.thread_count > 1 and size > 5:
             satellites = self.get_thread_satellites()
             # スレッド数に応じて表示数を増加（最大12個まで）
             max_display = min(len(satellites), max(4, self.thread_count // 2))
@@ -571,7 +581,7 @@ class Fish:
                 self._draw_small_fish(screen, color, alpha//2, sat_x, sat_y, sat_size)
 
         # 会話吹き出しの描画
-        if self.is_talking and self.talk_message:
+        if quality != "minimal" and self.is_talking and self.talk_message:
             self._draw_speech_bubble(screen, self.talk_message, font)
 
     def _draw_small_fish(self, screen: pygame.Surface, color: Tuple[int, int, int],
