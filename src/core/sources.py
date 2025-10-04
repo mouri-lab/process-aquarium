@@ -336,22 +336,28 @@ class EbpfProcessSource(IProcessSource):
         self.available = False
         self._processes: Dict[int, ProcessInfo] = {}
         self._lifecycle_buffer: List[ProcessLifecycleEvent] = []
-        self._last_poll = 0.0
-        self.poll_interval = 1.0  # seconds (perf buffer drain - 軽量化)
         # ハイブリッドモード: 初期スキャン + eBPF イベント追跡
         self.hybrid_mode = hybrid_mode
         self._initial_scan_done = False
         # イベント統計
         self._event_stats = {"spawn": 0, "exec": 0, "exit": 0, "captured": 0, "initial_scan": 0}
+        # 並行アクセス制御
+        self._lock = Lock()
+        self._shutdown = Event()
+        self._ready = Event()
+        self._poll_thread: Optional[Thread] = None
+        self._thread_started = False
+        self._poll_timeout_ms = 100  # perf buffer poll timeout (ms)
         if not enable:
             return
         try:
             from bcc import BPF  # type: ignore
         except Exception as e:  # bcc 未インストール or 権限不足
-            self._lifecycle_buffer.append(ProcessLifecycleEvent(
-                event_type="exec", pid=0, ppid=None, timestamp=time.time(),
-                details={"warning": f"bcc unavailable: {e}"}
-            ))
+            with self._lock:
+                self._lifecycle_buffer.append(ProcessLifecycleEvent(
+                    event_type="exec", pid=0, ppid=None, timestamp=time.time(),
+                    details={"warning": f"bcc unavailable: {e}"}
+                ))
             return
         try:
             self._bpf = BPF(text=self.BPF_PROGRAM)
@@ -363,6 +369,8 @@ class EbpfProcessSource(IProcessSource):
             # ハイブリッドモード: 初期スキャンで既存プロセスを収集
             if self.hybrid_mode:
                 self._perform_initial_scan()
+            else:
+                self._ready.set()
         except Exception as e:
             # エラー詳細を判別して適切なメッセージを生成
             error_str = str(e)
@@ -377,10 +385,11 @@ class EbpfProcessSource(IProcessSource):
             else:
                 error_detail = f"予期しないエラー: {e}"
 
-            self._lifecycle_buffer.append(ProcessLifecycleEvent(
-                event_type="exec", pid=0, ppid=None, timestamp=time.time(),
-                details={"error": error_detail}
-            ))
+            with self._lock:
+                self._lifecycle_buffer.append(ProcessLifecycleEvent(
+                    event_type="exec", pid=0, ppid=None, timestamp=time.time(),
+                    details={"error": error_detail}
+                ))
             self.available = False
 
     # ---------- perf buffer handlers ---------- #
@@ -388,39 +397,46 @@ class EbpfProcessSource(IProcessSource):
         from bcc import BPF  # type: ignore
         evt = self._bpf["fork_events"].event(data)
         now = time.time()
-        self._event_stats["spawn"] += 1
-        self._lifecycle_buffer.append(ProcessLifecycleEvent(
-            event_type="spawn", pid=evt.pid, ppid=evt.ppid, timestamp=now,
-            details={"source": "ebpf", "raw_ts": evt.ts}
-        ))
-        # spawn直後に psutil で補完（短命プロセスを捕捉したいのでベストエフォート）
-        if self._populate_process(evt.pid, evt.ppid):
-            self._event_stats["captured"] += 1
+        captured = self._populate_process(evt.pid, evt.ppid)
+        with self._lock:
+            self._event_stats["spawn"] += 1
+            self._lifecycle_buffer.append(ProcessLifecycleEvent(
+                event_type="spawn", pid=evt.pid, ppid=evt.ppid, timestamp=now,
+                details={"source": "ebpf", "raw_ts": evt.ts}
+            ))
+            if captured:
+                self._event_stats["captured"] += 1
+        self._ready.set()
 
     def _handle_exec(self, cpu, data, size):  # type: ignore[override]
         evt = self._bpf["exec_events"].event(data)
         now = time.time()
-        self._event_stats["exec"] += 1
-        self._lifecycle_buffer.append(ProcessLifecycleEvent(
-            event_type="exec", pid=evt.pid, ppid=self._processes.get(evt.pid).ppid if evt.pid in self._processes else None,
-            timestamp=now, details={"source": "ebpf", "raw_ts": evt.ts}
-        ))
-        # exec後に名称/コマンドラインをリフレッシュ
-        if self._populate_process(evt.pid):
-            self._event_stats["captured"] += 1
+        captured = self._populate_process(evt.pid)
+        with self._lock:
+            self._event_stats["exec"] += 1
+            ppid = self._processes.get(evt.pid).ppid if evt.pid in self._processes else None
+            self._lifecycle_buffer.append(ProcessLifecycleEvent(
+                event_type="exec", pid=evt.pid, ppid=ppid,
+                timestamp=now, details={"source": "ebpf", "raw_ts": evt.ts}
+            ))
+            if captured:
+                self._event_stats["captured"] += 1
+        self._ready.set()
 
     def _handle_exit(self, cpu, data, size):  # type: ignore[override]
         evt = self._bpf["exit_events"].event(data)
         now = time.time()
-        self._event_stats["exit"] += 1
-        ppid = self._processes.get(evt.pid).ppid if evt.pid in self._processes else None
-        self._lifecycle_buffer.append(ProcessLifecycleEvent(
-            event_type="exit", pid=evt.pid, ppid=ppid, timestamp=now,
-            details={"source": "ebpf", "raw_ts": evt.ts}
-        ))
-        # 終了したプロセスを削除（メモリ効率化）
-        if evt.pid in self._processes:
-            del self._processes[evt.pid]
+        with self._lock:
+            self._event_stats["exit"] += 1
+            ppid = self._processes.get(evt.pid).ppid if evt.pid in self._processes else None
+            self._lifecycle_buffer.append(ProcessLifecycleEvent(
+                event_type="exit", pid=evt.pid, ppid=ppid, timestamp=now,
+                details={"source": "ebpf", "raw_ts": evt.ts}
+            ))
+            # 終了したプロセスを削除（メモリ効率化）
+            if evt.pid in self._processes:
+                del self._processes[evt.pid]
+        self._ready.set()
 
     # ---------- helpers ---------- #
     def _populate_process(self, pid: int, ppid_hint: Optional[int] = None):
@@ -449,9 +465,11 @@ class EbpfProcessSource(IProcessSource):
                     last_update=datetime.now(),
                     is_new=True
                 )
+            with self._lock:
                 self._processes[pid] = info
-                print(f"[eBPF] プロセス捕捉成功: {name} (PID: {pid})")
-                return True
+            self._ready.set()
+            print(f"[eBPF] プロセス捕捉成功: {name} (PID: {pid})")
+            return True
         except psutil.NoSuchProcess:
             # プロセスが既に終了済み（短命プロセス）
             pass
@@ -468,6 +486,7 @@ class EbpfProcessSource(IProcessSource):
         print("[eBPF] 初期プロセススキャンを実行中...")
         start_time = time.time()
         count = 0
+        snapshot: Dict[int, ProcessInfo] = {}
 
         for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'memory_percent',
                                          'cpu_percent', 'num_threads', 'create_time',
@@ -497,14 +516,17 @@ class EbpfProcessSource(IProcessSource):
                     is_new=False,  # 初期スキャンなので新規ではない
                 )
 
-                self._processes[pid] = proc_info
+                snapshot[pid] = proc_info
                 count += 1
 
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
 
-        self._initial_scan_done = True
-        self._event_stats["initial_scan"] = count
+        with self._lock:
+            self._processes.update(snapshot)
+            self._initial_scan_done = True
+            self._event_stats["initial_scan"] = count
+        self._ready.set()
         elapsed = time.time() - start_time
         print(f"[eBPF] 初期スキャン完了: {count}プロセス収集 ({elapsed:.2f}秒)")
 
@@ -532,25 +554,60 @@ class EbpfProcessSource(IProcessSource):
     def update(self) -> None:  # type: ignore[override]
         if not self.available:
             return
-        now = time.time()
-        if now - self._last_poll < self.poll_interval:
-            return
-        self._last_poll = now
-
-        # eBPFイベントのみをポーリング（軽量）
-        try:
-            self._bpf.perf_buffer_poll(timeout=0)
-        except Exception:
-            pass
+        self._ensure_thread()
+        if not self._ready.is_set():
+            self._ready.wait(timeout=0.2)
 
     def get_processes(self) -> Dict[int, ProcessInfo]:  # type: ignore[override]
-        return self._processes.copy()
+        with self._lock:
+            return self._processes.copy()
 
     def drain_lifecycle_events(self) -> List[ProcessLifecycleEvent]:  # type: ignore[override]
-        buf = self._lifecycle_buffer
-        self._lifecycle_buffer = []
-        return buf
+        with self._lock:
+            buf = self._lifecycle_buffer
+            self._lifecycle_buffer = []
+            return buf
 
     def get_ipc_connections(self, limit: int = 20) -> List[IPCConnection]:  # type: ignore[override]
         # IPC は未実装 (TODO: ソケット tracepoint / kprobe 拡張)
         return []
+
+    # ---------- Thread management ---------- #
+    def _ensure_thread(self) -> None:
+        if not self.available or self._thread_started:
+            return
+        self._poll_thread = Thread(target=self._poll_loop, name="EbpfProcessSource", daemon=True)
+        self._poll_thread.start()
+        self._thread_started = True
+
+    def _poll_loop(self) -> None:
+        while not self._shutdown.is_set():
+            try:
+                self._bpf.perf_buffer_poll(timeout=self._poll_timeout_ms)
+                self._ready.set()
+            except InterruptedError:
+                continue
+            except Exception as exc:
+                if self._shutdown.is_set():
+                    break
+                with self._lock:
+                    self._lifecycle_buffer.append(ProcessLifecycleEvent(
+                        event_type="exec", pid=0, ppid=None, timestamp=time.time(),
+                        details={"error": f"perf_buffer_poll failed: {exc}"}
+                    ))
+                self.available = False
+                self._ready.set()
+                break
+
+    def shutdown(self) -> None:
+        if not self._thread_started:
+            return
+        self._shutdown.set()
+        if self._poll_thread and self._poll_thread.is_alive():
+            self._poll_thread.join(timeout=1.0)
+
+    def __del__(self):
+        try:
+            self.shutdown()
+        except Exception:
+            pass
