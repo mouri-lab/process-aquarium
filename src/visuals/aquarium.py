@@ -192,8 +192,8 @@ class Aquarium:
 
         # 追従機能
         self.follow_target: Optional[Fish] = None
-        self.auto_center = True  # 自動センタリング
-        self.camera_follow_mode = False  # カメラ追従モード
+        # カメラモード: 0=自動センタリング, 1=選択魚追従, 2=なし
+        self.camera_mode = 0
 
         # 日本語フォント管理と動的スケーリング
         self._preferred_font_name: Optional[str] = None
@@ -319,34 +319,28 @@ class Aquarium:
 
     def update_camera(self):
         """カメラの更新（追従機能など）"""
-        # 選択魚追従モード：selected_fishを自動追従
-        if self.camera_follow_mode and self.selected_fish and self.selected_fish in self.fishes.values():
-            # 選択された魚を画面中央に保つ
-            target_x = self.selected_fish.x
-            target_y = self.selected_fish.y
+        if self.camera_mode == 0:
+            # 自動センタリング：全ての魚の重心を追跡
+            if self.fishes:
+                center_x = sum(fish.x for fish in self.fishes.values()) / len(self.fishes)
+                center_y = sum(fish.y for fish in self.fishes.values()) / len(self.fishes)
 
-            # スムーズな追従（線形補間）
-            lerp_factor = 0.08  # 少し速めの追従
-            self.camera_x += (target_x - self.camera_x) * lerp_factor
-            self.camera_y += (target_y - self.camera_y) * lerp_factor
-        elif self.follow_target and self.follow_target in self.fishes.values():
-            # 従来の追従対象の魚を画面中央に保つ
-            target_x = self.follow_target.x
-            target_y = self.follow_target.y
+                # ゆっくりとした自動センタリング
+                lerp_factor = 0.01
+                self.camera_x += (center_x - self.camera_x) * lerp_factor
+                self.camera_y += (center_y - self.camera_y) * lerp_factor
+        elif self.camera_mode == 1:
+            # 選択魚追従モード：selected_fishを自動追従
+            if self.selected_fish and self.selected_fish in self.fishes.values():
+                # 選択された魚を画面中央に保つ
+                target_x = self.selected_fish.x
+                target_y = self.selected_fish.y
 
-            # スムーズな追従（線形補間）
-            lerp_factor = 0.05
-            self.camera_x += (target_x - self.camera_x) * lerp_factor
-            self.camera_y += (target_y - self.camera_y) * lerp_factor
-        elif self.auto_center and self.fishes and not self.camera_follow_mode:
-            # 自動センタリング：全ての魚の重心を追跡（追従モードでない時のみ）
-            center_x = sum(fish.x for fish in self.fishes.values()) / len(self.fishes)
-            center_y = sum(fish.y for fish in self.fishes.values()) / len(self.fishes)
-
-            # ゆっくりとした自動センタリング
-            lerp_factor = 0.01
-            self.camera_x += (center_x - self.camera_x) * lerp_factor
-            self.camera_y += (center_y - self.camera_y) * lerp_factor
+                # スムーズな追従（線形補間）
+                lerp_factor = 0.08  # 少し速めの追従
+                self.camera_x += (target_x - self.camera_x) * lerp_factor
+                self.camera_y += (target_y - self.camera_y) * lerp_factor
+        # camera_mode == 2 の場合は何もしない（手動制御のみ）
 
     def _create_background_cache(self):
         """背景キャッシュを作成"""
@@ -469,11 +463,12 @@ class Aquarium:
 
         for pid in dead_pids:
             fish_name = self.fishes[pid].process_name
-            # 追従対象の魚が削除される場合は追従モードを解除
+            # 追従対象の魚が削除される場合は自動センタリングモードに切り替え
             if self.selected_fish and self.selected_fish.pid == pid:
-                self.camera_follow_mode = False
+                if self.camera_mode == 1:  # 選択魚追従モードの場合
+                    self.camera_mode = 0  # 自動センタリングモードに切り替え
+                    print(f"📹 追従対象の魚が削除されました。自動センタリングモードに切り替えます。")
                 self.selected_fish = None
-                print(f"📹 追従対象の魚が削除されました。追従モードを解除します。")
             if self.follow_target and self.follow_target.pid == pid:
                 self.follow_target = None
             del self.fishes[pid]
@@ -595,14 +590,17 @@ class Aquarium:
         else:
             quality_label = "full (固定)"
 
+        # プロセス制限とソート情報を追加
+        limit_str = "無制限" if self.process_limit is None else str(self.process_limit)
+
         stats_lines = [
             f"総プロセス数: {self.total_processes}",
             f"表示中の魚: {len(self.fishes)}",
+            f"制限: {limit_str}",
             f"総メモリ使用率: {self.total_memory:.1f}%",
             f"平均CPU使用率: {self.avg_cpu:.2f}%",
             f"総スレッド数: {self.total_threads}",
             f"FPS: {current_fps:.1f}",
-            f"パーティクル数: {self.performance_monitor['adaptive_particle_count']}",
             f"描画品質: {quality_label}",
         ]
 
@@ -611,29 +609,26 @@ class Aquarium:
             if reduced_threshold is not None and minimal_threshold is not None:
                 stats_lines.append(f"品質閾値: 簡易≦{reduced_threshold:.1f}fps／最小≦{minimal_threshold:.1f}fps")
 
-        # プロセス制限とソート情報を追加
-        limit_str = "無制限" if self.process_limit is None else str(self.process_limit)
-        stats_lines.append(f"制限: {limit_str}")
-
         field_names = {"cpu": "CPU", "memory": "メモリ", "name": "名前", "pid": "PID"}
         order_symbol = "↓" if self.sort_order == "desc" else "↑"
         stats_lines.append(f"ソート: {field_names.get(self.sort_by, self.sort_by)} {order_symbol}")
 
-        # Retinaディスプレイ情報
-        if hasattr(self, 'retina_info') and self.retina_info['is_retina']:
-            stats_lines.append(f"Retina: {self.retina_info['scale_factor']:.1f}x")
+        # # Retinaディスプレイ情報
+        # if hasattr(self, 'retina_info') and self.retina_info['is_retina']:
+        #     stats_lines.append(f"Retina: {self.retina_info['scale_factor']:.1f}x")
 
         # カメラ情報
-        stats_lines.append(f"カメラ: ({self.camera_x:.0f}, {self.camera_y:.0f})")
-        stats_lines.append(f"ズーム: {self.zoom_level:.2f}x")
-        if self.camera_follow_mode and self.selected_fish:
-            stats_lines.append(f"📹 追従: PID {self.selected_fish.pid}")
-        elif self.follow_target:
-            stats_lines.append(f"追従: PID {self.follow_target.pid}")
-        elif self.auto_center:
-            stats_lines.append("追従: 自動センタリング")
-        else:
-            stats_lines.append("追従: なし")
+        stats_lines.append(f"カメラ座標: ({self.camera_x:.0f}, {self.camera_y:.0f})")
+        stats_lines.append(f"カメラズーム: {self.zoom_level:.2f}x")
+        if self.camera_mode == 0:
+            stats_lines.append("モード: 自動センタリング")
+        elif self.camera_mode == 1:
+            if self.selected_fish:
+                stats_lines.append(f"カメラモード: 追従 (PID {self.selected_fish.pid})")
+            else:
+                stats_lines.append("カメラモード: 追従 (魚未選択)")
+        else:  # camera_mode == 2
+            stats_lines.append("カメラモード: 手動制御")
 
         # 背景パネル
         panel_padding_x = 10
@@ -687,7 +682,7 @@ class Aquarium:
         help_lines = [
             "操作方法:",
             "クリック: 生命体を選択",
-            "T: カメラ追従モード切替",
+            "C: カメラモード切替",
             "ホイール: ズーム",
             "右クリック+ドラッグ: パン",
             "R: カメラリセット",
@@ -931,27 +926,25 @@ class Aquarium:
                     # ソート順序の切り替え
                     self._toggle_sort_order()
                 elif event.key == pygame.K_c:
-                    # 自動センタリングの切り替え
-                    self.auto_center = not self.auto_center
-                    print(f"自動センタリング: {'オン' if self.auto_center else 'オフ'}")
-                elif event.key == pygame.K_t:
-                    # 選択魚追従モードの切り替え
-                    if self.selected_fish:
-                        self.camera_follow_mode = not self.camera_follow_mode
-                        if self.camera_follow_mode:
-                            print(f"📹 カメラ追従モード: オン (PID {self.selected_fish.pid} - {self.selected_fish.process_name})")
+                    # カメラモードの循環切り替え
+                    self.camera_mode = (self.camera_mode + 1) % 3
+                    if self.camera_mode == 0:
+                        print("📹 カメラモード: 自動センタリング")
+                    elif self.camera_mode == 1:
+                        if self.selected_fish:
+                            print(f"📹 カメラモード: 選択魚追従 (PID {self.selected_fish.pid} - {self.selected_fish.process_name})")
                         else:
-                            print("📹 カメラ追従モード: オフ")
-                    else:
-                        print("⚠️ 追従する魚を選択してください（左クリック）")
+                            print("📹 カメラモード: 選択魚追従 (魚を選択してください)")
+                    else:  # camera_mode == 2
+                        print("📹 カメラモード: 手動制御")
                 elif event.key == pygame.K_r:
                     # カメラリセット
                     self.camera_x = 0.0
                     self.camera_y = 0.0
                     self.zoom_level = 1.0
                     self.follow_target = None
-                    self.camera_follow_mode = False  # 追従モードもリセット
-                    print("カメラをリセットしました")
+                    self.camera_mode = 0  # 自動センタリングモードにリセット
+                    print("カメラをリセットしました（自動センタリングモード）")
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # 左クリック
                     self.is_dragging = True
