@@ -579,7 +579,7 @@ class Fish:
             for i, (sat_x, sat_y) in enumerate(satellites[:max_display]):
                 # スレッド数が多いほど衛星サイズも大きく
                 thread_size_factor = 1.0 + (self.thread_count / 20.0)
-                sat_size = max(1.5, min(size * 0.18 * thread_size_factor, size * 0.65))
+                sat_size = max(1.5, min(size * 0.20 * thread_size_factor, size * 0.7))
                 # 小さな魚として描画
                 self._draw_small_fish(screen, color, alpha//2, sat_x, sat_y, sat_size)
 
