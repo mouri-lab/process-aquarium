@@ -318,51 +318,50 @@ class Fish:
                             avoidance_x += (dx_avoid / dist_avoid) * avoidance_strength
                             avoidance_y += (dy_avoid / dist_avoid) * avoidance_strength
 
-        # 力関係に基づく回避システム（弱い方が強い方から逃げる）
-        if nearby_fish:
+        # 軽量化メモリバトルシステム（3フレームに1回計算）
+        if nearby_fish and self.age % 3 == 0:  # 計算頻度を1/3に削減
+            # 自分のメモリ力を事前計算（1回のみ）
+            my_memory_power = self._calculate_memory_power_light(nearby_fish)
+
             for other_fish in nearby_fish:
-                # 群れ同士の場合：小さい群れが大きい群れから逃げる
-                if (other_fish.school_members and self.school_members and 
-                    other_fish.school_members != self.school_members):
-                    
-                    my_school_size = len(self.school_members)
-                    other_school_size = len(other_fish.school_members)
-                    
-                    # 自分の群れが小さい場合のみ逃げる
-                    if my_school_size < other_school_size:
-                        dx_avoid = self.x - other_fish.x
-                        dy_avoid = self.y - other_fish.y
+                # 早期スキップ：マンハッタン距離で大まかにチェック
+                dx_abs = abs(self.x - other_fish.x)
+                dy_abs = abs(self.y - other_fish.y)
+                manhattan_dist = dx_abs + dy_abs
+
+                if manhattan_dist > 300:  # 遠すぎる場合はスキップ
+                    continue
+
+                # 相手のメモリ力を計算
+                other_memory_power = other_fish._calculate_memory_power_light(nearby_fish)
+
+                # メモリ力が負けている場合のみ逃げる
+                if my_memory_power < other_memory_power:
+                    dx_avoid = self.x - other_fish.x
+                    dy_avoid = self.y - other_fish.y
+
+                    # 簡略化距離計算（近い場合のみ平方根計算）
+                    if manhattan_dist < 250:
                         dist_avoid = math.sqrt(dx_avoid*dx_avoid + dy_avoid*dy_avoid)
-                        
-                        if dist_avoid < 200:  # 200ピクセル以内で回避開始
-                            # 群れサイズの差が大きいほど強く逃げる
-                            size_ratio = other_school_size / my_school_size
-                            avoidance_strength = (200 - dist_avoid) / 200 * 0.012 * min(size_ratio, 3.0)
+                        avoidance_distance = 180  # 回避距離短縮
+
+                        if dist_avoid < avoidance_distance:
+                            # シンプルな回避力計算
+                            power_ratio = min(other_memory_power / max(my_memory_power, 0.1), 3.0)
+                            avoidance_strength = (avoidance_distance - dist_avoid) / avoidance_distance * 0.012 * power_ratio
+
                             if dist_avoid > 0:
                                 avoidance_x += (dx_avoid / dist_avoid) * avoidance_strength
                                 avoidance_y += (dy_avoid / dist_avoid) * avoidance_strength
-                
-                # 単独魚が群れから逃げる場合
-                elif (not self.school_members and other_fish.school_members):
-                    dx_avoid = self.x - other_fish.x
-                    dy_avoid = self.y - other_fish.y
-                    dist_avoid = math.sqrt(dx_avoid*dx_avoid + dy_avoid*dy_avoid)
-                    
-                    if dist_avoid < 180:  # 180ピクセル以内で回避
-                        # 群れサイズが大きいほど強く逃げる
-                        school_size = len(other_fish.school_members)
-                        avoidance_strength = (180 - dist_avoid) / 180 * 0.015 * min(school_size / 3.0, 2.0)
-                        if dist_avoid > 0:
-                            avoidance_x += (dx_avoid / dist_avoid) * avoidance_strength
-                            avoidance_y += (dy_avoid / dist_avoid) * avoidance_strength
 
-        # 目標位置に向かう力（群れ魚・単独魚共通）
+        # 目標位置に向かう力（軽量化版）
         dx = self.target_x - self.x
         dy = self.target_y - self.y
-        distance = math.sqrt(dx*dx + dy*dy)
+        # 平方根計算をスキップして距離の2乗で判定
+        distance_sq = dx*dx + dy*dy
 
-        if distance > 5:
-            self.vx += dx * 0.0008  # 少し速度を上げて活発に
+        if distance_sq > 25:  # distance > 5 の2乗
+            self.vx += dx * 0.0008
             self.vy += dy * 0.0008
 
         # 回避力を適用（群れ魚・単独魚共通）
@@ -1117,3 +1116,44 @@ class Fish:
 
         # 画面に描画
         screen.blit(bubble_surface, (bubble_x, bubble_y))
+
+    def _calculate_memory_power(self, nearby_fish: List['Fish']) -> float:
+        """メモリ力を計算（群れの場合は合計、単独の場合は自分のメモリ）"""
+        if self.school_members:
+            # 群れの場合：同じ群れのメンバー全体のメモリ合計
+            total_memory = 0.0
+            school_member_pids = set(self.school_members)
+
+            # 自分のメモリを追加
+            total_memory += self.memory_percent
+
+            # 近くにいる同じ群れのメンバーのメモリを合計
+            for fish in nearby_fish:
+                if fish.pid in school_member_pids and fish.pid != self.pid:
+                    total_memory += fish.memory_percent
+
+            return total_memory
+        else:
+            # 単独の場合：自分のメモリのみ
+            return self.memory_percent
+
+    def _calculate_memory_power_light(self, nearby_fish: List['Fish']) -> float:
+        """軽量版メモリ力計算（精度を落として高速化）"""
+        if self.school_members:
+            # 群れの場合：自分のメモリ + 近くの群れメンバー数 × 平均推定値
+            total_memory = self.memory_percent
+            school_count = 0
+
+            # 近くの同じ群れメンバーをカウント（メモリ値は推定）
+            for fish in nearby_fish:
+                if fish.school_members == self.school_members and fish.pid != self.pid:
+                    school_count += 1
+
+            # 推定値で計算（正確性より速度重視）
+            estimated_avg_memory = 2.0  # 平均メモリ使用率の推定値
+            total_memory += school_count * estimated_avg_memory
+
+            return total_memory
+        else:
+            # 単独の場合：自分のメモリのみ
+            return self.memory_percent
