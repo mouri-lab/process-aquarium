@@ -202,6 +202,7 @@ class Fish:
         self.glow_intensity = min(glow_factor * 255, 255)
 
         # CPU使用率に基づく移動速度調整（指数関数的に高速化）
+        # 注意：この部分は後で群れの平均CPU使用率で上書きされる可能性がある
         # 指数関数で速度倍率を計算：1.0 + (exp(4 * cpu) - 1) / (exp(4) - 1) * 6
         # これにより0%で1倍、100%で約7倍の速度になる
         speed_factor = 1.0 + (math.exp(4 * cpu_normalized) - 1) / (math.exp(4) - 1) * 6.0
@@ -286,12 +287,32 @@ class Fish:
             if school_fish:
                 flocking_force_x, flocking_force_y = self.calculate_flocking_forces(school_fish)
 
-        # ランダムな目標位置の変更（群れ行動がない場合）
-        if not self.school_members and random.random() < 0.02:  # 2%に上げてより活発に
-            # 広大な仮想空間で泳ぐ（カメラシステム対応）
-            world_size = 3000  # 仮想世界のサイズ
-            self.target_x = random.uniform(-world_size, world_size)
-            self.target_y = random.uniform(-world_size, world_size)
+        # 目標位置の更新システム
+        world_size = 3000  # 仮想世界のサイズ
+        
+        if self.school_members and nearby_fish:
+            # 群れの場合：代表魚システム
+            leader = self.get_school_leader_fish(nearby_fish)
+            if leader.pid == self.pid:
+                # 自分が代表魚の場合：群れ全体の新しい目標を決定
+                if random.random() < 0.04:  # 代表魚は4%の確率で新目標を設定
+                    self.target_x = random.uniform(-world_size, world_size)
+                    self.target_y = random.uniform(-world_size, world_size)
+            else:
+                # 代表魚ではない場合：代表魚の目標を参考にする
+                if random.random() < 0.02:  # 2%の確率で代表魚寄りの目標を設定
+                    # 代表魚の目標位置に近い場所を新しい目標にする
+                    offset_range = 200  # 代表魚目標からの最大オフセット
+                    self.target_x = leader.target_x + random.uniform(-offset_range, offset_range)
+                    self.target_y = leader.target_y + random.uniform(-offset_range, offset_range)
+                    # 境界チェック
+                    self.target_x = max(-world_size, min(world_size, self.target_x))
+                    self.target_y = max(-world_size, min(world_size, self.target_y))
+        else:
+            # 単独魚の場合：従来通りのランダム目標
+            if random.random() < 0.02:  # 2%に上げてより活発に
+                self.target_x = random.uniform(-world_size, world_size)
+                self.target_y = random.uniform(-world_size, world_size)
 
         # 基本的な移動計算
         # 回避力の初期化（運動エネルギーシステムで統一管理）
@@ -372,12 +393,43 @@ class Fish:
         self.vx += self.ipc_attraction_x
         self.vy += self.ipc_attraction_y
 
+        # 群れの移動速度システム：群れの平均CPU使用率で最終速度制限を再計算
+        if nearby_fish and self.school_members:
+            school_average_cpu = self.get_school_average_cpu(nearby_fish)
+            # 群れの平均CPU使用率で速度制限を再計算
+            cpu_normalized = school_average_cpu / 100.0
+            speed_factor = 1.0 + (math.exp(4 * cpu_normalized) - 1) / (math.exp(4) - 1) * 6.0
+            max_speed = 2.5 * min(speed_factor, 8.0)  # 群れは少し速く移動できる
+            self.vx = max(min(self.vx, max_speed), -max_speed)
+            self.vy = max(min(self.vy, max_speed), -max_speed)
+
         # 位置更新
         self.x += self.vx
         self.y += self.vy
 
-        # 画面境界は無制限 - 魚は自由に泳ぎ回れる
-        # カメラシステムで追跡するため、境界での反射は削除
+        # 仮想空間の境界反射システム
+        world_boundary = 3000
+        bounce_damping = 0.8  # 反射時の減衰係数
+        
+        # X軸の境界チェック
+        if self.x < -world_boundary:
+            self.x = -world_boundary
+            self.vx = abs(self.vx) * bounce_damping  # 右向きに反射
+            self.target_x = random.uniform(-world_boundary + 100, world_boundary)  # 新しい目標
+        elif self.x > world_boundary:
+            self.x = world_boundary  
+            self.vx = -abs(self.vx) * bounce_damping  # 左向きに反射
+            self.target_x = random.uniform(-world_boundary, world_boundary - 100)  # 新しい目標
+            
+        # Y軸の境界チェック
+        if self.y < -world_boundary:
+            self.y = -world_boundary
+            self.vy = abs(self.vy) * bounce_damping  # 下向きに反射
+            self.target_y = random.uniform(-world_boundary + 100, world_boundary)  # 新しい目標
+        elif self.y > world_boundary:
+            self.y = world_boundary
+            self.vy = -abs(self.vy) * bounce_damping  # 上向きに反射
+            self.target_y = random.uniform(-world_boundary, world_boundary - 100)  # 新しい目標
 
         return True  # まだ生きている
 
@@ -1183,3 +1235,35 @@ class Fish:
             mass = max(self.memory_percent, 0.1)  # 質量（メモリ使用率）
             velocity = max(self.cpu_percent, 0.1)  # 速度（CPU使用率）
             return 0.5 * mass * (velocity ** 2)
+
+    def get_school_average_cpu(self, nearby_fish: List['Fish']) -> float:
+        """群れの平均CPU使用率を計算"""
+        if not self.school_members:
+            return self.cpu_percent
+
+        total_cpu = self.cpu_percent
+        count = 1
+
+        # 同じ群れのメンバーのCPU使用率を集計
+        for fish in nearby_fish:
+            if fish.school_members == self.school_members and fish.pid != self.pid:
+                total_cpu += fish.cpu_percent
+                count += 1
+
+        return total_cpu / count
+
+    def get_school_leader_fish(self, nearby_fish: List['Fish']) -> 'Fish':
+        """群れ内で最もCPU使用率が高い代表魚を取得"""
+        if not self.school_members:
+            return self
+
+        leader = self
+        max_cpu = self.cpu_percent
+
+        # 同じ群れのメンバー中から最大CPU使用率を探す
+        for fish in nearby_fish:
+            if fish.school_members == self.school_members and fish.cpu_percent > max_cpu:
+                leader = fish
+                max_cpu = fish.cpu_percent
+
+        return leader
