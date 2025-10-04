@@ -9,6 +9,19 @@ import random
 import time
 from typing import Tuple, Optional, List
 
+
+MAX_THREAD_SATELLITES = 14
+"""Maximum number of thread satellites rendered around a fish."""
+
+SATELLITE_RADIUS_BASE_MULTIPLIER = 1.8
+"""Baseline spacing multiplier applied to the fish size for thread satellites."""
+
+SATELLITE_RADIUS_LINEAR_FACTOR = 0.16
+"""Linear scaling factor applied per effective thread to widen the orbit."""
+
+SATELLITE_RADIUS_EASING_FACTOR = 0.06
+"""Logarithmic easing factor that adds gentle extra spacing as threads increase."""
+
 class Fish:
     """
     プロセスを表現するデジタル生命体クラス
@@ -464,18 +477,24 @@ class Fish:
                     pass
 
     def get_thread_satellites(self) -> list:
-        """スレッド数に応じた衛星の位置を計算（指数関数的に強調）"""
+        """スレッド数に応じた衛星の位置を計算"""
         satellites = []
         if self.thread_count > 1:
-            capped_threads = min(self.thread_count - 1, 12)
+            capped_threads = min(self.thread_count - 1, MAX_THREAD_SATELLITES)
             if capped_threads <= 0:
                 return satellites
 
-            satellite_count = max(1, min(int(math.ceil(capped_threads ** 0.7)), 8))
+            satellite_count = max(1, capped_threads)
+
+            effective_threads = min(self.thread_count, MAX_THREAD_SATELLITES + 1)
 
             for i in range(satellite_count):
                 angle = (2 * math.pi * i) / satellite_count + self.age * 0.018
-                radius_multiplier = 1.1 + min(self.thread_count, 12) * 0.1
+                radius_multiplier = (
+                    SATELLITE_RADIUS_BASE_MULTIPLIER
+                    + effective_threads * SATELLITE_RADIUS_LINEAR_FACTOR
+                    + math.log1p(effective_threads) * SATELLITE_RADIUS_EASING_FACTOR
+                )
                 radius = self.current_size * radius_multiplier
                 sat_x = self.x + math.cos(angle) * radius
                 sat_y = self.y + math.sin(angle) * radius
@@ -575,8 +594,8 @@ class Fish:
         # スレッド衛星の描画（小魚の群れとして）
         if quality == "full" and self.thread_count > 1 and size > 5:
             satellites = self.get_thread_satellites()
-            # スレッド数に応じて表示数を増加（最大12個まで）
-            max_display = min(len(satellites), max(4, self.thread_count // 2))
+            # スレッド数に応じて表示数を増加（制限は MAX_THREAD_SATELLITES で一元管理）
+            max_display = min(len(satellites), MAX_THREAD_SATELLITES)
             for i, (sat_x, sat_y) in enumerate(satellites[:max_display]):
                 # スレッド数が多いほど衛星サイズも大きく
                 thread_size_factor = 1.0 + (self.thread_count / 20.0)
