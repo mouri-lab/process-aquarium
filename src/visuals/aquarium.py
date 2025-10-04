@@ -890,7 +890,7 @@ class Aquarium:
 
     def _cycle_process_limit(self):
         """プロセス制限を切り替え"""
-        limits = [None, 10, 20, 50, 100, 200]
+        limits = [None, 10, 20, 50, 100, 200, 400]
         current_index = limits.index(self.process_limit) if self.process_limit in limits else 0
         next_index = (current_index + 1) % len(limits)
         self.process_limit = limits[next_index]

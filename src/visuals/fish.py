@@ -561,7 +561,7 @@ class Fish:
         # メモリ巨大魚の波紋エフェクト（メモリ使用率5%以上）
         enable_memory_fx = (quality == "full")
         if enable_memory_fx and self.is_memory_giant and hasattr(self, 'memory_percent'):
-            if self.memory_percent >= 5.0:
+            if self.memory_percent >= 1.0:
                 self._draw_memory_giant_effects(screen, alpha)
             # 超巨大魚（20%以上）には追加の雷エフェクト
             if self.memory_percent >= 20.0:
