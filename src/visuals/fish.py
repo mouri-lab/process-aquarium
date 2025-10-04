@@ -180,7 +180,7 @@ class Fish:
 
         # メモリ巨大魚の判定（より抑制された閾値）
         # self.is_memory_giant = memory_percent >= 8.0 or memory_factor >= 5.5
-        self.is_memory_giant = memory_percent >= 1.0 or memory_factor >= 5.5
+        self.is_memory_giant = memory_percent >= 2.0 or memory_factor >= 5.5
 
         # CPU使用率に基づく光り方（指数関数的に強調）
         cpu_normalized = cpu_percent / 100.0
