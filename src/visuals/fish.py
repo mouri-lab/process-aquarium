@@ -393,9 +393,9 @@ class Fish:
         self.vx += random.uniform(-0.05, 0.05)
         self.vy += random.uniform(-0.05, 0.05)
 
-        # 摩擦
-        self.vx *= 0.98
-        self.vy *= 0.98
+        # 摩擦（0に設定：慣性による動き）
+        # self.vx *= 0.98
+        # self.vy *= 0.98
 
         # IPC通信による吸引力を適用
         self.vx += self.ipc_attraction_x
