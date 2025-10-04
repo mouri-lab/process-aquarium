@@ -2,6 +2,13 @@
 
 Process Aquarium is an application visualizing processes as fish in an aquarium. Each fish represents a running process on your system.
 
+## Requirements
+
+- Python 3.10+
+- `pygame-ce` (installed automatically via `pip install -e .` or `pip install pygame-ce`)
+
+If you previously used the legacy `pygame` package, uninstall it before installing `pygame-ce` to avoid binary conflicts.
+
 ## eBPF Integration (Design Draft)
 
 This branch introduces an abstraction layer to allow future event–driven

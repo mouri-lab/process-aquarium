@@ -117,7 +117,7 @@ class Aquarium:
         self.process_limit = int(limit_str) if limit_str else None
         self.sort_by = os.environ.get("AQUARIUM_SORT_BY", "cpu")
         self.sort_order = os.environ.get("AQUARIUM_SORT_ORDER", "desc")
-        
+
         # ProcessManagerに設定を反映
         if self.process_limit is not None:
             self.process_manager.set_process_limit(self.process_limit)
@@ -171,7 +171,7 @@ class Aquarium:
         self.show_debug = False  # デフォルトでデバッグ表示をオフ
         self.show_ipc = True    # IPC可視化をオン
         self.debug_text_lines = []
-        
+
         # 通信相手のハイライト
         self.highlighted_partners = []  # ハイライトする通信相手のPIDリスト
 
@@ -284,7 +284,7 @@ class Aquarium:
 
                 fish = Fish(pid, proc.name, x, y)
                 self.fishes[pid] = fish
-                
+
                 # プロセス誕生ログ
                 print(f"🐟 新しいプロセス誕生: PID {pid} ({proc.name})")
 
@@ -308,7 +308,7 @@ class Aquarium:
 
         # IPC接続の更新
         self._update_ipc_connections()
-        
+
         # IPC吸引力の適用
         self._apply_ipc_attraction()
 
@@ -347,12 +347,12 @@ class Aquarium:
         #     print(f"⏰ 死亡進行中: {', '.join(dying_fish_details[:5])}{'...' if len(dying_fish_details) > 5 else ''}")
 
         # print(f"📊 現在の魚数: {len(self.fishes)}, 削除対象: {len(dead_pids)}, 総プロセス数: {len(process_data)}")
-        
+
         for pid in dead_pids:
             fish_name = self.fishes[pid].process_name
             del self.fishes[pid]
             # print(f"🗑️ 魚を削除完了: PID {pid} ({fish_name})")
-            
+
         # if dead_pids:
         #     print(f"📊 削除後の魚数: {len(self.fishes)}")
 
@@ -393,7 +393,7 @@ class Aquarium:
     def handle_mouse_click(self, pos: Tuple[int, int]):
         """マウスクリックによるFish選択と吹き出しクリック処理"""
         x, y = pos
-        
+
         # まず吹き出しのクリック判定をチェック
         for fish in self.fishes.values():
             if fish.bubble_rect and fish.is_talking:
@@ -402,7 +402,7 @@ class Aquarium:
                     # 吹き出しがクリックされた場合、通信相手をハイライト
                     self._highlight_communication_partners(fish)
                     return
-        
+
         # 吹き出しがクリックされなかった場合、通常のFish選択
         self.selected_fish = None
         self.highlighted_partners = []  # 通信相手のハイライトをクリア
@@ -418,14 +418,14 @@ class Aquarium:
     def _highlight_communication_partners(self, fish):
         """通信相手をハイライト表示"""
         self.highlighted_partners = fish.talk_partners.copy()
-        
+
         # 通信相手の情報を表示
         partner_names = []
         for partner_pid in fish.talk_partners:
             if partner_pid in self.fishes:
                 partner_fish = self.fishes[partner_pid]
                 partner_names.append(f"{partner_fish.name} (PID:{partner_pid})")
-        
+
         if partner_names:
             print(f"プロセス {fish.name} (PID:{fish.pid}) の通信相手:")
             for name in partner_names:
@@ -453,7 +453,7 @@ class Aquarium:
         # プロセス制限とソート情報を追加
         limit_str = "無制限" if self.process_limit is None else str(self.process_limit)
         stats_lines.append(f"制限: {limit_str}")
-        
+
         field_names = {"cpu": "CPU", "memory": "メモリ", "name": "名前", "pid": "PID"}
         order_symbol = "↓" if self.sort_order == "desc" else "↑"
         stats_lines.append(f"ソート: {field_names.get(self.sort_by, self.sort_by)} {order_symbol}")
@@ -546,18 +546,18 @@ class Aquarium:
         for fish in self.fishes.values():
             fish.ipc_attraction_x = 0.0
             fish.ipc_attraction_y = 0.0
-            
+
         # IPC接続ペアに対して吸引力を適用
         for proc1, proc2 in self.ipc_connections:
             if proc1.pid in self.fishes and proc2.pid in self.fishes:
                 fish1 = self.fishes[proc1.pid]
                 fish2 = self.fishes[proc2.pid]
-                
+
                 # 距離を計算
                 dx = fish2.x - fish1.x
                 dy = fish2.y - fish1.y
                 distance = math.sqrt(dx*dx + dy*dy)
-                
+
                 if distance > 5:  # 極端に近い場合は無視
                     # 吸引力の強さを距離に応じて調整
                     attraction_strength = 0.002  # 基本の吸引力
@@ -565,17 +565,17 @@ class Aquarium:
                         attraction_strength *= 0.5
                     elif distance > 300:  # 遠い場合は強く
                         attraction_strength *= 2.0
-                    
+
                     # 正規化された方向ベクトル
                     force_x = (dx / distance) * attraction_strength
                     force_y = (dy / distance) * attraction_strength
-                    
+
                     # 両方の魚に吸引力を適用
                     fish1.ipc_attraction_x += force_x
                     fish1.ipc_attraction_y += force_y
                     fish2.ipc_attraction_x -= force_x
                     fish2.ipc_attraction_y -= force_y
-                    
+
                     # 近距離で会話フラグをセット
                     if distance < 80:  # 80ピクセル以内で会話
                         fish1.is_talking = True
@@ -850,7 +850,7 @@ class Aquarium:
             should_update = fish.is_dying or len(fish_list) <= 50 or i % update_interval == (int(current_time * 10) % update_interval)
             if not should_update:
                 continue
-            
+
             if fish.is_dying:
                 dying_fish_updated += 1
             total_fish_updated += 1
@@ -950,7 +950,7 @@ class Aquarium:
                     last_print = now
                     data_source = stats.get('data_source', 'unknown')
                     base_stats = f"procs={stats['total_processes']} new={stats['new_processes']} dying={stats['dying_processes']} mem={stats['total_memory_percent']:.2f}% cpu_avg={stats['average_cpu_percent']:.2f}% threads={stats['total_threads']}"
-                    
+
                     # eBPFの場合はイベント統計も表示
                     if 'ebpf_events' in stats:
                         print(f"[stats|{data_source}] {base_stats} events=[{stats['ebpf_events']}]")
@@ -1039,25 +1039,25 @@ class Aquarium:
             for test_text in test_texts:
                 try:
                     test_surface = font.render(test_text, True, (255, 255, 255))
-                    
+
                     # 基本的な描画チェック
                     if test_surface.get_width() == 0 or test_surface.get_height() == 0:
                         continue
-                    
+
                     # 文字数と幅の関係をチェック（日本語文字は一定の幅を持つべき）
                     expected_min_width = len(test_text) * (font.get_height() * 0.5)  # 文字数 × フォント高さの半分
                     if test_surface.get_width() < expected_min_width:
                         continue  # 幅が小さすぎる = 文字が適切に描画されていない
-                    
+
                     # 少なくとも1つのテキストで有効な描画ができた
                     return True
-                        
+
                 except Exception:
                     continue
-            
+
             # すべてのテストテキストで失敗
             return False
-            
+
         except Exception:
             return False
 
@@ -1065,7 +1065,7 @@ class Aquarium:
         """日本語対応フォントを取得（クロスプラットフォーム対応）"""
         import platform
         system = platform.system()
-        
+
         # プラットフォーム別の日本語フォントリスト（優先順）
         if system == "Darwin":  # macOS
             japanese_fonts = [
@@ -1142,13 +1142,13 @@ class Aquarium:
                 font = pygame.font.SysFont(font_name, size)
                 # 日本語文字でテスト（ひらがな、カタカナ、漢字）
                 test_texts = ["あいう", "アイウ", "日本語", "テスト"]
-                
+
                 # フォントが日本語文字を正しく描画できるかテスト
                 valid_font = self._validate_japanese_font(font, test_texts, font_name)
                 if valid_font:
                     print(f"✅ 日本語フォント '{font_name}' を使用します (サイズ: {size}) - {system}")
                     return font
-                    
+
             except Exception as e:
                 print(f"❌ フォント '{font_name}' の読み込みに失敗: {e}")
                 continue

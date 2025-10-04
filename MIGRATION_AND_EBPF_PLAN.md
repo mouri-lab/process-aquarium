@@ -1,7 +1,7 @@
 # Process Aquarium Migration & eBPF Plan
 
 ## 1. 現状サマリ (feat/ebpf_monitor ブランチ)
-- 可視化: `pygame` によるプロセス群ビジュアライゼーション (魚エンティティ)
+- 可視化: `pygame-ce` によるプロセス群ビジュアライゼーション (魚エンティティ)
 - データ取得: 既定は `psutil` ポーリング (1s)
 - 抽象化導入:
   - `src/core/types.py`: `ProcessInfo`, `ProcessLifecycleEvent`, `IPCConnection`
