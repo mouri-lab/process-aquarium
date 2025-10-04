@@ -379,6 +379,12 @@ class ProcessManager:
 
     def get_related_processes(self, pid: int, max_distance: int = 2) -> List[ProcessInfo]:
         """指定されたプロセスに関連するプロセス群を取得（群れ行動用）"""
+        # まず起点プロセスの親を確認
+        start_proc = self.processes.get(pid)
+        if start_proc is not None and start_proc.ppid <= 1:
+            # launchd配下のプロセスは群れ形成禁止 - 単独行動のみ
+            return [start_proc]
+
         related = []
         visited = set()
 
@@ -387,16 +393,18 @@ class ProcessManager:
                 return
 
             visited.add(current_pid)
-            if current_pid in self.processes:
-                related.append(self.processes[current_pid])
+            current_proc = self.processes.get(current_pid)
+            if current_proc is not None:
+                related.append(current_proc)
 
             # 子プロセスを追加
             for child_pid in self.process_families.get(current_pid, []):
                 collect_related(child_pid, distance + 1)
 
             # 兄弟プロセスを追加
-            if current_pid in self.processes:
-                parent_pid = self.processes[current_pid].ppid
+            if current_proc is not None:
+                parent_pid = current_proc.ppid
+                # 通常の親プロセス配下では全兄弟を含める
                 for sibling_pid in self.process_families.get(parent_pid, []):
                     if sibling_pid != current_pid:
                         collect_related(sibling_pid, distance + 1)
