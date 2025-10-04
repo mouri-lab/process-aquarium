@@ -32,6 +32,10 @@ def main_cli():
     parser.add_argument("--limit", type=int, default=None, help="Limit the number of processes displayed (default: no limit)")
     parser.add_argument("--sort-by", choices=["cpu", "memory", "name", "pid"], default="cpu", help="Sort processes by field (default: cpu)")
     parser.add_argument("--sort-order", choices=["asc", "desc"], default="desc", help="Sort order (default: desc)")
+    parser.add_argument("--gpu-driver", default=None, help="SDL render driver hint (e.g. metal, opengl, direct3d)")
+    parser.add_argument("--gpu", dest="gpu", action="store_true", help="Enable SDL2 GPU accelerated renderer (requires pygame-ce)")
+    parser.add_argument("--no-gpu", dest="gpu", action="store_false", help="Disable SDL2 GPU renderer even if environment requests it")
+    parser.set_defaults(gpu=None)
     args = parser.parse_args()
 
     if args.source:
@@ -40,7 +44,10 @@ def main_cli():
         os.environ["AQUARIUM_LIMIT"] = str(args.limit)
     os.environ["AQUARIUM_SORT_BY"] = args.sort_by
     os.environ["AQUARIUM_SORT_ORDER"] = args.sort_order
-    aquarium = Aquarium(width=args.width, height=args.height, headless=args.headless, headless_interval=args.headless_interval)
+    if args.gpu_driver:
+        os.environ["AQUARIUM_GPU_DRIVER"] = args.gpu_driver
+    aquarium = Aquarium(width=args.width, height=args.height, headless=args.headless,
+                        headless_interval=args.headless_interval, use_gpu=args.gpu)
     aquarium.run()
 
 

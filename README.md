@@ -79,6 +79,29 @@ Optional flags:
 * `--width / --height` still accepted (affects internal surfaces only)
 * `--headless-interval <seconds>` controls stats print frequency (default 1.0)
 
+## GPU Acceleration (SDL2 Renderer)
+
+`pygame-ce` exposes the SDL2 GPU renderer. You can opt-in to it for smoother animation on capable hardware:
+
+```bash
+python main.py --gpu
+```
+
+Environment-based toggle:
+
+```bash
+export AQUARIUM_GPU=1
+python main.py
+```
+
+Additional knobs:
+
+* `--gpu-driver <name>` or `AQUARIUM_GPU_DRIVER=<metal|opengl|direct3d|vulkan>` to hint SDL which backend to prefer.
+* `AQUARIUM_VSYNC=0` to disable vsync (defaults to `1`).
+* Resizing the GPU window now resizes the renderer and UI automatically.
+
+If the accelerated renderer fails to initialize (driver mismatch, unsupported GPU, etc.) the application automatically falls back to the classic software surface path.
+
 ## Process Limiting and Sorting
 
 You can limit the number of processes displayed and sort them by various criteria:

@@ -34,13 +34,30 @@ class Aquarium:
     プロセス監視とビジュアライゼーションを統合管理
     """
 
-    def __init__(self, width: int = 1200, height: int = 800, headless: bool = False, headless_interval: float = 1.0):
+    def __init__(self, width: int = 1200, height: int = 800, headless: bool = False,
+                 headless_interval: float = 1.0, use_gpu: Optional[bool] = None):
         # Pygameの初期化
         self.headless = headless
         self.headless_interval = headless_interval
         if self.headless:
             # ダミードライバでウィンドウ生成を抑制
             os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
+        self._gpu_texture_type = None
+        self.gpu_renderer = None
+        self.gpu_window = None
+        self.gpu_texture = None
+        self.requested_gpu = use_gpu if use_gpu is not None else self._env_flag("AQUARIUM_GPU", False)
+        if self.headless and self.requested_gpu:
+            print("[GPU] ヘッドレスモードのためGPUレンダラは無効化されます。")
+            self.requested_gpu = False
+        self.gpu_driver_hint = os.environ.get("AQUARIUM_GPU_DRIVER")
+        if self.requested_gpu and self.gpu_driver_hint:
+            os.environ.setdefault("SDL_HINT_RENDER_DRIVER", self.gpu_driver_hint)
+        self.use_gpu = False
+        self._windowevent_type = getattr(pygame, "WINDOWEVENT", None)
+        self._windowevent_resized = getattr(pygame, "WINDOWEVENT_RESIZED", None)
+        self._windowevent_size_changed = getattr(pygame, "WINDOWEVENT_SIZE_CHANGED", None)
+        self._windowevent_close = getattr(pygame, "WINDOWEVENT_CLOSE", None)
         pygame.init()
         try:
             pygame.mixer.init()
@@ -71,8 +88,11 @@ class Aquarium:
         self.retina_info = self.detect_retina_scaling()
 
         if not self.headless:
-            self.screen = pygame.display.set_mode((width, height))
-            pygame.display.set_caption("Digital Life Aquarium - デジタル生命の水族館")
+            if self.requested_gpu:
+                self._init_gpu_renderer(width, height)
+            if not self.use_gpu:
+                self.screen = pygame.display.set_mode((width, height))
+                pygame.display.set_caption("Digital Life Aquarium - デジタル生命の水族館")
         else:
             # ヘッドレス時は描画用のダミーサーフェスを用意
             self.screen = pygame.Surface((width, height))
@@ -640,6 +660,24 @@ class Aquarium:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
+            elif self.use_gpu and self._windowevent_type and event.type == self._windowevent_type:
+                if event.event in tuple(x for x in (self._windowevent_size_changed, self._windowevent_resized) if x is not None):
+                    new_width, new_height = event.data1, event.data2
+                    if (new_width, new_height) != (self.width, self.height):
+                        self.width, self.height = new_width, new_height
+                        self._update_gpu_render_size(self.width, self.height)
+                        self._after_display_resize()
+                        print(f"🪟 GPUウィンドウサイズ変更: {self.width}x{self.height}")
+                elif self._windowevent_close is not None and event.event == self._windowevent_close:
+                    self.running = False
+            elif self.use_gpu and event.type == pygame.VIDEORESIZE and not self._windowevent_type:
+                # pygame-ce without WINDOWEVENT constants may still emit legacy VIDEORESIZE events
+                new_width, new_height = event.w, event.h
+                if (new_width, new_height) != (self.width, self.height):
+                    self.width, self.height = new_width, new_height
+                    self._update_gpu_render_size(self.width, self.height)
+                    self._after_display_resize()
+                    print(f"🪟 GPUウィンドウサイズ変更(VIDEORESIZE): {self.width}x{self.height}")
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
@@ -665,6 +703,21 @@ class Aquarium:
     def toggle_fullscreen(self):
         """フルスクリーンモードの切り替え"""
         self.fullscreen = not self.fullscreen
+
+        if self.use_gpu and self.gpu_window is not None:
+            try:
+                if self.fullscreen:
+                    self.gpu_window.fullscreen = True
+                else:
+                    self.gpu_window.fullscreen = False
+                    self.gpu_window.size = self.original_size
+                self.width, self.height = self.gpu_window.size
+                self._update_gpu_render_size(self.width, self.height)
+                self._after_display_resize()
+                print(f"📐 現在の画面サイズ: {self.width}x{self.height}")
+            except Exception as e:
+                print(f"❌ GPUフルスクリーン設定エラー: {e}")
+            return
 
         if self.fullscreen:
             # フルスクリーンモードに切り替え
@@ -701,22 +754,8 @@ class Aquarium:
             self.screen = pygame.display.set_mode((self.width, self.height))
             print(f"🪟 ウィンドウモード: {self.width}x{self.height}")
 
+        self._after_display_resize()
         print(f"📐 現在の画面サイズ: {self.screen.get_width()}x{self.screen.get_height()}")
-
-        # 背景パーティクルを新しいサイズに合わせて再初期化
-        self.init_background_particles()
-
-        # 魚の位置を新しい画面サイズに合わせて調整
-        self.adjust_fish_positions_for_screen_resize()
-
-        # フォントサイズも画面サイズに合わせて調整
-        font_scale = min(self.width / self.base_width, self.height / self.base_height)
-        base_font_size = 24
-        small_font_size = 18
-
-        self.font = self._get_japanese_font(int(base_font_size * font_scale))
-        self.small_font = self._get_japanese_font(int(small_font_size * font_scale))
-        self.bubble_font = self._get_japanese_font(10)  # IPC会話吹き出し用は固定サイズ
 
     def adjust_fish_positions_for_screen_resize(self):
         """画面サイズ変更時に魚の位置を調整"""
@@ -921,7 +960,10 @@ class Aquarium:
         self.draw_ui()
 
         # 画面更新
-        pygame.display.flip()
+        if self.use_gpu:
+            self._present_gpu_frame()
+        else:
+            pygame.display.flip()
 
     def run(self):
         """メインループ"""
@@ -1248,6 +1290,74 @@ class Aquarium:
                 'scale_factor': 1.0,
                 'is_retina': False
             }
+
+    def _env_flag(self, name: str, default: bool = False) -> bool:
+        value = os.environ.get(name)
+        if value is None:
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    def _init_gpu_renderer(self, width: int, height: int):
+        try:
+            from pygame._sdl2.video import Window, Renderer, Texture
+
+            self.gpu_window = Window("Digital Life Aquarium - デジタル生命の水族館 (GPUモード)",
+                                     size=(width, height), resizable=True)
+            vsync_enabled = self._env_flag("AQUARIUM_VSYNC", True)
+            self.gpu_renderer = Renderer(self.gpu_window, -1, True, vsync_enabled)
+            if hasattr(self.gpu_renderer, "logical_size"):
+                self.gpu_renderer.logical_size = (width, height)
+            self._gpu_texture_type = Texture
+            self.screen = pygame.Surface((width, height), flags=pygame.SRCALPHA, depth=32)
+            self.gpu_texture = None
+            self.use_gpu = True
+            print("[GPU] SDL2アクセラレータを有効化しました (vsync={}).".format(vsync_enabled))
+        except Exception as exc:
+            print(f"[GPU] アクセラレータ初期化に失敗しました: {exc}\n       ソフトウェアモードにフォールバックします。")
+            self.use_gpu = False
+            self.gpu_renderer = None
+            self.gpu_window = None
+            self.gpu_texture = None
+
+    def _present_gpu_frame(self):
+        if not self.use_gpu or self.gpu_renderer is None:
+            return
+        try:
+            if self.gpu_texture is None or getattr(self.gpu_texture, "size", None) != (self.width, self.height):
+                self.gpu_texture = self._gpu_texture_type.from_surface(self.gpu_renderer, self.screen)
+            else:
+                self.gpu_texture.update(self.screen)
+            self.gpu_renderer.draw_color = (0, 0, 0, 255)
+            self.gpu_renderer.clear()
+            # pygame-ce 2.5.x exposes texture drawing via Texture.draw()
+            self.gpu_texture.draw()
+            self.gpu_renderer.present()
+        except Exception as exc:
+            print(f"[GPU] 描画更新でエラーが発生したためフォールバックします: {exc}")
+            self.use_gpu = False
+            self.gpu_renderer = None
+            self.gpu_window = None
+            pygame.display.set_caption("Digital Life Aquarium - デジタル生命の水族館")
+            self.screen = pygame.display.set_mode((self.width, self.height))
+
+    def _update_gpu_render_size(self, width: int, height: int):
+        if not self.use_gpu:
+            return
+        self.screen = pygame.Surface((width, height), flags=pygame.SRCALPHA, depth=32)
+        if self.gpu_renderer is not None and hasattr(self.gpu_renderer, "logical_size"):
+            self.gpu_renderer.logical_size = (width, height)
+        self.gpu_texture = None
+
+    def _after_display_resize(self):
+        """画面サイズ変更後の共通処理"""
+        self.init_background_particles()
+        self.adjust_fish_positions_for_screen_resize()
+        self._update_font_scale()
+        base_font_size = 24
+        small_font_size = 18
+        self.font = self._get_japanese_font(int(base_font_size * self.font_scale))
+        self.small_font = self._get_japanese_font(int(small_font_size * self.font_scale))
+        self.bubble_font = self._get_japanese_font(10)
 
 def main():
     """メイン関数"""
