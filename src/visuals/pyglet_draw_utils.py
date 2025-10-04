@@ -22,6 +22,7 @@ Task: 共通描画ユーティリティ追加 (Todo #2)
 """
 from __future__ import annotations
 from typing import List, Sequence, Tuple, Optional, Union, Any
+from array import array
 import math
 import random
 
@@ -63,29 +64,43 @@ def draw_polygon(points: Sequence[Tuple[float, float]], color: ColorLike, alpha:
     for x, y in points:
         position_data.extend([x, y, 0.0])
     count = len(points)
-    color_data: List[int] = []
+    color_data: List[float] = []
     for _ in range(count):
-        color_data.extend(rgba)
+        color_data.extend([
+            rgba[0] / 255.0,
+            rgba[1] / 255.0,
+            rgba[2] / 255.0,
+            rgba[3] / 255.0,
+        ])
+    positions = array('f', position_data)
+    colors = array('f', color_data)
     if filled:
         return pyglet.graphics.draw(
             count,
             gl.GL_TRIANGLE_FAN,
-            position=('f', position_data),
-            colors=('B', color_data)
+            position=('f', positions),
+            colors=('f', colors)
         )
     else:
         # LINE_LOOP が無い/合わない場合は strip + 最後に最初の点を再度追加
         flat_line: List[float] = []
         flat_line.extend(position_data)
         flat_line.extend([points[0][0], points[0][1], 0.0])
-        color_line: List[int] = []
+        color_line: List[float] = []
         for _ in range(count + 1):
-            color_line.extend(rgba)
+            color_line.extend([
+                rgba[0] / 255.0,
+                rgba[1] / 255.0,
+                rgba[2] / 255.0,
+                rgba[3] / 255.0,
+            ])
+        positions_line = array('f', flat_line)
+        colors_line = array('f', color_line)
         return pyglet.graphics.draw(
             count + 1,
             gl.GL_LINE_STRIP,
-            position=('f', flat_line),
-            colors=('B', color_line)
+            position=('f', positions_line),
+            colors=('f', colors_line)
         )
 
 def draw_ellipse(cx: float, cy: float, rx: float, ry: float, color: ColorLike, alpha: Optional[int] = None, batch: Optional[Any] = None, segments: Optional[int] = None):
@@ -238,14 +253,21 @@ def draw_lightning_polyline(cx: float, cy: float, angle: float, length: float, s
     positions: List[float] = []
     for i in range(0, len(pts), 2):
         positions.extend([pts[i], pts[i + 1], 0.0])
-    color_data: List[int] = []
+    color_data: List[float] = []
     for _ in range(vertex_count):
-        color_data.extend(rgba)
+        color_data.extend([
+            rgba[0] / 255.0,
+            rgba[1] / 255.0,
+            rgba[2] / 255.0,
+            rgba[3] / 255.0,
+        ])
+    positions_arr = array('f', positions)
+    colors_arr = array('f', color_data)
     return pyglet.graphics.draw(
         vertex_count,
         gl.GL_LINE_STRIP,
-        position=('f', positions),
-        colors=('B', color_data)
+        position=('f', positions_arr),
+        colors=('f', colors_arr)
     )
 
 __all__ = [

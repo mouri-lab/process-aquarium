@@ -30,6 +30,7 @@ pygame 依存描画・イベント処理を段階的に pyglet へ移植する�
 """
 
 from typing import Dict, Optional, List, Tuple
+from array import array
 import time
 import random
 import math
@@ -38,9 +39,11 @@ import os
 try:
 	import pyglet
 	from pyglet import shapes
+	from pyglet.window import key
 except Exception:  # pragma: no cover
 	pyglet = None  # type: ignore
 	shapes = None  # type: ignore
+	key = None  # type: ignore
 
 from ..core.process_manager import ProcessManager
 from .fish_pyglet import Fish
@@ -101,6 +104,7 @@ class Aquarium:
 		self.ipc_update_timer = 0
 		self.ipc_update_interval = 60  # frames.
 		self.show_ipc = True  # TODO[ipc-lines]
+		self.show_parent_lines = False
 
 		# Performance monitor (ロジック保持)
 		self.performance_monitor = {
@@ -182,6 +186,24 @@ class Aquarium:
 		# 左クリック: 最も近い fish を選択
 		if button == 1:
 			self._select_fish_at(x, y)
+
+	def on_key_press(self, symbol, modifiers):
+		if self.headless or not pyglet or key is None:
+			return
+		if symbol == key.ESCAPE:
+			self.running = False
+			if self.window:
+				self.window.close()
+		elif symbol == key.I:
+			self.show_ipc = not self.show_ipc
+			state = 'オン' if self.show_ipc else 'オフ'
+			print(f"IPC可視化: {state}")
+		elif symbol == key.P:
+			self.show_parent_lines = not self.show_parent_lines
+			state = 'オン' if self.show_parent_lines else 'オフ'
+			print(f"親子ライン: {state}")
+		elif symbol in (key.F, getattr(key, 'F11', None)):
+			self.toggle_fullscreen()
 
 	def _select_fish_at(self, x: float, y: float):
 		self.selected_fish = None
@@ -378,52 +400,83 @@ class Aquarium:
 				f2 = self.fishes[proc2.pid]
 				dx = f2.x - f1.x
 				dy = f2.y - f1.y
-				dist = math.sqrt(dx*dx + dy*dy)
-				if dist > 250:
+				dist = math.sqrt(dx * dx + dy * dy)
+				if dist >= 200:
 					continue
-				# 色: CPU 強度に応じた赤〜シアン
 				cpu_intensity = (f1.cpu_percent + f2.cpu_percent) / 200.0
-				r = int(80 + 150 * cpu_intensity)
-				g = int(120 + 60 * (1 - cpu_intensity))
-				b = int(200 - 120 * cpu_intensity)
-				mid_x = (f1.x + f2.x) / 2 + math.sin(time.time() * 2 + (f1.pid % 7)) * 12
-				mid_y = (f1.y + f2.y) / 2 + math.cos(time.time() * 2 + (f2.pid % 5)) * 12
-				steps = 14
-				pts = []
+				r = int(100 + cpu_intensity * 155)
+				g = int(150 - cpu_intensity * 50)
+				b = int(200 - cpu_intensity * 100)
+				mid_x = (f1.x + f2.x) / 2 + math.sin(time.time() * 2) * 10
+				mid_y = (f1.y + f2.y) / 2 + math.cos(time.time() * 2) * 10
+				steps = 10
+				pts: List[float] = []
 				for i in range(steps + 1):
 					t = i / steps
-					x = (1-t)**2 * f1.x + 2*(1-t)*t * mid_x + t**2 * f2.x
-					y = (1-t)**2 * f1.y + 2*(1-t)*t * mid_y + t**2 * f2.y
+					x = (1 - t) ** 2 * f1.x + 2 * (1 - t) * t * mid_x + t ** 2 * f2.x
+					y = (1 - t) ** 2 * f1.y + 2 * (1 - t) * t * mid_y + t ** 2 * f2.y
 					pts.extend([x, y])
 				pulse = math.sin(time.time() * 3) * 0.3 + 0.7
-				alpha_line = int(160 * pulse)
+				alpha_line = int(80 * pulse)
 				if shapes:
 					for j in range(0, len(pts) - 2, 2):
 						x1, y1 = pts[j], pts[j + 1]
 						x2, y2 = pts[j + 2], pts[j + 3]
-						line = shapes.Line(x1, y1, x2, y2, thickness=1, color=(r, g, b, alpha_line))
+						line = shapes.Line(x1, y1, x2, y2, thickness=2, color=(r, g, b, alpha_line))
 						line.draw()
 				else:
-					pyglet.gl.glLineWidth(1)
-					pyglet.graphics.draw(len(pts) // 2, pyglet.gl.GL_LINE_STRIP,
-								v2f=('f', pts),
-								c4f=('f', [(r/255.0), (g/255.0), (b/255.0), alpha_line/255.0] * (len(pts)//2)))
+					pyglet.gl.glLineWidth(2)
+					vertex_count = len(pts) // 2
+					positions: List[float] = []
+					for k in range(0, len(pts), 2):
+						positions.extend([pts[k], pts[k + 1], 0.0])
+					color_data: List[float] = []
+					for _ in range(vertex_count):
+						color_data.extend([
+							r / 255.0,
+							g / 255.0,
+							b / 255.0,
+							alpha_line / 255.0,
+						])
+					positions_arr = array('f', positions)
+					colors_arr = array('f', color_data)
+					pyglet.graphics.draw(
+						vertex_count,
+						pyglet.gl.GL_LINE_STRIP,
+						position=('f', positions_arr),
+						colors=('f', colors_arr)
+					)
 
 	def _draw_parent_child_lines(self):
-		if not pyglet:
+		if not pyglet or not self.show_parent_lines:
 			return
 		for fish in self.fishes.values():
 			if fish.parent_pid and fish.parent_pid in self.fishes:
 				parent = self.fishes[fish.parent_pid]
-				col = (100, 160, 220, 50)
+				col = (100, 150, 200, 50)
 				if shapes:
 					line = shapes.Line(parent.x, parent.y, fish.x, fish.y, thickness=1, color=col)
 					line.draw()
 				else:
 					pyglet.gl.glLineWidth(1)
-					pyglet.graphics.draw(2, pyglet.gl.GL_LINES,
-									v2f=('f', [parent.x, parent.y, fish.x, fish.y]),
-									c4f=('f', [(c / 255.0) for c in col] * 2))
+					positions = [parent.x, parent.y, 0.0,
+							   fish.x, fish.y, 0.0]
+					colors = []
+					for _ in range(2):
+						colors.extend([
+							col[0] / 255.0,
+							col[1] / 255.0,
+							col[2] / 255.0,
+							col[3] / 255.0,
+						])
+					positions_arr = array('f', positions)
+					colors_arr = array('f', colors)
+					pyglet.graphics.draw(
+						2,
+						pyglet.gl.GL_LINES,
+						position=('f', positions_arr),
+						colors=('f', colors_arr)
+					)
 
 	# ----------------------------------------------------------------------------------
 	# UI panel (minimal)

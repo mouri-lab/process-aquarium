@@ -28,6 +28,7 @@ import math
 import random
 import time
 from typing import Tuple, Optional, List
+from array import array
 
 try:
 	import pyglet
@@ -451,69 +452,60 @@ class Fish:
 		tail_intensity = (0.2 + speed * 0.1) * cpu_factor
 		self.tail_swing = math.sin(self.swim_cycle) * min(tail_intensity, 1.0)
 
-		# メモリ巨大魚エフェクト (Task#4 で微調整予定)
+		# メモリ巨大魚エフェクト (波紋 + 雷)
 		if self.is_memory_giant and alpha > 20:
-			# pygame _draw_memory_giant_effects に近い波紋：4枚, 半径: size*(3.0 + i*1.2)*(1+0.5*sin(phase+i*pi/4))
 			if draw_ripples:
-				for i in range(4):
-					phase = self.pulsation_phase + i * (math.pi/4)
-					radius = self.current_size * (3.0 + i * 1.2) * (1.0 + 0.5 * math.sin(phase))
-					layer_alpha = max(8, int((alpha // 8) * (1.0 - i * 0.2)))
-					# 個別にアウトライン円 (draw_ripples の汎用ではなく ellipse_outline 相当)
-					if radius > 0 and layer_alpha > 0 and draw_ellipse:
-						# アウトライン -> 近似: 薄い線; outline専用が無いので外周ポリゴン+低alpha
-						# 極細リング再現は後続最適化; まず1px相当で塗りつぶし半透明近似
-						draw_ellipse(self.x, self.y, radius, radius, (255, 100, 100, layer_alpha))
-			# 雷: 30フレーム周期 or ランダム (≈元条件)
+				base_alpha = max(8, alpha // 4)
+				draw_ripples(
+					self.x,
+					self.y,
+					self.current_size * 3.0,
+					count=4,
+					color=(255, 100, 100),
+					alpha=base_alpha,
+					phase=self.pulsation_phase,
+					radius_step=1.2
+				)
 			if self.memory_percent >= 20.0 and draw_lightning_polyline:
 				if not hasattr(self, '_lightning_timer'):
 					self._lightning_timer = 0
 				self._lightning_timer += 1
 				if (self._lightning_timer % 30 == 0) or (random.random() < 0.1):
-						# --- Lightning bolts ---
-						bolts = random.randint(3, 5)
-						for _ in range(bolts):
-							angle = random.uniform(0, 2 * math.pi)
-							start_radius = self.current_size * 0.8
-							end_radius = self.current_size * 2.5
-							cx = self.x + math.cos(angle) * start_radius
-							cy = self.y + math.sin(angle) * start_radius
-							length = end_radius - start_radius
-							seg_alpha = max(100, alpha // 2)
-							segments = 4
-							pts = []
-							for s in range(segments + 1):
-								t = s / segments
-								r = length * t
-								mid_x = cx + math.cos(angle) * r
-								mid_y = cy + math.sin(angle) * r
-								if 0 < s < segments:
-									mid_x += random.uniform(-20, 20)
-									mid_y += random.uniform(-20, 20)
-								pts.extend([mid_x, mid_y])
-							try:
-								pyglet.graphics.draw(len(pts)//2, pyglet.gl.GL_LINE_STRIP,
-									('v2f', pts),
-									('c4B', (255, 255, 150, seg_alpha) * (len(pts)//2)))
-							except Exception:
-								pass
+					bolts = random.randint(3, 5)
+					for _ in range(bolts):
+						angle = random.uniform(0, 2 * math.pi)
+						start_radius = self.current_size * 0.8
+						length = self.current_size * 1.7
+						origin_x = self.x + math.cos(angle) * start_radius
+						origin_y = self.y + math.sin(angle) * start_radius
+						draw_lightning_polyline(
+							origin_x,
+							origin_y,
+							angle,
+							length,
+							segments=4,
+							color=(255, 255, 150),
+							alpha=max(100, alpha // 2),
+							randomness=0.35,
+							batch=batch
+						)
 
 		body_length = size * 1.8
 		body_width = size * 0.9
 		if self.fish_shape == 'shark':
-			self._draw_shark(color, alpha, body_length, body_width)
+			self._draw_shark(batch, color, alpha, body_length, body_width)
 		elif self.fish_shape == 'tropical':
-			self._draw_tropical_fish(color, alpha, body_length, body_width)
+			self._draw_tropical_fish(batch, color, alpha, body_length, body_width)
 		elif self.fish_shape == 'ray':
-			self._draw_ray(color, alpha, body_length * 1.2, body_width * 1.5)
+			self._draw_ray(batch, color, alpha, body_length * 1.2, body_width * 1.5)
 		elif self.fish_shape == 'dolphin':
-			self._draw_dolphin(color, alpha, body_length, body_width)
+			self._draw_dolphin(batch, color, alpha, body_length, body_width)
 		elif self.fish_shape == 'whale':
-			self._draw_whale(color, alpha, body_length * 1.3, body_width * 1.2)
+			self._draw_whale(batch, color, alpha, body_length * 1.3, body_width * 1.2)
 		elif self.fish_shape == 'eel':
-			self._draw_eel(color, alpha, body_length * 2.0, body_width * 0.4)
+			self._draw_eel(batch, color, alpha, body_length * 2.0, body_width * 0.4)
 		else:
-			self._draw_generic_fish(color, alpha, body_length, body_width)
+			self._draw_generic_fish(batch, color, alpha, body_length, body_width)
 
 		if self.thread_count > 1 and size > 5 and shapes:
 			satellites = self.get_thread_satellites()
@@ -522,7 +514,7 @@ class Fish:
 				# pygame版 _draw_small_fish のスケーリングロジックに合わせる
 				thread_size_factor = 1.0 + (self.thread_count / 16.0) * 1.5
 				sat_size = max(2, size * 0.2 * thread_size_factor)
-				self._draw_thread_satellite_fish(sat_x, sat_y, sat_size, color, alpha//2)
+				self._draw_thread_satellite_fish(batch, sat_x, sat_y, sat_size, color, alpha//2)
 
 		if self.is_talking and self.talk_message and alpha > 50 and pyglet and draw_speech_bubble:
 			# 簡易テキスト折り返し：最大幅 ~ 160px 相当 (文字幅6px換算)
@@ -628,35 +620,50 @@ class Fish:
 		right_x = base_x - tail_len * 0.6 * cos_a - spread * sin_a
 		right_y = base_y - tail_len * 0.6 * sin_a + spread * cos_a
 		# Two triangles to emulate split tail
-		verts1 = [base_x, base_y, left_x, left_y, tip_x, tip_y]
-		verts2 = [base_x, base_y, right_x, right_y, tip_x, tip_y]
-		# pyglet.draw は vertex count を最初の引数に取る
-		pyglet.graphics.draw(3, pyglet.gl.GL_TRIANGLES, ('v2f', verts1), ('c3B', color * 3))
-		pyglet.graphics.draw(3, pyglet.gl.GL_TRIANGLES, ('v2f', verts2), ('c3B', color * 3))
+		verts1 = [base_x, base_y, 0.0,
+				  left_x, left_y, 0.0,
+				  tip_x, tip_y, 0.0]
+		verts2 = [base_x, base_y, 0.0,
+				  right_x, right_y, 0.0,
+				  tip_x, tip_y, 0.0]
+		rgba_tail = [color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, alpha / 255.0]
+		color_tail = array('f', rgba_tail * 3)
+		pyglet.graphics.draw(
+			3,
+			pyglet.gl.GL_TRIANGLES,
+			position=('f', array('f', verts1)),
+			colors=('f', color_tail)
+		)
+		pyglet.graphics.draw(
+			3,
+			pyglet.gl.GL_TRIANGLES,
+			position=('f', array('f', verts2)),
+			colors=('f', color_tail)
+		)
 
 	# ----------------------------------------------------------------------------------
 	# Faithful shape ports (pygame -> pyglet)
 	# ----------------------------------------------------------------------------------
-	def _draw_shark(self, color, alpha, body_length, body_width):
+	def _draw_shark(self, batch, color, alpha, body_length, body_width):
 		# Body ellipse (axis-aligned like pygame)
-		draw_ellipse(self.x, self.y, body_length/2, body_width/2, color + (alpha,))
+		draw_ellipse(self.x, self.y, body_length/2, body_width/2, color + (alpha,), batch=batch)
 		tail_length = body_length * 0.7
 		tail_angle = self.angle + math.pi / 2 + self.tail_swing
 		px2 = self.x + math.cos(tail_angle) * tail_length
 		py2 = self.y + math.sin(tail_angle) * tail_length
 		px3 = self.x + math.cos(tail_angle) * tail_length * 0.8
 		py3 = self.y + math.sin(tail_angle) * tail_length * 0.8
-		draw_polygon([(self.x, self.y), (px2, py2), (px3, py3)], color + (alpha,))
+		draw_polygon([(self.x, self.y), (px2, py2), (px3, py3)], color + (alpha,), batch=batch)
 
-	def _draw_tropical_fish(self, color, alpha, body_length, body_width):
-		draw_ellipse(self.x, self.y, body_length/2, body_width/2, color + (alpha,))
+	def _draw_tropical_fish(self, batch, color, alpha, body_length, body_width):
+		draw_ellipse(self.x, self.y, body_length/2, body_width/2, color + (alpha,), batch=batch)
 		tail_length = body_length * 0.6
 		tail_angle = self.angle + math.pi / 2 + self.tail_swing
 		px2 = self.x + math.cos(tail_angle) * tail_length
 		py2 = self.y + math.sin(tail_angle) * tail_length
 		px3 = self.x + math.cos(tail_angle) * tail_length * 0.7
 		py3 = self.y + math.sin(tail_angle) * tail_length * 0.7
-		draw_polygon([(self.x, self.y), (px2, py2), (px3, py3)], color + (alpha,))
+		draw_polygon([(self.x, self.y), (px2, py2), (px3, py3)], color + (alpha,), batch=batch)
 		# dorsal/fin (simple adaptation of tropical fin from pygame)
 		fin_length = body_length * 0.4
 		fin_angle = self.angle - math.pi / 2 + self.tail_swing
@@ -664,51 +671,50 @@ class Fish:
 		fy2 = self.y + math.sin(fin_angle) * fin_length
 		fx3 = self.x + math.cos(fin_angle) * fin_length * 0.8
 		fy3 = self.y + math.sin(fin_angle) * fin_length * 0.8
-		draw_polygon([(self.x, self.y), (fx2, fy2), (fx3, fy3)], color + (alpha,))
+		draw_polygon([(self.x, self.y), (fx2, fy2), (fx3, fy3)], color + (alpha,), batch=batch)
 
-	def _draw_ray(self, color, alpha, body_length, body_width):
+	def _draw_ray(self, batch, color, alpha, body_length, body_width):
 		# Ray body
-		draw_ellipse(self.x, self.y, body_length/2, body_width/2, color + (alpha,))
+		draw_ellipse(self.x, self.y, body_length/2, body_width/2, color + (alpha,), batch=batch)
 		tail_length = body_length * 0.8
 		tail_angle = self.angle + math.pi + self.tail_swing
 		px2 = self.x + math.cos(tail_angle) * tail_length
 		py2 = self.y + math.sin(tail_angle) * tail_length
 		px3 = self.x + math.cos(tail_angle) * tail_length * 0.9
 		py3 = self.y + math.sin(tail_angle) * tail_length * 0.9
-		draw_polygon([(self.x, self.y), (px2, py2), (px3, py3)], color + (alpha,))
+		draw_polygon([(self.x, self.y), (px2, py2), (px3, py3)], color + (alpha,), batch=batch)
 
-	def _draw_dolphin(self, color, alpha, body_length, body_width):
-		self._draw_tropical_fish(color, alpha, body_length, body_width)  # shares structure with extra fin length
-		# Adjust fin length difference already minor; treat same for first pass.
+	def _draw_dolphin(self, batch, color, alpha, body_length, body_width):
+		self._draw_tropical_fish(batch, color, alpha, body_length, body_width)
 
-	def _draw_whale(self, color, alpha, body_length, body_width):
-		draw_ellipse(self.x, self.y, body_length/2, body_width/2, color + (alpha,))
+	def _draw_whale(self, batch, color, alpha, body_length, body_width):
+		draw_ellipse(self.x, self.y, body_length/2, body_width/2, color + (alpha,), batch=batch)
 		tail_length = body_length * 0.9
 		tail_angle = self.angle + math.pi / 2 + self.tail_swing
 		px2 = self.x + math.cos(tail_angle) * tail_length
 		py2 = self.y + math.sin(tail_angle) * tail_length
 		px3 = self.x + math.cos(tail_angle) * tail_length * 0.8
 		py3 = self.y + math.sin(tail_angle) * tail_length * 0.8
-		draw_polygon([(self.x, self.y), (px2, py2), (px3, py3)], color + (alpha,))
+		draw_polygon([(self.x, self.y), (px2, py2), (px3, py3)], color + (alpha,), batch=batch)
 
-	def _draw_eel(self, color, alpha, body_length, body_width):
-		draw_ellipse(self.x, self.y, body_length/2, body_width/2, color + (alpha,))
+	def _draw_eel(self, batch, color, alpha, body_length, body_width):
+		draw_ellipse(self.x, self.y, body_length/2, body_width/2, color + (alpha,), batch=batch)
 		tail_length = body_length * 0.5
 		tail_angle = self.angle + math.pi / 2 + self.tail_swing
 		px2 = self.x + math.cos(tail_angle) * tail_length
 		py2 = self.y + math.sin(tail_angle) * tail_length
 		px3 = self.x + math.cos(tail_angle) * tail_length * 0.7
 		py3 = self.y + math.sin(tail_angle) * tail_length * 0.7
-		draw_polygon([(self.x, self.y), (px2, py2), (px3, py3)], color + (alpha,))
+		draw_polygon([(self.x, self.y), (px2, py2), (px3, py3)], color + (alpha,), batch=batch)
 
-	def _draw_generic_fish(self, color, alpha, body_length, body_width):
+	def _draw_generic_fish(self, batch, color, alpha, body_length, body_width):
 		# main body ellipse (0.8 * length portion like pygame main_body_rect width)
 		main_len = body_length * 0.8
-		draw_ellipse(self.x - body_length*0.1, self.y, main_len/2, body_width/2, color + (alpha,))
+		draw_ellipse(self.x - body_length*0.1, self.y, main_len/2, body_width/2, color + (alpha,), batch=batch)
 		# head (0.3 length *0.6 width) positioned forward
 		head_len = body_length * 0.3
 		head_w = body_width * 0.6
-		draw_ellipse(self.x + body_length*0.35, self.y, head_len/2, head_w/2, color + (alpha,))
+		draw_ellipse(self.x + body_length*0.35, self.y, head_len/2, head_w/2, color + (alpha,), batch=batch)
 		# Tail split triangles replicating pygame generic
 		cos_a = math.cos(self.angle)
 		sin_a = math.sin(self.angle)
@@ -728,8 +734,8 @@ class Fish:
 			 tail_y - sin_a * tail_size * 1.2 + cos_a * tail_size * 0.3 * swing),
 			(tail_x - cos_a * tail_size * 0.8, tail_y - sin_a * tail_size * 0.8)
 		]
-		draw_polygon(upper, color + (alpha,))
-		draw_polygon(lower, color + (alpha,))
+		draw_polygon(upper, color + (alpha,), batch=batch)
+		draw_polygon(lower, color + (alpha,), batch=batch)
 		# dorsal fin (approx)
 		dorsal_x = self.x - cos_a * body_length * 0.1
 		dorsal_y = self.y - sin_a * body_length * 0.1
@@ -739,9 +745,16 @@ class Fish:
 			(dorsal_x + sin_a * dorsal_size * 0.8, dorsal_y - cos_a * dorsal_size * 0.8),
 			(dorsal_x + sin_a * dorsal_size * 0.5, dorsal_y - cos_a * dorsal_size * 0.5)
 		]
-		draw_polygon(dorsal, color + (alpha,))
+		draw_polygon(dorsal, color + (alpha,), batch=batch)
+		if body_width > 8:
+			eye_radius = max(2.0, body_width * 0.15)
+			eye_x = self.x + cos_a * body_length * 0.3 + sin_a * body_width * 0.2
+			eye_y = self.y + sin_a * body_length * 0.3 - cos_a * body_width * 0.2
+			draw_ellipse(eye_x, eye_y, eye_radius, eye_radius, (255, 255, 255, min(255, alpha)), batch=batch)
+			pupil_radius = max(1.0, eye_radius * 0.6)
+			draw_ellipse(eye_x, eye_y, pupil_radius, pupil_radius, (0, 0, 0, min(255, alpha)), batch=batch)
 
-	def _draw_thread_satellite_fish(self, x, y, size, color, alpha):
+	def _draw_thread_satellite_fish(self, batch, x, y, size, color, alpha):
 		"""pygame版 _draw_small_fish に近い衛星小魚描画"""
 		if size < 2 or not draw_ellipse or not draw_polygon:
 			return
@@ -749,14 +762,14 @@ class Fish:
 		body_w = size * 1.5
 		body_h = size
 		# draw_ellipse は中心+半径指定なので調整: 半径 = w/2, h/2
-		draw_ellipse(x + (body_w*0.25), y, body_w/2, body_h/2, color + (alpha,))
+		draw_ellipse(x + (body_w*0.25), y, body_w/2, body_h/2, color + (alpha,), batch=batch)
 		# 尾 (三角形)
 		tail_points = [
 			(x - size * 0.25, y),
 			(x - size * 0.75, y - size/3),
 			(x - size * 0.75, y + size/3)
 		]
-		draw_polygon(tail_points, color + (alpha,))
+		draw_polygon(tail_points, color + (alpha,), batch=batch)
 
 
 __all__ = ["Fish"]
