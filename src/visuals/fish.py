@@ -293,35 +293,23 @@ class Fish:
             self.target_y = random.uniform(50, screen_height - 50)
 
         # 基本的な移動計算
-        # 回避力の初期化（スコープ問題を避けるため）
+        # 回避力の初期化（運動エネルギーシステムで統一管理）
         avoidance_x = 0.0
         avoidance_y = 0.0
 
+        # 群れ行動力の適用（群れ魚のみ）
         if self.school_members:
-            # 群れ行動時は群れの力を主とする
             self.vx += flocking_force_x * self.flocking_strength
             self.vy += flocking_force_y * self.flocking_strength
-        else:
-            # 単独行動時：群れから逃げる + 目標位置に向かう
-            # 近くに群れ魚がいる場合は逃げる（より露骨に）
-            if nearby_fish:
-                school_fish_nearby = [f for f in nearby_fish if f.school_members]
-                for school_fish in school_fish_nearby:
-                    dx_avoid = self.x - school_fish.x
-                    dy_avoid = self.y - school_fish.y
-                    dist_avoid = math.sqrt(dx_avoid*dx_avoid + dy_avoid*dy_avoid)
 
-                    if dist_avoid < 150:  # 150ピクセル以内で回避反応（範囲拡大）
-                        # 距離が近いほど強く逃げる（強度3倍）
-                        avoidance_strength = (150 - dist_avoid) / 150 * 0.009
-                        if dist_avoid > 0:
-                            avoidance_x += (dx_avoid / dist_avoid) * avoidance_strength
-                            avoidance_y += (dy_avoid / dist_avoid) * avoidance_strength
-
-        # 軽量化メモリバトルシステム（3フレームに1回計算）
+        # 統一運動エネルギーバトルシステム（軽量化版・3フレームに1回計算）
+        # ルール: 運動エネルギーが低い方が高い方から逃げる
+        # 運動エネルギー = 1/2 × 質量(メモリ) × 速度(CPU)²
+        # - 単独魚: 自分の運動エネルギー
+        # - 群れ魚: 群れ全体の合計運動エネルギー
         if nearby_fish and self.age % 3 == 0:  # 計算頻度を1/3に削減
-            # 自分のメモリ力を事前計算（1回のみ）
-            my_memory_power = self._calculate_memory_power_light(nearby_fish)
+            # 自分の運動エネルギーを事前計算
+            my_kinetic_energy = self._calculate_kinetic_energy_light(nearby_fish)
 
             for other_fish in nearby_fish:
                 # 早期スキップ：マンハッタン距離で大まかにチェック
@@ -332,11 +320,14 @@ class Fish:
                 if manhattan_dist > 300:  # 遠すぎる場合はスキップ
                     continue
 
-                # 相手のメモリ力を計算
-                other_memory_power = other_fish._calculate_memory_power_light(nearby_fish)
+                # 相手の運動エネルギーを計算（同じ群れでない限り比較対象）
+                if self.school_members and other_fish.school_members and self.school_members == other_fish.school_members:
+                    continue  # 同じ群れ同士は反発しない
 
-                # メモリ力が負けている場合のみ逃げる
-                if my_memory_power < other_memory_power:
+                other_kinetic_energy = other_fish._calculate_kinetic_energy_light(nearby_fish)
+
+                # 統一ルール: 運動エネルギーが負けている方が逃げる
+                if my_kinetic_energy < other_kinetic_energy:
                     dx_avoid = self.x - other_fish.x
                     dy_avoid = self.y - other_fish.y
 
@@ -346,9 +337,9 @@ class Fish:
                         avoidance_distance = 180  # 回避距離短縮
 
                         if dist_avoid < avoidance_distance:
-                            # シンプルな回避力計算
-                            power_ratio = min(other_memory_power / max(my_memory_power, 0.1), 3.0)
-                            avoidance_strength = (avoidance_distance - dist_avoid) / avoidance_distance * 0.012 * power_ratio
+                            # 運動エネルギー比で回避力計算
+                            energy_ratio = min(other_kinetic_energy / max(my_kinetic_energy, 0.01), 4.0)
+                            avoidance_strength = (avoidance_distance - dist_avoid) / avoidance_distance * 0.015 * energy_ratio
 
                             if dist_avoid > 0:
                                 avoidance_x += (dx_avoid / dist_avoid) * avoidance_strength
@@ -1157,3 +1148,32 @@ class Fish:
         else:
             # 単独の場合：自分のメモリのみ
             return self.memory_percent
+
+    def _calculate_kinetic_energy_light(self, nearby_fish: List['Fish']) -> float:
+        """軽量版運動エネルギー計算（質量=メモリ、速度=CPU使用率）"""
+        if self.school_members:
+            # 群れの場合：群れ全体の運動エネルギー合計
+            total_kinetic_energy = 0.0
+
+            # 自分の運動エネルギーを追加
+            my_mass = max(self.memory_percent, 0.1)  # 質量（メモリ使用率）
+            my_velocity = max(self.cpu_percent, 0.1)  # 速度（CPU使用率）
+            total_kinetic_energy += 0.5 * my_mass * (my_velocity ** 2)
+
+            # 近くの同じ群れメンバーの運動エネルギーを推定で追加
+            school_count = 0
+            for fish in nearby_fish:
+                if fish.school_members == self.school_members and fish.pid != self.pid:
+                    school_count += 1
+
+            # 推定値で計算（正確性より速度重視）
+            estimated_avg_mass = 2.0  # 平均メモリ使用率の推定値
+            estimated_avg_velocity = 5.0  # 平均CPU使用率の推定値
+            total_kinetic_energy += school_count * 0.5 * estimated_avg_mass * (estimated_avg_velocity ** 2)
+
+            return total_kinetic_energy
+        else:
+            # 単独の場合：自分の運動エネルギーのみ
+            mass = max(self.memory_percent, 0.1)  # 質量（メモリ使用率）
+            velocity = max(self.cpu_percent, 0.1)  # 速度（CPU使用率）
+            return 0.5 * mass * (velocity ** 2)
