@@ -821,14 +821,19 @@ class Aquarium:
                     # pygame-ce 2.5.x provides set_fullscreen(desktop=False)
                     self.gpu_window.set_fullscreen(desktop=True)
                 except TypeError:
-                    # older signature without keyword support
-                    self.gpu_window.set_fullscreen(True)
+                    try:
+                        self.gpu_window.set_fullscreen(True)
+                    except TypeError:
+                        self.gpu_window.set_fullscreen()
                 except Exception as flag_err:
                     print(f"❌ GPUフルスクリーン切替失敗: {flag_err}")
                     return False
             else:
                 try:
-                    self.gpu_window.set_fullscreen(False)
+                    if hasattr(self.gpu_window, "set_windowed"):
+                        self.gpu_window.set_windowed()
+                    else:
+                        self.gpu_window.set_fullscreen(False)
                 except Exception as flag_err:
                     print(f"⚠️ GPUフルスクリーン解除失敗: {flag_err}")
                 restore_size = self._windowed_size or self.original_size
