@@ -514,16 +514,30 @@ class Aquarium:
             stats_lines.append(f"Retina: {self.retina_info['scale_factor']:.1f}x")
 
         # 背景パネル
-        panel_height = len(stats_lines) * 25 + 10
-        panel_surface = pygame.Surface((280, panel_height), pygame.SRCALPHA)
+        panel_padding_x = 10
+        panel_padding_y = 10
+        font_linesize = self.small_font.get_linesize()
+        line_height = max(int(font_linesize * 1.15), font_linesize)
+        max_text_width = 0
+        for line in stats_lines:
+            text_width, _ = self.small_font.size(line)
+            if text_width > max_text_width:
+                max_text_width = text_width
+
+        panel_width = max(280, max_text_width + panel_padding_x * 2)
+        panel_height = len(stats_lines) * line_height + panel_padding_y * 2
+        panel_surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
         panel_surface.fill((0, 0, 0, 128))
-        self.screen.blit(panel_surface, (10, 10))
+        panel_x, panel_y = 10, 10
+        self.screen.blit(panel_surface, (panel_x, panel_y))
 
         # 統計テキスト
         for i, line in enumerate(stats_lines):
             color = (255, 100, 100) if current_fps < self.fps * 0.7 else (255, 255, 255)  # 低FPS時は赤
             text_surface = self._render_text(line, self.small_font, color)
-            self.screen.blit(text_surface, (15, 15 + i * 25))
+            text_x = panel_x + panel_padding_x
+            text_y = panel_y + panel_padding_y + i * line_height
+            self.screen.blit(text_surface, (text_x, text_y))
 
         # 選択されたFishの詳細情報
         if self.selected_fish:
