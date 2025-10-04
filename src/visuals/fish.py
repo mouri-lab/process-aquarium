@@ -411,14 +411,16 @@ class Fish:
     def _draw_memory_giant_effects(self, screen: pygame.Surface, alpha: int):
         """メモリ巨大魚用の特別エフェクト（波紋など）"""
         # 波紋エフェクト：3つの同心円
-        ripple_color = (255, 100, 100, max(30, alpha // 4))  # 赤っぽい半透明
+        ripple_color = (150, 215, 255)  # 少し落ち着いた水色
+        base_ripple_alpha = max(50, min(200, int(alpha * 0.45)))
 
         for i in range(3):  # 波紋を3層に抑制
             # 各波紋の半径と透明度を脈動に合わせて変化（より大きな範囲）
             ripple_phase = self.pulsation_phase + i * (math.pi / 4)
             # 波紋の範囲を2倍に拡大：巨大魚に相応しいスケール
             ripple_radius = self.current_size * (3.0 + i * 1.2) * (1.0 + 0.5 * math.sin(ripple_phase))
-            ripple_alpha = max(8, int((alpha // 8) * (1.0 - i * 0.2)))
+            falloff = max(0.3, 1.0 - i * 0.3)
+            ripple_alpha = int(base_ripple_alpha * falloff)
 
             # 半透明の円を描画
             if ripple_radius > 0 and ripple_alpha > 0:
