@@ -911,8 +911,13 @@ class Aquarium:
                         red = int(100 + cpu_intensity * 155)
                         green = int(150 - cpu_intensity * 50)
                         blue = int(200 - cpu_intensity * 100)
+                        
+                        # 値の範囲を確実に0-255に制限
+                        red = max(0, min(255, red))
+                        green = max(0, min(255, green))
+                        blue = max(0, min(255, blue))
 
-                        color = (red, green, blue, alpha)
+                        color = (red, green, blue)  # pygame.draw.linesは3要素のRGBのみサポート
 
                         # ワールド座標で曲線の中点を計算
                         mid_world_x = (fish1.x + fish2.x) / 2 + math.sin(time.time() * 2) * 20
@@ -931,7 +936,10 @@ class Aquarium:
                             points.append((screen_x, screen_y))
 
                         if len(points) > 1:
-                            pygame.draw.lines(connection_surface, color, False, points, 2)
+                            # アルファ効果を適用するため、一時的なサーフェスを使用
+                            temp_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+                            pygame.draw.lines(temp_surface, (*color, alpha), False, points, 2)
+                            connection_surface.blit(temp_surface, (0, 0))
 
         self.screen.blit(connection_surface, (0, 0))
 
