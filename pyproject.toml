@@ -1,7 +1,7 @@
 [project]
 name = "process-aquarium"
 version = "0.1.0"
-description = "Add your description here"
+description = "Visualize processes as fish in an aquarium"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
