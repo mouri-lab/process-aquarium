@@ -79,6 +79,12 @@ class Fish:
         self.thread_count = 1
         self.age = 0  # フレーム数
 
+        # 個体の個性（同期を避けるため）
+        self.behavior_timer = random.randint(0, 100)  # 個体ごとの行動タイマー
+        self.decision_interval = random.randint(40, 80)  # 決定を行う間隔（40-80フレーム）
+        self.swim_phase_offset = random.uniform(0, 2 * math.pi)  # 泳ぎのフェーズオフセット
+        self.personality_factor = random.uniform(0.7, 1.3)  # 個性係数
+
         # アニメーション状態
         self.is_spawning = True
         self.spawn_progress = 0.0
@@ -288,30 +294,33 @@ class Fish:
             if school_fish:
                 flocking_force_x, flocking_force_y = self.calculate_flocking_forces(school_fish)
 
-        # 目標位置の更新システム
+        # 個体ごとの行動タイマーを更新
+        self.behavior_timer += 1
+
+        # 目標位置の更新システム（個体ごとの独立したタイミング）
         world_size = WORD_SIZE  # 仮想世界のサイズ
 
         if self.school_members and nearby_fish:
             # 群れの場合：代表魚システム
             leader = self.get_school_leader_fish(nearby_fish)
             if leader.pid == self.pid:
-                # 自分が代表魚の場合：群れ全体の新しい目標を決定
-                if random.random() < 0.04:  # 代表魚は4%の確率で新目標を設定
+                # 自分が代表魚の場合：個体の決定間隔で新目標を設定
+                if self.behavior_timer % self.decision_interval == 0:
                     self.target_x = random.uniform(-world_size, world_size)
                     self.target_y = random.uniform(-world_size, world_size)
             else:
-                # 代表魚ではない場合：代表魚の目標を参考にする
-                if random.random() < 0.02:  # 2%の確率で代表魚寄りの目標を設定
+                # 代表魚ではない場合：個体タイミングで代表魚寄りの目標を設定
+                if self.behavior_timer % (self.decision_interval * 2) == 0:
                     # 代表魚の目標位置に近い場所を新しい目標にする
-                    offset_range = 200  # 代表魚目標からの最大オフセット
+                    offset_range = 200 * self.personality_factor  # 個性に応じたオフセット
                     self.target_x = leader.target_x + random.uniform(-offset_range, offset_range)
                     self.target_y = leader.target_y + random.uniform(-offset_range, offset_range)
                     # 境界チェック
                     self.target_x = max(-world_size, min(world_size, self.target_x))
                     self.target_y = max(-world_size, min(world_size, self.target_y))
         else:
-            # 単独魚の場合：従来通りのランダム目標
-            if random.random() < 0.02:  # 2%に上げてより活発に
+            # 単独魚の場合：個体タイマーベースでランダム目標
+            if self.behavior_timer % self.decision_interval == 0:
                 self.target_x = random.uniform(-world_size, world_size)
                 self.target_y = random.uniform(-world_size, world_size)
 
@@ -657,12 +666,12 @@ class Fish:
             # 指数関数でCPU使用率による激しさを計算
             cpu_factor = 1.0 + (math.exp(2 * cpu_normalized) - 1) / (math.exp(2) - 1) * 4.0
 
-        swim_speed = (0.1 + speed * 0.1) * cpu_factor
+        swim_speed = (0.1 + speed * 0.1) * cpu_factor * self.personality_factor
         self.swim_cycle += swim_speed
 
-        # 尻尾の振りもCPU使用率に応じて激しく
+        # 尻尾の振りもCPU使用率に応じて激しく（個体ごとの位相オフセット適用）
         tail_intensity = (0.2 + speed * 0.1) * cpu_factor
-        self.tail_swing = math.sin(self.swim_cycle) * min(tail_intensity, 1.0)  # 最大1.0で制限
+        self.tail_swing = math.sin(self.swim_cycle + self.swim_phase_offset) * min(tail_intensity, 1.0)  # 最大1.0で制限
 
         # 魚の基本サイズ（形状によって調整）
         body_length = size * 1.8
