@@ -102,6 +102,22 @@ Additional knobs:
 
 If the accelerated renderer fails to initialize (driver mismatch, unsupported GPU, etc.) the application automatically falls back to the classic software surface path.
 
+## Japanese Font Hints (macOS / Linux / Windows)
+
+SDL_ttf relies on system fonts to render the on-screen statistics and IPC speech bubbles. もし日本語が豆腐（□）になってしまう場合は、環境変数で利用するフォントを明示してください。
+
+```bash
+# 例: macOS でヒラギノ角ゴシックを使う場合
+export AQUARIUM_FONT_PATH="/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"
+
+# 例: 環境変数でフォント名を指定（pygame の SysFont 経由）
+export AQUARIUM_FONT_NAME="Hiragino Sans"
+
+python main.py --gpu
+```
+
+優先順位は `AQUARIUM_FONT_PATH` → `AQUARIUM_FONT_NAME` → 既に検出済みのフォント → システム探索の順です。指定したパス／フォント名が見つからなかった場合は、自動的に他の候補を探し、最終的には pygame のデフォルトフォントにフォールバックしますが、この場合は日本語が表示されません。
+
 ## Adaptive Quality Modes (optional)
 
 By default the aquarium now keeps the full visual experience and relies on faster neighbour searches plus CPU-side optimisations to stay responsive. If you prefer adaptive quality that reacts to FPS drops, enable it via environment variable or CLI:

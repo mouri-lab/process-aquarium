@@ -176,12 +176,15 @@ class Aquarium:
         # UI状態
         self.selected_fish: Optional[Fish] = None
 
-        # 動的フォントスケーリング
+        # 日本語フォント管理と動的スケーリング
+        self._preferred_font_name: Optional[str] = None
+        self._preferred_font_path: Optional[str] = None
+        self._font_cache: Dict[int, pygame.font.Font] = {}
         self.font_scale = 1.0
         self._update_font_scale()
         self.font = self._get_japanese_font(int(24 * self.font_scale))
         self.small_font = self._get_japanese_font(int(18 * self.font_scale))
-        self.bubble_font = self._get_japanese_font(10)  # IPC会話吹き出し用の小さなフォント
+        self.bubble_font = self._get_japanese_font(self._determine_bubble_font_size())  # IPC会話吹き出し用フォント
 
         # 背景とエフェクト（動的パーティクル数）
         self.background_particles = []
@@ -496,7 +499,7 @@ class Aquarium:
         if self.enable_adaptive_quality:
             reduced_threshold, minimal_threshold = self._quality_thresholds
             if reduced_threshold is not None and minimal_threshold is not None:
-                stats_lines.append(f"品質閾値: 簡易≤{reduced_threshold:.1f}fps／最小≤{minimal_threshold:.1f}fps")
+                stats_lines.append(f"品質閾値: 簡易≦{reduced_threshold:.1f}fps／最小≦{minimal_threshold:.1f}fps")
 
         # プロセス制限とソート情報を追加
         limit_str = "無制限" if self.process_limit is None else str(self.process_limit)
@@ -1081,7 +1084,8 @@ class Aquarium:
 
         # 全てのFishを描画
         for fish in self.fishes.values():
-            fish.draw(self.screen, self.bubble_font, quality=self.render_quality)
+            fish.draw(self.screen, self.bubble_font, quality=self.render_quality,
+                      text_renderer=self._render_text)
 
         # 選択されたFishのハイライト
         if self.selected_fish:
@@ -1224,29 +1228,73 @@ class Aquarium:
         # 最小スケールを設定（読みやすさを保証）
         self.font_scale = max(0.5, min(2.0, self.font_scale))
 
+    def _determine_bubble_font_size(self) -> int:
+        """IPC吹き出し用フォントサイズを計算"""
+        base_size = 14
+        scaled_size = int(base_size * self.font_scale)
+        return max(12, min(24, scaled_size))
+
     def _validate_japanese_font(self, font: pygame.font.Font, test_texts: list, font_name: str) -> bool:
         """フォントが日本語文字を正しく描画できるかを検証"""
         try:
+            fallback_surfaces = {}
+
             for test_text in test_texts:
+                if not test_text:
+                    continue
+
+                contains_non_ascii = any(ord(ch) > 127 for ch in test_text)
                 try:
                     test_surface = font.render(test_text, True, (255, 255, 255))
-
-                    # 基本的な描画チェック
-                    if test_surface.get_width() == 0 or test_surface.get_height() == 0:
-                        continue
-
-                    # 文字数と幅の関係をチェック（日本語文字は一定の幅を持つべき）
-                    expected_min_width = len(test_text) * (font.get_height() * 0.5)  # 文字数 × フォント高さの半分
-                    if test_surface.get_width() < expected_min_width:
-                        continue  # 幅が小さすぎる = 文字が適切に描画されていない
-
-                    # 少なくとも1つのテキストで有効な描画ができた
-                    return True
-
                 except Exception:
                     continue
 
-            # すべてのテストテキストで失敗
+                if test_surface.get_width() <= 0 or test_surface.get_height() <= 0:
+                    continue
+
+                bounding = test_surface.get_bounding_rect()
+                if bounding.width == 0 or bounding.height == 0:
+                    continue
+
+                metrics_valid = False
+                try:
+                    metrics = font.metrics(test_text)
+                except Exception:
+                    metrics = None
+
+                if metrics:
+                    for metric in metrics:
+                        if metric and len(metric) >= 5:
+                            advance = metric[4]
+                            if isinstance(advance, (int, float)) and advance > 0:
+                                metrics_valid = True
+                                break
+
+                if not metrics_valid:
+                    identical_to_fallback = False
+                    for fallback_char in ("?", "□"):
+                        key = (fallback_char, font.size(fallback_char * len(test_text)))
+                        if key not in fallback_surfaces:
+                            try:
+                                fallback_surfaces[key] = font.render(fallback_char * len(test_text), True, (255, 255, 255))
+                            except Exception:
+                                fallback_surfaces[key] = None
+                        fallback_surface = fallback_surfaces.get(key)
+                        if fallback_surface is None:
+                            continue
+                        if fallback_surface.get_size() == test_surface.get_size():
+                            try:
+                                if pygame.image.tostring(test_surface, "RGBA") == pygame.image.tostring(fallback_surface, "RGBA"):
+                                    identical_to_fallback = True
+                                    break
+                            except Exception:
+                                pass
+                    if identical_to_fallback:
+                        continue
+
+                if contains_non_ascii:
+                    return True
+
             return False
 
         except Exception:
@@ -1254,119 +1302,145 @@ class Aquarium:
 
     def _get_japanese_font(self, size: int) -> pygame.font.Font:
         """日本語対応フォントを取得（クロスプラットフォーム対応）"""
+        cached = self._font_cache.get(size)
+        if cached:
+            return cached
+
         import platform
         system = platform.system()
 
-        # プラットフォーム別の日本語フォントリスト（優先順）
-        if system == "Darwin":  # macOS
-            japanese_fonts = [
-                # macOS Monterey以降
-                "SF Pro Display",
-                "SF Pro Text",
-                # macOS標準の日本語フォント
-                "Hiragino Sans",
-                "Hiragino Kaku Gothic ProN",
-                "Hiragino Kaku Gothic Pro",
-                # バックアップフォント
-                "Arial Unicode MS",
-                "Helvetica Neue",
-                "Arial",
+        candidate_specs: List[Tuple[str, str]] = []
+        seen_candidates: set[Tuple[str, str]] = set()
+
+        def add_candidate(kind: str, identifier: Optional[str]) -> None:
+            if not identifier:
+                return
+            if kind == "path" and not os.path.exists(identifier):
+                return
+            key = (kind, identifier)
+            if key in seen_candidates:
+                return
+            candidate_specs.append(key)
+            seen_candidates.add(key)
+
+        # ユーザー指定または以前成功したフォントを最優先
+        add_candidate("path", os.environ.get("AQUARIUM_FONT_PATH"))
+        add_candidate("sysfont", os.environ.get("AQUARIUM_FONT_NAME"))
+        add_candidate("path", getattr(self, "_preferred_font_path", None))
+        add_candidate("sysfont", getattr(self, "_preferred_font_name", None))
+
+        # プラットフォーム固有のフォント候補
+        if system == "Darwin":
+            name_aliases = [
+                "hiragino", "hiraginokakugothic", "hiraginomarugothic",
+                "sfpro", "sfcompact", "applegothic", "osaka",
+                "noto", "arialunicodems"
             ]
-            font_paths = [
+            path_candidates = [
                 "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+                "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+                "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
                 "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/Apple Color Emoji.ttc",
                 "/Library/Fonts/Arial Unicode.ttf",
-                "/System/Library/Fonts/Arial.ttf",
             ]
-        elif system == "Linux":  # Linux
-            japanese_fonts = [
-                # Noto CJK フォント（推奨）
-                "Noto Sans CJK JP",
-                "Noto Serif CJK JP",
-                "Noto Sans CJK SC",
-                # DejaVu フォント
-                "DejaVu Sans",
-                # その他のLinux標準フォント
-                "Liberation Sans",
-                "FreeSans",
-                "Arial",
+            fallback_names = [
+                "SF Pro Display", "SF Pro Text", "Hiragino Sans",
+                "Hiragino Kaku Gothic ProN", "Hiragino Kaku Gothic Pro",
+                "Hiragino Maru Gothic ProN", "Arial Unicode MS",
+                "Helvetica Neue", "Arial"
             ]
-            font_paths = [
+        elif system == "Linux":
+            name_aliases = [
+                "notosanscjk", "notoserifcjk", "vlgothic", "migu", "takao",
+                "ipamg", "ipag", "ipamincho", "ume", "sazanami"
+            ]
+            path_candidates = [
                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+                "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Medium.otf",
+                "/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf",
+                "/usr/share/fonts/truetype/ipafont/ipag.ttf",
+                "/usr/share/fonts/truetype/ipafont/ipam.ttf",
             ]
-        elif system == "Windows":  # Windows
-            japanese_fonts = [
-                # Windows標準日本語フォント
-                "Yu Gothic UI",
-                "Yu Gothic",
-                "Meiryo UI",
-                "Meiryo",
-                "MS Gothic",
-                "MS PGothic",
-                # Unicode対応フォント
-                "Arial Unicode MS",
-                "Segoe UI",
-                "Arial",
+            fallback_names = [
+                "Noto Sans CJK JP", "Noto Serif CJK JP", "Noto Sans CJK SC",
+                "VL Gothic", "IPAGothic", "IPAMincho",
+                "DejaVu Sans", "Liberation Sans", "Arial"
             ]
-            font_paths = [
+        elif system == "Windows":
+            name_aliases = [
+                "yugoth", "meiryo", "msgothic", "mspgothic",
+                "msmincho", "mspmincho", "malgungothic", "mingliu"
+            ]
+            path_candidates = [
                 "C:/Windows/Fonts/yugothic.ttf",
+                "C:/Windows/Fonts/yu-gothic.ttf",
                 "C:/Windows/Fonts/meiryo.ttc",
                 "C:/Windows/Fonts/msgothic.ttc",
+                "C:/Windows/Fonts/msmincho.ttc",
                 "C:/Windows/Fonts/arialuni.ttf",
-                "C:/Windows/Fonts/segoeui.ttf",
             ]
-        else:  # その他のOS用フォールバック
-            japanese_fonts = [
-                "Arial Unicode MS",
-                "DejaVu Sans",
-                "Liberation Sans",
-                "Arial",
+            fallback_names = [
+                "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo",
+                "MS Gothic", "MS PGothic", "MS Mincho", "MS PMincho",
+                "Arial Unicode MS", "Segoe UI", "Arial"
             ]
-            font_paths = []
+        else:
+            name_aliases = ["noto", "dejavu", "liberation", "arialunicodems"]
+            path_candidates = []
+            fallback_names = [
+                "Arial Unicode MS", "DejaVu Sans", "Liberation Sans", "Arial"
+            ]
 
-        # まずシステムフォントを試行
-        for font_name in japanese_fonts:
+        # 直接パス候補
+        for font_path in path_candidates:
+            add_candidate("path", font_path)
+
+        # pygameが認識しているフォント名からエイリアスに一致するものを追加
+        available_fonts = pygame.font.get_fonts()
+        for alias in name_aliases:
+            alias_lower = alias.lower()
+            for registered_name in available_fonts:
+                if alias_lower in registered_name:
+                    matched_path = pygame.font.match_font(registered_name, bold=False, italic=False)
+                    add_candidate("path", matched_path)
+
+        # フォールバックとして明示的なフォント名も登録
+        for font_name in fallback_names:
+            add_candidate("sysfont", font_name)
+
+        test_texts = ["あいう", "アイウ", "日本語", "テスト", "通信中...", "データ送信"]
+
+        for kind, identifier in candidate_specs:
             try:
-                font = pygame.font.SysFont(font_name, size)
-                # 日本語文字でテスト（ひらがな、カタカナ、漢字）
-                test_texts = ["あいう", "アイウ", "日本語", "テスト"]
+                if kind == "sysfont":
+                    font = pygame.font.SysFont(identifier, size)
+                else:
+                    font = pygame.font.Font(identifier, size)
 
-                # フォントが日本語文字を正しく描画できるかテスト
-                valid_font = self._validate_japanese_font(font, test_texts, font_name)
-                if valid_font:
-                    print(f"✅ 日本語フォント '{font_name}' を使用します (サイズ: {size}) - {system}")
+                if self._validate_japanese_font(font, test_texts, identifier):
+                    self._font_cache[size] = font
+                    if kind == "sysfont":
+                        self._preferred_font_name = identifier
+                        print(f"✅ 日本語フォント '{identifier}' を使用します (サイズ: {size}) - {system}")
+                    else:
+                        self._preferred_font_path = identifier
+                        print(f"✅ フォントファイル '{identifier}' を使用します (サイズ: {size})")
                     return font
-
             except Exception as e:
-                print(f"❌ フォント '{font_name}' の読み込みに失敗: {e}")
+                print(f"❌ フォント '{identifier}' の読み込みに失敗: {e}")
                 continue
 
-        # 次にフォントファイルパスを試行
-        for font_path in font_paths:
-            try:
-                if os.path.exists(font_path):
-                    font = pygame.font.Font(font_path, size)
-                    # 簡単なテスト
-                    if self._validate_japanese_font(font, ["テスト"], font_path):
-                        print(f"✅ フォントファイル '{font_path}' を使用します")
-                        return font
-            except Exception as e:
-                print(f"❌ フォントファイル '{font_path}' の読み込みに失敗: {e}")
-                continue
-
-        # 最終的なフォールバック: pygame.font.get_default_font()
         try:
             default_font_path = pygame.font.get_default_font()
-            font = pygame.font.Font(default_font_path, size)
+            fallback_font = pygame.font.Font(default_font_path, size)
             print(f"⚠️  デフォルトフォント '{default_font_path}' を使用します（日本語表示不可）")
-            return font
-        except:
-            # 最後の手段: Noneフォント
+        except Exception:
             print("❌ フォント読み込み完全失敗。Noneフォントを使用します")
-            return pygame.font.Font(None, size)
+            fallback_font = pygame.font.Font(None, size)
+
+        return fallback_font
 
     def _render_text(self, text: str, font: pygame.font.Font, color: Tuple[int, int, int]) -> pygame.Surface:
         """日本語テキストを安全にレンダリング"""
@@ -1506,7 +1580,7 @@ class Aquarium:
         small_font_size = 18
         self.font = self._get_japanese_font(int(base_font_size * self.font_scale))
         self.small_font = self._get_japanese_font(int(small_font_size * self.font_scale))
-        self.bubble_font = self._get_japanese_font(10)
+        self.bubble_font = self._get_japanese_font(self._determine_bubble_font_size())
 
 def main():
     """メイン関数"""

@@ -532,7 +532,8 @@ class Fish:
         else:
             self._draw_generic_fish(screen, color, alpha, body_length, body_width)
 
-    def draw(self, screen: pygame.Surface, font: pygame.font.Font = None, quality: str = "full"):
+    def draw(self, screen: pygame.Surface, font: pygame.font.Font = None, quality: str = "full",
+             text_renderer=None):
         """Fishの描画（魚らしい見た目版）"""
         if self.death_progress >= 1.0:
             return
@@ -582,7 +583,7 @@ class Fish:
 
         # 会話吹き出しの描画
         if quality != "minimal" and self.is_talking and self.talk_message:
-            self._draw_speech_bubble(screen, self.talk_message, font)
+            self._draw_speech_bubble(screen, self.talk_message, font, text_renderer)
 
     def _draw_small_fish(self, screen: pygame.Surface, color: Tuple[int, int, int],
                         alpha: int, x: float, y: float, size: float):
@@ -956,20 +957,31 @@ class Fish:
 
         return 0.0, 0.0
 
-    def _draw_speech_bubble(self, screen: pygame.Surface, message: str, font: pygame.font.Font = None):
+    def _draw_speech_bubble(self, screen: pygame.Surface, message: str,
+                             font: pygame.font.Font = None, text_renderer=None):
         """会話吹き出しの描画"""
         if not message:
             return
-            
+
         # フォントの設定（引数で指定されたフォントを優先）
         if font is None:
             try:
-                font = pygame.font.Font(None, 10)
-            except:
-                font = pygame.font.SysFont("Arial", 10)
-            
+                font = pygame.font.Font(None, 12)
+            except Exception:
+                font = pygame.font.SysFont("Arial", 12)
+
         # テキストのレンダリング
-        text_surface = font.render(message, True, (0, 0, 0))
+        try:
+            if text_renderer:
+                text_surface = text_renderer(message, font, (0, 0, 0))
+            else:
+                text_surface = font.render(message, True, (0, 0, 0))
+        except Exception:
+            safe_message = message.encode('ascii', 'replace').decode('ascii')
+            try:
+                text_surface = font.render(safe_message, True, (0, 0, 0))
+            except Exception:
+                return
         text_rect = text_surface.get_rect()
         
         # 吹き出しの位置とサイズ
