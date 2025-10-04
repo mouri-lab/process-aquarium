@@ -375,14 +375,8 @@ class Fish:
         self.x += self.vx
         self.y += self.vy
 
-        # 画面端での反射
-        if self.x <= self.current_size or self.x >= screen_width - self.current_size:
-            self.vx *= -0.8
-            self.x = max(self.current_size, min(screen_width - self.current_size, self.x))
-
-        if self.y <= self.current_size or self.y >= screen_height - self.current_size:
-            self.vy *= -0.8
-            self.y = max(self.current_size, min(screen_height - self.current_size, self.y))
+        # 画面境界は無制限 - 魚は自由に泳ぎ回れる
+        # カメラシステムで追跡するため、境界での反射は削除
 
         return True  # まだ生きている
 

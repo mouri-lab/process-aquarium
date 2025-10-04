@@ -176,6 +176,24 @@ class Aquarium:
         # UI状態
         self.selected_fish: Optional[Fish] = None
 
+        # カメラシステム（自由なスクロール・ズーム機能）
+        self.camera_x = 0.0  # カメラのX座標（ワールド座標）
+        self.camera_y = 0.0  # カメラのY座標（ワールド座標）
+        self.zoom_level = 1.0  # ズームレベル（1.0 = 等倍）
+        self.min_zoom = 0.1   # 最小ズーム
+        self.max_zoom = 5.0   # 最大ズーム
+        
+        # マウス操作
+        self.is_dragging = False
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        self.last_mouse_x = 0
+        self.last_mouse_y = 0
+        
+        # 追従機能
+        self.follow_target: Optional[Fish] = None
+        self.auto_center = True  # 自動センタリング
+
         # 日本語フォント管理と動的スケーリング
         self._preferred_font_name: Optional[str] = None
         self._preferred_font_path: Optional[str] = None
@@ -278,6 +296,46 @@ class Aquarium:
             self.screen.blit(temp_surface,
                            (particle['x'] - particle['size'],
                             particle['y'] - particle['size']))
+
+    # ===== カメラシステム =====
+    def world_to_screen(self, world_x: float, world_y: float) -> Tuple[int, int]:
+        """ワールド座標をスクリーン座標に変換"""
+        screen_x = (world_x - self.camera_x) * self.zoom_level + self.width // 2
+        screen_y = (world_y - self.camera_y) * self.zoom_level + self.height // 2
+        return (int(screen_x), int(screen_y))
+    
+    def screen_to_world(self, screen_x: int, screen_y: int) -> Tuple[float, float]:
+        """スクリーン座標をワールド座標に変換"""
+        world_x = (screen_x - self.width // 2) / self.zoom_level + self.camera_x
+        world_y = (screen_y - self.height // 2) / self.zoom_level + self.camera_y
+        return (world_x, world_y)
+    
+    def is_visible(self, world_x: float, world_y: float, margin: float = 100) -> bool:
+        """オブジェクトが画面内（マージン込み）に表示されるかチェック"""
+        screen_x, screen_y = self.world_to_screen(world_x, world_y)
+        return (-margin <= screen_x <= self.width + margin and 
+                -margin <= screen_y <= self.height + margin)
+    
+    def update_camera(self):
+        """カメラの更新（追従機能など）"""
+        if self.follow_target and self.follow_target in self.fishes.values():
+            # 追従対象の魚を画面中央に保つ
+            target_x = self.follow_target.x
+            target_y = self.follow_target.y
+            
+            # スムーズな追従（線形補間）
+            lerp_factor = 0.05
+            self.camera_x += (target_x - self.camera_x) * lerp_factor
+            self.camera_y += (target_y - self.camera_y) * lerp_factor
+        elif self.auto_center and self.fishes:
+            # 自動センタリング：全ての魚の重心を追跡
+            center_x = sum(fish.x for fish in self.fishes.values()) / len(self.fishes)
+            center_y = sum(fish.y for fish in self.fishes.values()) / len(self.fishes)
+            
+            # ゆっくりとした自動センタリング
+            lerp_factor = 0.01
+            self.camera_x += (center_x - self.camera_x) * lerp_factor
+            self.camera_y += (center_y - self.camera_y) * lerp_factor
 
     def _create_background_cache(self):
         """背景キャッシュを作成"""
@@ -443,8 +501,9 @@ class Aquarium:
     def handle_mouse_click(self, pos: Tuple[int, int]):
         """マウスクリックによるFish選択と吹き出しクリック処理"""
         x, y = pos
+        world_x, world_y = self.screen_to_world(x, y)
 
-        # まず吹き出しのクリック判定をチェック
+        # まず吹き出しのクリック判定をチェック（スクリーン座標での判定）
         for fish in self.fishes.values():
             if fish.bubble_rect and fish.is_talking:
                 bx, by, bw, bh = fish.bubble_rect
@@ -457,13 +516,36 @@ class Aquarium:
         self.selected_fish = None
         self.highlighted_partners = []  # 通信相手のハイライトをクリア
 
-        # 最も近いFishを選択
+        # 最も近いFishを選択（ワールド座標で判定）
         min_distance = float('inf')
         for fish in self.fishes.values():
-            distance = math.sqrt((fish.x - x)**2 + (fish.y - y)**2)
-            if distance < fish.current_size + 10 and distance < min_distance:
+            distance = math.sqrt((fish.x - world_x)**2 + (fish.y - world_y)**2)
+            if distance < (fish.current_size + 10) / self.zoom_level and distance < min_distance:
                 min_distance = distance
                 self.selected_fish = fish
+
+    def select_follow_target(self, pos: Tuple[int, int]):
+        """右クリックで追従対象を選択"""
+        x, y = pos
+        world_x, world_y = self.screen_to_world(x, y)
+        
+        # 最も近いFishを追従対象に設定
+        min_distance = float('inf')
+        target_fish = None
+        
+        for fish in self.fishes.values():
+            distance = math.sqrt((fish.x - world_x)**2 + (fish.y - world_y)**2)
+            if distance < fish.current_size + 20 and distance < min_distance:
+                min_distance = distance
+                target_fish = fish
+        
+        if target_fish:
+            self.follow_target = target_fish
+            self.auto_center = False
+            print(f"追従対象: PID {target_fish.pid} ({target_fish.process_name})")
+        else:
+            self.follow_target = None
+            print("追従対象を解除しました")
 
     def _highlight_communication_partners(self, fish):
         """通信相手をハイライト表示"""
@@ -522,6 +604,16 @@ class Aquarium:
         # Retinaディスプレイ情報
         if hasattr(self, 'retina_info') and self.retina_info['is_retina']:
             stats_lines.append(f"Retina: {self.retina_info['scale_factor']:.1f}x")
+
+        # カメラ情報
+        stats_lines.append(f"カメラ: ({self.camera_x:.0f}, {self.camera_y:.0f})")
+        stats_lines.append(f"ズーム: {self.zoom_level:.2f}x")
+        if self.follow_target:
+            stats_lines.append(f"追従: PID {self.follow_target.pid}")
+        elif self.auto_center:
+            stats_lines.append("追従: 自動センタリング")
+        else:
+            stats_lines.append("追従: なし")
 
         # 背景パネル
         panel_padding_x = 10
@@ -600,13 +692,19 @@ class Aquarium:
             if fish.parent_pid and fish.parent_pid in self.fishes:
                 parent_fish = self.fishes[fish.parent_pid]
 
-                # 淡い線で接続
-                color = (100, 150, 200, 50)
-                temp_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
-                pygame.draw.line(temp_surface, color,
-                               (int(parent_fish.x), int(parent_fish.y)),
-                               (int(fish.x), int(fish.y)), 1)
-                self.screen.blit(temp_surface, (0, 0))
+                # 可視判定（どちらかが画面内にある場合のみ描画）
+                if self.is_visible(fish.x, fish.y, 50) or self.is_visible(parent_fish.x, parent_fish.y, 50):
+                    # ワールド座標をスクリーン座標に変換
+                    parent_screen_x, parent_screen_y = self.world_to_screen(parent_fish.x, parent_fish.y)
+                    child_screen_x, child_screen_y = self.world_to_screen(fish.x, fish.y)
+
+                    # 淡い線で接続
+                    color = (100, 150, 200, 50)
+                    temp_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+                    pygame.draw.line(temp_surface, color,
+                                   (int(parent_screen_x), int(parent_screen_y)),
+                                   (int(child_screen_x), int(child_screen_y)), 1)
+                    self.screen.blit(temp_surface, (0, 0))
 
     def _update_ipc_connections(self):
         """IPC接続情報の更新"""
@@ -722,37 +820,41 @@ class Aquarium:
                 fish1 = self.fishes[proc1.pid]
                 fish2 = self.fishes[proc2.pid]
 
-                # 距離チェック（画面上でも近い場合のみ描画）
-                distance = math.sqrt((fish1.x - fish2.x)**2 + (fish1.y - fish2.y)**2)
-                if distance < 200:  # 200ピクセル以内の場合のみ
-                    # 脈動する線の効果
-                    pulse = math.sin(time.time() * 3) * 0.3 + 0.7
-                    alpha = int(80 * pulse)
+                # 可視判定（どちらかの魚が画面内にある場合のみ描画）
+                if self.is_visible(fish1.x, fish1.y, 100) or self.is_visible(fish2.x, fish2.y, 100):
+                    # ワールド座標での距離チェック
+                    distance = math.sqrt((fish1.x - fish2.x)**2 + (fish1.y - fish2.y)**2)
+                    if distance < 400 / self.zoom_level:  # ズームレベルに応じて距離を調整
+                        # 脈動する線の効果
+                        pulse = math.sin(time.time() * 3) * 0.3 + 0.7
+                        alpha = int(80 * pulse)
 
-                    # CPU使用率に応じて線の色を変更
-                    cpu_intensity = (fish1.cpu_percent + fish2.cpu_percent) / 200.0
-                    red = int(100 + cpu_intensity * 155)
-                    green = int(150 - cpu_intensity * 50)
-                    blue = int(200 - cpu_intensity * 100)
+                        # CPU使用率に応じて線の色を変更
+                        cpu_intensity = (fish1.cpu_percent + fish2.cpu_percent) / 200.0
+                        red = int(100 + cpu_intensity * 155)
+                        green = int(150 - cpu_intensity * 50)
+                        blue = int(200 - cpu_intensity * 100)
 
-                    color = (red, green, blue, alpha)
+                        color = (red, green, blue, alpha)
 
-                    # 少し曲がった線を描画（より有機的に）
-                    mid_x = (fish1.x + fish2.x) / 2 + math.sin(time.time() * 2) * 10
-                    mid_y = (fish1.y + fish2.y) / 2 + math.cos(time.time() * 2) * 10
+                        # ワールド座標で曲線の中点を計算
+                        mid_world_x = (fish1.x + fish2.x) / 2 + math.sin(time.time() * 2) * 20
+                        mid_world_y = (fish1.y + fish2.y) / 2 + math.cos(time.time() * 2) * 20
 
-                    # ベジェ曲線風の描画
-                    steps = 10
-                    points = []
-                    for i in range(steps + 1):
-                        t = i / steps
-                        # 二次ベジェ曲線
-                        x = (1-t)**2 * fish1.x + 2*(1-t)*t * mid_x + t**2 * fish2.x
-                        y = (1-t)**2 * fish1.y + 2*(1-t)*t * mid_y + t**2 * fish2.y
-                        points.append((x, y))
+                        # ベジェ曲線をワールド座標で計算してからスクリーン座標に変換
+                        steps = 10
+                        points = []
+                        for i in range(steps + 1):
+                            t = i / steps
+                            # 二次ベジェ曲線（ワールド座標）
+                            world_x = (1-t)**2 * fish1.x + 2*(1-t)*t * mid_world_x + t**2 * fish2.x
+                            world_y = (1-t)**2 * fish1.y + 2*(1-t)*t * mid_world_y + t**2 * fish2.y
+                            # スクリーン座標に変換
+                            screen_x, screen_y = self.world_to_screen(world_x, world_y)
+                            points.append((screen_x, screen_y))
 
-                    if len(points) > 1:
-                        pygame.draw.lines(connection_surface, color, False, points, 2)
+                        if len(points) > 1:
+                            pygame.draw.lines(connection_surface, color, False, points, 2)
 
         self.screen.blit(connection_surface, (0, 0))
 
@@ -804,8 +906,53 @@ class Aquarium:
                 elif event.key == pygame.K_o:
                     # ソート順序の切り替え
                     self._toggle_sort_order()
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self.handle_mouse_click(event.pos)
+                elif event.key == pygame.K_c:
+                    # 自動センタリングの切り替え
+                    self.auto_center = not self.auto_center
+                    print(f"自動センタリング: {'オン' if self.auto_center else 'オフ'}")
+                elif event.key == pygame.K_r:
+                    # カメラリセット
+                    self.camera_x = 0.0
+                    self.camera_y = 0.0
+                    self.zoom_level = 1.0
+                    self.follow_target = None
+                    print("カメラをリセットしました")
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:  # 左クリック
+                    self.is_dragging = True
+                    self.drag_start_x, self.drag_start_y = event.pos
+                    self.last_mouse_x, self.last_mouse_y = event.pos
+                    # 魚の選択も行う
+                    self.handle_mouse_click(event.pos)
+                elif event.button == 3:  # 右クリック - 追従対象選択
+                    self.select_follow_target(event.pos)
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1:  # 左クリック解除
+                    self.is_dragging = False
+            elif event.type == pygame.MOUSEMOTION:
+                if self.is_dragging:
+                    # ドラッグによるカメラ移動
+                    dx = event.pos[0] - self.last_mouse_x
+                    dy = event.pos[1] - self.last_mouse_y
+                    self.camera_x -= dx / self.zoom_level
+                    self.camera_y -= dy / self.zoom_level
+                    self.last_mouse_x, self.last_mouse_y = event.pos
+                    # ドラッグ中は追従を無効化
+                    self.follow_target = None
+                    self.auto_center = False
+            elif event.type == pygame.MOUSEWHEEL:
+                # マウスホイールによるズーム
+                zoom_factor = 1.1 if event.y > 0 else 0.9
+                old_zoom = self.zoom_level
+                self.zoom_level = max(self.min_zoom, min(self.max_zoom, self.zoom_level * zoom_factor))
+                
+                # ズーム中心をマウス位置に設定
+                mouse_x, mouse_y = pygame.mouse.get_pos()
+                world_x, world_y = self.screen_to_world(mouse_x, mouse_y)
+                # ズーム後に同じワールド座標がマウス位置に来るようにカメラを調整
+                new_screen_x, new_screen_y = self.world_to_screen(world_x, world_y)
+                self.camera_x += (new_screen_x - mouse_x) / self.zoom_level
+                self.camera_y += (new_screen_y - mouse_y) / self.zoom_level
 
     def toggle_fullscreen(self):
         """フルスクリーンモードの切り替え"""
@@ -1123,6 +1270,9 @@ class Aquarium:
             return
         current_time = time.time()
 
+        # カメラシステムの更新
+        self.update_camera()
+
         # パフォーマンス監視
         current_fps = self.clock.get_fps()
         self.performance_monitor['fps_history'].append(current_fps)
@@ -1222,17 +1372,31 @@ class Aquarium:
         # IPC接続の線
         self.draw_ipc_connections()
 
-        # 全てのFishを描画
+        # 全てのFishを描画（カメラシステム対応）
         for fish in self.fishes.values():
-            fish.draw(self.screen, self.bubble_font, quality=self.render_quality,
-                      text_renderer=self._render_text)
+            # 可視判定（画面内にある魚のみ描画）
+            if self.is_visible(fish.x, fish.y, fish.current_size + 50):
+                # 魚の座標をカメラ座標系に変換
+                screen_x, screen_y = self.world_to_screen(fish.x, fish.y)
+                
+                # 一時的に魚の位置をスクリーン座標に設定
+                original_x, original_y = fish.x, fish.y
+                fish.x, fish.y = screen_x, screen_y
+                
+                # 魚を描画
+                fish.draw(self.screen, self.bubble_font, quality=self.render_quality,
+                          text_renderer=self._render_text)
+                
+                # 元の座標に戻す
+                fish.x, fish.y = original_x, original_y
 
         # 選択されたFishのハイライト
-        if self.selected_fish:
+        if self.selected_fish and self.is_visible(self.selected_fish.x, self.selected_fish.y):
             highlight_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+            screen_x, screen_y = self.world_to_screen(self.selected_fish.x, self.selected_fish.y)
             pygame.draw.circle(highlight_surface, (255, 255, 255, 100),
-                             (int(self.selected_fish.x), int(self.selected_fish.y)),
-                             int(self.selected_fish.current_size + 10), 2)
+                             (int(screen_x), int(screen_y)),
+                             int(self.selected_fish.current_size * self.zoom_level + 10), 2)
             self.screen.blit(highlight_surface, (0, 0))
 
         # 通信相手のハイライト表示
@@ -1241,12 +1405,14 @@ class Aquarium:
             for partner_pid in self.highlighted_partners:
                 if partner_pid in self.fishes:
                     partner_fish = self.fishes[partner_pid]
-                    # 緑色の点滅ハイライト
-                    pulse = math.sin(time.time() * 8) * 0.5 + 0.5
-                    alpha = int(150 * pulse + 50)
-                    pygame.draw.circle(partner_surface, (0, 255, 0, alpha),
-                                     (int(partner_fish.x), int(partner_fish.y)),
-                                     int(partner_fish.current_size + 15), 3)
+                    if self.is_visible(partner_fish.x, partner_fish.y):
+                        screen_x, screen_y = self.world_to_screen(partner_fish.x, partner_fish.y)
+                        # 緑色の点滅ハイライト
+                        pulse = math.sin(time.time() * 8) * 0.5 + 0.5
+                        alpha = int(150 * pulse + 50)
+                        pygame.draw.circle(partner_surface, (0, 255, 0, alpha),
+                                         (int(screen_x), int(screen_y)),
+                                         int(partner_fish.current_size * self.zoom_level + 15), 3)
             self.screen.blit(partner_surface, (0, 0))
 
         # UI描画
