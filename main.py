@@ -45,12 +45,18 @@ def main_cli():
 
     if args.source:
         os.environ["AQUARIUM_SOURCE"] = args.source
+    else:
+        os.environ.setdefault("AQUARIUM_SOURCE", "ebpf")
     if args.limit is not None:
         os.environ["AQUARIUM_LIMIT"] = str(args.limit)
     os.environ["AQUARIUM_SORT_BY"] = args.sort_by
     os.environ["AQUARIUM_SORT_ORDER"] = args.sort_order
     if args.gpu_driver:
         os.environ["AQUARIUM_GPU_DRIVER"] = args.gpu_driver
+    if args.gpu is None:
+        os.environ.setdefault("AQUARIUM_GPU", "1")
+    else:
+        os.environ["AQUARIUM_GPU"] = "1" if args.gpu else "0"
     if args.adaptive_quality is not None:
         os.environ["AQUARIUM_ENABLE_ADAPTIVE_QUALITY"] = "1" if args.adaptive_quality else "0"
     aquarium = Aquarium(width=args.width, height=args.height, headless=args.headless,
