@@ -182,17 +182,18 @@ class Aquarium:
         self.zoom_level = 1.0  # ズームレベル（1.0 = 等倍）
         self.min_zoom = 0.1   # 最小ズーム
         self.max_zoom = 5.0   # 最大ズーム
-        
+
         # マウス操作
         self.is_dragging = False
         self.drag_start_x = 0
         self.drag_start_y = 0
         self.last_mouse_x = 0
         self.last_mouse_y = 0
-        
+
         # 追従機能
         self.follow_target: Optional[Fish] = None
         self.auto_center = True  # 自動センタリング
+        self.camera_follow_mode = False  # カメラ追従モード
 
         # 日本語フォント管理と動的スケーリング
         self._preferred_font_name: Optional[str] = None
@@ -220,7 +221,7 @@ class Aquarium:
         self.ipc_connections = []
         self.ipc_update_timer = 0
         self.ipc_update_interval = 30  # 0.5秒間隔でIPC更新（高頻度化）
-        
+
         # 通信履歴ベースの群れ形成
         self.communication_history = {}  # {(pid1, pid2): [timestamps]}
         self.history_cleanup_timer = 0
@@ -303,35 +304,45 @@ class Aquarium:
         screen_x = (world_x - self.camera_x) * self.zoom_level + self.width // 2
         screen_y = (world_y - self.camera_y) * self.zoom_level + self.height // 2
         return (int(screen_x), int(screen_y))
-    
+
     def screen_to_world(self, screen_x: int, screen_y: int) -> Tuple[float, float]:
         """スクリーン座標をワールド座標に変換"""
         world_x = (screen_x - self.width // 2) / self.zoom_level + self.camera_x
         world_y = (screen_y - self.height // 2) / self.zoom_level + self.camera_y
         return (world_x, world_y)
-    
+
     def is_visible(self, world_x: float, world_y: float, margin: float = 100) -> bool:
         """オブジェクトが画面内（マージン込み）に表示されるかチェック"""
         screen_x, screen_y = self.world_to_screen(world_x, world_y)
-        return (-margin <= screen_x <= self.width + margin and 
+        return (-margin <= screen_x <= self.width + margin and
                 -margin <= screen_y <= self.height + margin)
-    
+
     def update_camera(self):
         """カメラの更新（追従機能など）"""
-        if self.follow_target and self.follow_target in self.fishes.values():
-            # 追従対象の魚を画面中央に保つ
+        # 選択魚追従モード：selected_fishを自動追従
+        if self.camera_follow_mode and self.selected_fish and self.selected_fish in self.fishes.values():
+            # 選択された魚を画面中央に保つ
+            target_x = self.selected_fish.x
+            target_y = self.selected_fish.y
+
+            # スムーズな追従（線形補間）
+            lerp_factor = 0.08  # 少し速めの追従
+            self.camera_x += (target_x - self.camera_x) * lerp_factor
+            self.camera_y += (target_y - self.camera_y) * lerp_factor
+        elif self.follow_target and self.follow_target in self.fishes.values():
+            # 従来の追従対象の魚を画面中央に保つ
             target_x = self.follow_target.x
             target_y = self.follow_target.y
-            
+
             # スムーズな追従（線形補間）
             lerp_factor = 0.05
             self.camera_x += (target_x - self.camera_x) * lerp_factor
             self.camera_y += (target_y - self.camera_y) * lerp_factor
-        elif self.auto_center and self.fishes:
-            # 自動センタリング：全ての魚の重心を追跡
+        elif self.auto_center and self.fishes and not self.camera_follow_mode:
+            # 自動センタリング：全ての魚の重心を追跡（追従モードでない時のみ）
             center_x = sum(fish.x for fish in self.fishes.values()) / len(self.fishes)
             center_y = sum(fish.y for fish in self.fishes.values()) / len(self.fishes)
-            
+
             # ゆっくりとした自動センタリング
             lerp_factor = 0.01
             self.camera_x += (center_x - self.camera_x) * lerp_factor
@@ -413,7 +424,7 @@ class Aquarium:
 
         # IPC接続の更新
         self._update_ipc_connections()
-        
+
         # 通信履歴の更新と群れ形成
         self._update_communication_history()
 
@@ -458,6 +469,13 @@ class Aquarium:
 
         for pid in dead_pids:
             fish_name = self.fishes[pid].process_name
+            # 追従対象の魚が削除される場合は追従モードを解除
+            if self.selected_fish and self.selected_fish.pid == pid:
+                self.camera_follow_mode = False
+                self.selected_fish = None
+                print(f"📹 追従対象の魚が削除されました。追従モードを解除します。")
+            if self.follow_target and self.follow_target.pid == pid:
+                self.follow_target = None
             del self.fishes[pid]
             # print(f"🗑️ 魚を削除完了: PID {pid} ({fish_name})")
 
@@ -528,17 +546,17 @@ class Aquarium:
         """右クリックで追従対象を選択"""
         x, y = pos
         world_x, world_y = self.screen_to_world(x, y)
-        
+
         # 最も近いFishを追従対象に設定
         min_distance = float('inf')
         target_fish = None
-        
+
         for fish in self.fishes.values():
             distance = math.sqrt((fish.x - world_x)**2 + (fish.y - world_y)**2)
             if distance < fish.current_size + 20 and distance < min_distance:
                 min_distance = distance
                 target_fish = fish
-        
+
         if target_fish:
             self.follow_target = target_fish
             self.auto_center = False
@@ -608,7 +626,9 @@ class Aquarium:
         # カメラ情報
         stats_lines.append(f"カメラ: ({self.camera_x:.0f}, {self.camera_y:.0f})")
         stats_lines.append(f"ズーム: {self.zoom_level:.2f}x")
-        if self.follow_target:
+        if self.camera_follow_mode and self.selected_fish:
+            stats_lines.append(f"📹 追従: PID {self.selected_fish.pid}")
+        elif self.follow_target:
             stats_lines.append(f"追従: PID {self.follow_target.pid}")
         elif self.auto_center:
             stats_lines.append("追従: 自動センタリング")
@@ -667,6 +687,10 @@ class Aquarium:
         help_lines = [
             "操作方法:",
             "クリック: 生命体を選択",
+            "T: カメラ追従モード切替",
+            "ホイール: ズーム",
+            "右クリック+ドラッグ: パン",
+            "R: カメラリセット",
             "ESC: 終了",
             "D: デバッグ表示切替",
             "I: IPC接続表示切替",
@@ -763,20 +787,20 @@ class Aquarium:
     def _update_communication_history(self):
         """通信履歴を更新し、履歴ベースの群れ形成を行う"""
         current_time = time.time()
-        
+
         # 現在のIPC接続を履歴に追加
         for proc1, proc2 in self.ipc_connections:
             key = (min(proc1.pid, proc2.pid), max(proc1.pid, proc2.pid))
             if key not in self.communication_history:
                 self.communication_history[key] = []
             self.communication_history[key].append(current_time)
-        
+
         # 履歴のクリーンアップ
         self.history_cleanup_timer += 1
         if self.history_cleanup_timer >= self.history_cleanup_interval:
             self.history_cleanup_timer = 0
             cutoff_time = current_time - self.communication_window
-            
+
             for key in list(self.communication_history.keys()):
                 # 古いタイムスタンプを削除
                 self.communication_history[key] = [
@@ -785,22 +809,22 @@ class Aquarium:
                 # 空のエントリを削除
                 if not self.communication_history[key]:
                     del self.communication_history[key]
-        
+
         # 通信頻度の高いプロセス同士を追加で群れにする
         self._form_communication_based_schools(current_time)
 
     def _form_communication_based_schools(self, current_time: float):
         """通信履歴に基づいて動的に群れを形成"""
         cutoff_time = current_time - self.communication_window
-        
+
         for (pid1, pid2), timestamps in self.communication_history.items():
             recent_communications = [t for t in timestamps if t > cutoff_time]
-            
+
             # 過去60秒間に3回以上通信があれば群れ関係とみなす
             if len(recent_communications) >= 3:
                 if pid1 in self.fishes and pid2 in self.fishes:
                     fish1, fish2 = self.fishes[pid1], self.fishes[pid2]
-                    
+
                     # 既存の群れがない場合のみ新しい群れを形成
                     if not fish1.school_members and not fish2.school_members:
                         # 小さな通信ベースの群れを形成
@@ -910,12 +934,23 @@ class Aquarium:
                     # 自動センタリングの切り替え
                     self.auto_center = not self.auto_center
                     print(f"自動センタリング: {'オン' if self.auto_center else 'オフ'}")
+                elif event.key == pygame.K_t:
+                    # 選択魚追従モードの切り替え
+                    if self.selected_fish:
+                        self.camera_follow_mode = not self.camera_follow_mode
+                        if self.camera_follow_mode:
+                            print(f"📹 カメラ追従モード: オン (PID {self.selected_fish.pid} - {self.selected_fish.process_name})")
+                        else:
+                            print("📹 カメラ追従モード: オフ")
+                    else:
+                        print("⚠️ 追従する魚を選択してください（左クリック）")
                 elif event.key == pygame.K_r:
                     # カメラリセット
                     self.camera_x = 0.0
                     self.camera_y = 0.0
                     self.zoom_level = 1.0
                     self.follow_target = None
+                    self.camera_follow_mode = False  # 追従モードもリセット
                     print("カメラをリセットしました")
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # 左クリック
@@ -945,7 +980,7 @@ class Aquarium:
                 zoom_factor = 1.1 if event.y > 0 else 0.9
                 old_zoom = self.zoom_level
                 self.zoom_level = max(self.min_zoom, min(self.max_zoom, self.zoom_level * zoom_factor))
-                
+
                 # ズーム中心をマウス位置に設定
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 world_x, world_y = self.screen_to_world(mouse_x, mouse_y)
@@ -1378,15 +1413,15 @@ class Aquarium:
             if self.is_visible(fish.x, fish.y, fish.current_size + 50):
                 # 魚の座標をカメラ座標系に変換
                 screen_x, screen_y = self.world_to_screen(fish.x, fish.y)
-                
+
                 # 一時的に魚の位置をスクリーン座標に設定
                 original_x, original_y = fish.x, fish.y
                 fish.x, fish.y = screen_x, screen_y
-                
+
                 # 魚を描画（ズームレベルを渡す）
                 fish.draw(self.screen, self.bubble_font, quality=self.render_quality,
                           text_renderer=self._render_text, zoom_level=self.zoom_level)
-                
+
                 # 元の座標に戻す
                 fish.x, fish.y = original_x, original_y
 
