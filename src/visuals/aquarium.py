@@ -201,7 +201,13 @@ class Aquarium:
         # IPC接続情報
         self.ipc_connections = []
         self.ipc_update_timer = 0
-        self.ipc_update_interval = 60  # 1秒間隔でIPC更新
+        self.ipc_update_interval = 30  # 0.5秒間隔でIPC更新（高頻度化）
+        
+        # 通信履歴ベースの群れ形成
+        self.communication_history = {}  # {(pid1, pid2): [timestamps]}
+        self.history_cleanup_timer = 0
+        self.history_cleanup_interval = 300  # 5秒間隔で履歴クリーンアップ
+        self.communication_window = 60.0  # 60秒間の通信履歴を保持
 
         # デバッグ情報表示
         self.show_debug = False  # デフォルトでデバッグ表示をオフ
@@ -349,6 +355,9 @@ class Aquarium:
 
         # IPC接続の更新
         self._update_ipc_connections()
+        
+        # 通信履歴の更新と群れ形成
+        self._update_communication_history()
 
         # IPC吸引力の適用
         self._apply_ipc_attraction()
@@ -652,6 +661,54 @@ class Aquarium:
                         fish2.talk_timer = 60
                         fish2.talk_message = "データ送信"
                         fish2.talk_partners = [proc1.pid]  # 通信相手を記録
+
+    def _update_communication_history(self):
+        """通信履歴を更新し、履歴ベースの群れ形成を行う"""
+        current_time = time.time()
+        
+        # 現在のIPC接続を履歴に追加
+        for proc1, proc2 in self.ipc_connections:
+            key = (min(proc1.pid, proc2.pid), max(proc1.pid, proc2.pid))
+            if key not in self.communication_history:
+                self.communication_history[key] = []
+            self.communication_history[key].append(current_time)
+        
+        # 履歴のクリーンアップ
+        self.history_cleanup_timer += 1
+        if self.history_cleanup_timer >= self.history_cleanup_interval:
+            self.history_cleanup_timer = 0
+            cutoff_time = current_time - self.communication_window
+            
+            for key in list(self.communication_history.keys()):
+                # 古いタイムスタンプを削除
+                self.communication_history[key] = [
+                    t for t in self.communication_history[key] if t > cutoff_time
+                ]
+                # 空のエントリを削除
+                if not self.communication_history[key]:
+                    del self.communication_history[key]
+        
+        # 通信頻度の高いプロセス同士を追加で群れにする
+        self._form_communication_based_schools(current_time)
+
+    def _form_communication_based_schools(self, current_time: float):
+        """通信履歴に基づいて動的に群れを形成"""
+        cutoff_time = current_time - self.communication_window
+        
+        for (pid1, pid2), timestamps in self.communication_history.items():
+            recent_communications = [t for t in timestamps if t > cutoff_time]
+            
+            # 過去60秒間に3回以上通信があれば群れ関係とみなす
+            if len(recent_communications) >= 3:
+                if pid1 in self.fishes and pid2 in self.fishes:
+                    fish1, fish2 = self.fishes[pid1], self.fishes[pid2]
+                    
+                    # 既存の群れがない場合のみ新しい群れを形成
+                    if not fish1.school_members and not fish2.school_members:
+                        # 小さな通信ベースの群れを形成
+                        comm_group = [pid1, pid2]
+                        fish1.set_school_members(comm_group, is_leader=True)
+                        fish2.set_school_members(comm_group, is_leader=False)
 
     def draw_ipc_connections(self):
         """IPC接続の描画（デジタル神経網のような線で）"""

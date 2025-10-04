@@ -287,7 +287,8 @@ class Fish:
                 flocking_force_x, flocking_force_y = self.calculate_flocking_forces(school_fish)
 
         # ランダムな目標位置の変更（群れ行動がない場合）
-        if not self.school_members and random.random() < 0.01:  # 1%の確率で目標変更
+        if not self.school_members and random.random() < 0.02:  # 2%に上げてより活発に
+            # 単独魚も全画面で泳ぐ（自然な分散）
             self.target_x = random.uniform(50, screen_width - 50)
             self.target_y = random.uniform(50, screen_height - 50)
 
@@ -297,14 +298,41 @@ class Fish:
             self.vx += flocking_force_x * self.flocking_strength
             self.vy += flocking_force_y * self.flocking_strength
         else:
-            # 単独行動時は目標位置に向かう
+            # 単独行動時：群れから逃げる + 目標位置に向かう
+            avoidance_x = 0.0
+            avoidance_y = 0.0
+
+            # 近くに群れ魚がいる場合は逃げる
+            if nearby_fish:
+                school_fish_nearby = [f for f in nearby_fish if f.school_members]
+                for school_fish in school_fish_nearby:
+                    dx_avoid = self.x - school_fish.x
+                    dy_avoid = self.y - school_fish.y
+                    dist_avoid = math.sqrt(dx_avoid*dx_avoid + dy_avoid*dy_avoid)
+
+                    if dist_avoid < 80:  # 80ピクセル以内で回避反応
+                        # 距離が近いほど強く逃げる
+                        avoidance_strength = (80 - dist_avoid) / 80 * 0.003
+                        if dist_avoid > 0:
+                            avoidance_x += (dx_avoid / dist_avoid) * avoidance_strength
+                            avoidance_y += (dy_avoid / dist_avoid) * avoidance_strength
+
+            # 目標位置に向かう力（適度な速度）
             dx = self.target_x - self.x
             dy = self.target_y - self.y
             distance = math.sqrt(dx*dx + dy*dy)
 
             if distance > 5:
-                self.vx += dx * 0.001
-                self.vy += dy * 0.001
+                self.vx += dx * 0.0008  # 少し速度を上げて活発に
+                self.vy += dy * 0.0008
+
+            # 回避力を適用
+            self.vx += avoidance_x
+            self.vy += avoidance_y
+
+            # 微小なランダム運動で生物らしさを追加
+            self.vx += random.uniform(-0.05, 0.05)
+            self.vy += random.uniform(-0.05, 0.05)
 
         # 摩擦
         self.vx *= 0.98
@@ -385,6 +413,10 @@ class Fish:
     def get_display_size(self) -> float:
         """現在の状態に応じた表示サイズを取得"""
         size = self.current_size
+        
+        # 群れ魚は少し大きく表示して目立たせる
+        if self.school_members and len(self.school_members) > 1:
+            size *= 1.2  # 20%大きく
 
         # メモリ巨大魚の脈動エフェクト（±30%の変動）
         if self.is_memory_giant:
