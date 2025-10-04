@@ -155,28 +155,31 @@ class Fish:
             return 'fish'
 
     def update_process_data(self, memory_percent: float, cpu_percent: float,
-                          thread_count: int, parent_pid: Optional[int] = None):
+                          thread_count: int, parent_pid: Optional[int] = None,
+                          memory_peak: Optional[float] = None):
         """プロセスデータの更新"""
+        memory_percent = max(memory_percent, 0.0)
         self.memory_percent = memory_percent
         self.cpu_percent = cpu_percent
         self.thread_count = thread_count
         self.parent_pid = parent_pid
 
-        # メモリ使用量に基づくサイズ調整（非常に急激な指数関数）
-        memory_normalized = memory_percent / 100.0  # 0.0-1.0に正規化
-        # より急激な指数関数でサイズを計算：exp(8 * memory) を使用
-        # 0%で1倍、1%で約1.2倍、5%で約1.8倍、10%で約3.2倍、50%で約81倍、100%で約6561倍！
-        if memory_normalized > 0:
-            # 指数関数：e^(8x) - わずかなメモリ使用でも劇的に大きくなる
-            raw_factor = math.exp(8 * memory_normalized)
-            # ただし画面に収まるよう最大60倍で制限（超巨大魚！）
-            memory_factor = min(raw_factor, 60.0)
+        # メモリ使用量に応じたサイズ調整（相対シェアと対数圧縮のブレンド）
+        memory_normalized = memory_percent / 100.0
+        if memory_peak is not None and memory_peak > 0:
+            relative_share = min(memory_percent / max(memory_peak, 1e-6), 1.0)
         else:
-            memory_factor = 1.0
+            relative_share = min(memory_normalized, 1.0)
+
+        relative_component = math.pow(relative_share, 0.65)
+        absolute_component = math.log1p(memory_percent / 6.0)
+
+        memory_factor = 1.0 + relative_component * 2.8 + absolute_component * 2.2
+        memory_factor = max(1.0, min(memory_factor, 9.0))
         self.current_size = self.base_size * memory_factor
 
-        # メモリ巨大魚の判定（メモリ使用率5%以上または、サイズが基本の5倍以上）
-        self.is_memory_giant = memory_percent >= 5.0 or memory_factor >= 5.0
+        # メモリ巨大魚の判定（より抑制された閾値）
+        self.is_memory_giant = memory_percent >= 8.0 or memory_factor >= 5.5
 
         # CPU使用率に基づく光り方（指数関数的に強調）
         cpu_normalized = cpu_percent / 100.0
@@ -396,7 +399,7 @@ class Fish:
         # 波紋エフェクト：3つの同心円
         ripple_color = (255, 100, 100, max(30, alpha // 4))  # 赤っぽい半透明
 
-        for i in range(4):  # 波紋を4つに増加
+        for i in range(3):  # 波紋を3層に抑制
             # 各波紋の半径と透明度を脈動に合わせて変化（より大きな範囲）
             ripple_phase = self.pulsation_phase + i * (math.pi / 4)
             # 波紋の範囲を2倍に拡大：巨大魚に相応しいスケール
@@ -463,16 +466,15 @@ class Fish:
         """スレッド数に応じた衛星の位置を計算（指数関数的に強調）"""
         satellites = []
         if self.thread_count > 1:
-            # スレッド数を指数関数的に視覚化：最大16個まで表示
-            thread_normalized = min(self.thread_count / 16.0, 1.0)
-            # 指数関数でスレッド数による衛星数を計算
-            satellite_factor = (math.exp(2 * thread_normalized) - 1) / (math.exp(2) - 1)
-            satellite_count = max(1, min(int((self.thread_count - 1) * (1 + satellite_factor)), 16))
+            capped_threads = min(self.thread_count - 1, 12)
+            if capped_threads <= 0:
+                return satellites
+
+            satellite_count = max(1, min(int(math.ceil(capped_threads ** 0.7)), 8))
 
             for i in range(satellite_count):
-                angle = (2 * math.pi * i) / satellite_count + self.age * 0.02
-                # スレッド数が多いほど衛星が遠くに配置される
-                radius_multiplier = 1.5 + (self.thread_count / 16.0) * 2.0
+                angle = (2 * math.pi * i) / satellite_count + self.age * 0.018
+                radius_multiplier = 1.1 + min(self.thread_count, 12) * 0.1
                 radius = self.current_size * radius_multiplier
                 sat_x = self.x + math.cos(angle) * radius
                 sat_y = self.y + math.sin(angle) * radius
@@ -576,8 +578,8 @@ class Fish:
             max_display = min(len(satellites), max(4, self.thread_count // 2))
             for i, (sat_x, sat_y) in enumerate(satellites[:max_display]):
                 # スレッド数が多いほど衛星サイズも大きく
-                thread_size_factor = 1.0 + (self.thread_count / 16.0) * 1.5
-                sat_size = max(2, size * 0.2 * thread_size_factor)
+                thread_size_factor = 1.0 + (self.thread_count / 20.0)
+                sat_size = max(1.5, min(size * 0.18 * thread_size_factor, size * 0.65))
                 # 小さな魚として描画
                 self._draw_small_fish(screen, color, alpha//2, sat_x, sat_y, sat_size)
 
