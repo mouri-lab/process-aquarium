@@ -410,6 +410,23 @@ class ProcessManager:
         Returns:
             List[tuple]: (ProcessInfo, ProcessInfo)のタプルリスト
         """
+        if self._external_source is not None and hasattr(self._external_source, 'get_ipc_connections'):
+            try:
+                source_conns = self._external_source.get_ipc_connections(limit=20)
+                if source_conns:
+                    # source からの形式を (ProcessInfo, ProcessInfo) に変換
+                    mapped = []
+                    for conn in source_conns:
+                        if hasattr(conn, 'pid_a') and hasattr(conn, 'pid_b'):
+                            proc_a = self.processes.get(conn.pid_a)
+                            proc_b = self.processes.get(conn.pid_b)
+                            if proc_a and proc_b and proc_a != proc_b:
+                                mapped.append((proc_a, proc_b))
+                    if mapped:
+                        return mapped[:20]
+            except Exception:
+                pass
+
         connections = []
         
         try:
@@ -494,6 +511,20 @@ class ProcessManager:
         
         # 接続数を制限（パフォーマンス考慮）
         return connections[:20]
+
+    def shutdown(self) -> None:
+        """バックエンドソースを安全に停止"""
+        if self._external_source is not None and hasattr(self._external_source, "shutdown"):
+            try:
+                self._external_source.shutdown()
+            except Exception:
+                pass
+
+    def __del__(self):
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
 def test_process_manager():
     """ProcessManagerのテスト関数"""

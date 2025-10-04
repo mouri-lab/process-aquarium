@@ -18,6 +18,7 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from typing import Dict, Iterable, List, Optional, Set, Callable
+from threading import Event, Lock, Thread
 import psutil
 from datetime import datetime
 
@@ -66,6 +67,8 @@ class PsutilProcessSource(IProcessSource):
 
         # IPC caches
         self._recent_ipc: List[IPCConnection] = []
+        self._last_ipc_refresh = 0.0
+        self._ipc_refresh_interval = 2.0  # seconds
 
         # Filtering heuristics (copied from original with slight cleanup)
         self.important_names = {
@@ -79,107 +82,181 @@ class PsutilProcessSource(IProcessSource):
             'bluetoothd', 'audiomxd', 'logd_helper', 'deleted'
         }
 
+        # Async polling support
+        self._lock = Lock()
+        self._shutdown = Event()
+        self._poll_thread: Optional[Thread] = None
+        self._thread_started = False
+        self._batch_size = 100
+        self._batch_pause = 0.004  # seconds between psutil batches
+        self._ready = Event()
+
     # ---------------- IProcessSource API ---------------- #
     def update(self) -> None:  # type: ignore[override]
-        now = time.time()
-        if now - self._last_update < self.update_interval:
+        self._ensure_thread()
+        if not self._ready.is_set():
+            self._ready.wait(timeout=0.2)
+
+    def get_processes(self) -> Dict[int, ProcessInfo]:  # type: ignore[override]
+        with self._lock:
+            return self._processes.copy()
+
+    def drain_lifecycle_events(self) -> List[ProcessLifecycleEvent]:  # type: ignore[override]
+        with self._lock:
+            buf = self._lifecycle_buffer
+            self._lifecycle_buffer = []
+            return buf
+
+    def get_ipc_connections(self, limit: int = 20) -> List[IPCConnection]:  # type: ignore[override]
+        with self._lock:
+            return self._recent_ipc[:limit]
+
+    # ---------------- Thread management ---------------- #
+    def _ensure_thread(self) -> None:
+        if self._thread_started:
             return
-        self._last_update = now
+        self._poll_thread = Thread(target=self._poll_loop, name="PsutilProcessSource", daemon=True)
+        self._poll_thread.start()
+        self._thread_started = True
 
-        new_snapshot: Dict[int, ProcessInfo] = {}
-        current_pids: Set[int] = set()
-        current_exe: Dict[int, str] = {}
+    def shutdown(self) -> None:
+        if not self._thread_started:
+            return
+        self._shutdown.set()
+        if self._poll_thread and self._poll_thread.is_alive():
+            self._poll_thread.join(timeout=1.0)
 
-        for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'memory_percent',
-                                         'cpu_percent', 'num_threads', 'create_time',
-                                         'status', 'cmdline']):
-            try:
-                info = proc.info
-                pid = info['pid']
-                name = (info['name'] or 'unknown')
-                exe = info['exe'] or ''
-                mem = info['memory_percent'] or 0.0
-                cpu = info['cpu_percent'] or 0.0
+    def __del__(self):
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
-                if not self._should_include(name, mem, cpu):
+    # ---------------- Internal helpers ---------------- #
+    def _poll_loop(self) -> None:
+        attrs = ['pid', 'ppid', 'name', 'exe', 'memory_percent',
+                 'cpu_percent', 'num_threads', 'create_time',
+                 'status', 'cmdline']
+        while not self._shutdown.is_set():
+            loop_start = time.time()
+
+            with self._lock:
+                prev_processes = self._processes
+                prev_pids = set(self._previous_pids)
+                prev_exe = dict(self._previous_exe)
+
+            new_snapshot: Dict[int, ProcessInfo] = {}
+            current_pids: Set[int] = set()
+            current_exe: Dict[int, str] = {}
+            lifecycle_events: List[ProcessLifecycleEvent] = []
+            now = time.time()
+            processed = 0
+
+            for proc in psutil.process_iter(attrs):
+                if self._shutdown.is_set():
+                    break
+                try:
+                    info = proc.info
+                    pid = info['pid']
+                    name = (info['name'] or 'unknown')
+                    exe = info['exe'] or ''
+                    mem = info['memory_percent'] or 0.0
+                    cpu = info['cpu_percent'] or 0.0
+
+                    if not self._should_include(name, mem, cpu):
+                        continue
+
+                    current_pids.add(pid)
+                    current_exe[pid] = exe
+
+                    prev_info = prev_processes.get(pid)
+                    is_new = pid not in prev_pids
+                    birth_time = prev_info.birth_time if prev_info else datetime.now()
+
+                    proc_info = ProcessInfo(
+                        pid=pid,
+                        ppid=info['ppid'] or 0,
+                        name=name,
+                        exe=exe,
+                        memory_percent=mem,
+                        cpu_percent=cpu,
+                        num_threads=info['num_threads'] or 1,
+                        create_time=info['create_time'] or 0.0,
+                        status=info['status'] or 'unknown',
+                        cmdline=info['cmdline'] or [],
+                        birth_time=birth_time if not is_new else datetime.now(),
+                        last_update=datetime.now(),
+                        is_new=is_new,
+                    )
+
+                    new_snapshot[pid] = proc_info
+
+                    if is_new:
+                        lifecycle_events.append(ProcessLifecycleEvent(
+                            event_type="spawn", pid=pid, ppid=proc_info.ppid,
+                            timestamp=now
+                        ))
+
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
 
-                current_pids.add(pid)
-                current_exe[pid] = exe
+                processed += 1
+                if processed % self._batch_size == 0:
+                    if self._shutdown.wait(self._batch_pause):
+                        return
 
-                is_new = pid not in self._previous_pids
-
-                proc_info = ProcessInfo(
-                    pid=pid,
-                    ppid=info['ppid'] or 0,
-                    name=name,
-                    exe=exe,
-                    memory_percent=mem,
-                    cpu_percent=cpu,
-                    num_threads=info['num_threads'] or 1,
-                    create_time=info['create_time'] or 0.0,
-                    status=info['status'] or 'unknown',
-                    cmdline=info['cmdline'] or [],
-                    birth_time=datetime.now() if is_new else (
-                        self._processes[pid].birth_time if pid in self._processes else datetime.now()
-                    ),
-                    last_update=datetime.now(),
-                    is_new=is_new,
-                )
-
-                new_snapshot[pid] = proc_info
-
-                if is_new:
-                    # Distinguish fork vs spawn later (need parent existence)
-                    # For now we just enqueue spawn; adapter layer can refine.
-                    self._lifecycle_buffer.append(ProcessLifecycleEvent(
-                        event_type="spawn", pid=pid, ppid=proc_info.ppid, timestamp=now
-                    ))
-
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                continue
-
-        # exec detection
-        for pid, exepath in current_exe.items():
-            if pid in self._previous_exe:
-                prev = self._previous_exe[pid]
+            # exec detection
+            for pid, exepath in current_exe.items():
+                prev = prev_exe.get(pid)
                 if prev and exepath and prev != exepath:
-                    self._lifecycle_buffer.append(ProcessLifecycleEvent(
-                        event_type="exec", pid=pid, ppid=new_snapshot[pid].ppid if pid in new_snapshot else None, timestamp=now,
+                    lifecycle_events.append(ProcessLifecycleEvent(
+                        event_type="exec",
+                        pid=pid,
+                        ppid=new_snapshot[pid].ppid if pid in new_snapshot else None,
+                        timestamp=now,
                         details={"old_exe": prev, "new_exe": exepath}
                     ))
 
-        # exit detection
-        for old_pid in self._previous_pids:
-            if old_pid not in current_pids and old_pid in self._processes:
-                self._lifecycle_buffer.append(ProcessLifecycleEvent(
-                    event_type="exit", pid=old_pid, ppid=self._processes[old_pid].ppid, timestamp=now
-                ))
+            # exit detection
+            for old_pid in prev_pids:
+                if old_pid not in current_pids:
+                    prev_info = prev_processes.get(old_pid)
+                    lifecycle_events.append(ProcessLifecycleEvent(
+                        event_type="exit",
+                        pid=old_pid,
+                        ppid=prev_info.ppid if prev_info else None,
+                        timestamp=now
+                    ))
 
-        # finalize snapshot
-        self._processes = new_snapshot
-        self._previous_pids = current_pids
-        self._previous_exe = current_exe
+            refresh_ipc = False
+            if now - self._last_ipc_refresh >= self._ipc_refresh_interval:
+                refresh_ipc = True
+                self._last_ipc_refresh = now
 
-        # Sample IPC connections each cycle (simplified from legacy)
-        self._recent_ipc = self._detect_ipc()[:20]
+            recent_ipc: Optional[List[IPCConnection]] = None
+            if refresh_ipc:
+                recent_ipc = self._detect_ipc(new_snapshot)[:20]
 
-    def get_processes(self) -> Dict[int, ProcessInfo]:  # type: ignore[override]
-        return self._processes.copy()
+            with self._lock:
+                self._processes = new_snapshot
+                self._previous_pids = current_pids
+                self._previous_exe = current_exe
+                if lifecycle_events:
+                    self._lifecycle_buffer.extend(lifecycle_events)
+                if recent_ipc is not None:
+                    self._recent_ipc = recent_ipc
+                self._last_update = now
+                self._ready.set()
 
-    def drain_lifecycle_events(self) -> List[ProcessLifecycleEvent]:  # type: ignore[override]
-        buf = self._lifecycle_buffer
-        self._lifecycle_buffer = []
-        return buf
+            elapsed = time.time() - loop_start
+            wait_time = max(0.0, self.update_interval - elapsed)
+            if self._shutdown.wait(wait_time):
+                break
 
-    def get_ipc_connections(self, limit: int = 20) -> List[IPCConnection]:  # type: ignore[override]
-        return self._recent_ipc[:limit]
-
-    # ---------------- Internal helpers ---------------- #
     def _should_include(self, name: str, mem: float, cpu: float) -> bool:
         # すべてのプロセスを可視化するため、フィルタリングを無効化
         return True
-        
+
         # 元のフィルタリングロジック（コメントアウト）
         # lower = name.lower()
         # if any(pat in lower for pat in self.excluded_patterns):
@@ -191,7 +268,7 @@ class PsutilProcessSource(IProcessSource):
         # import random
         # return random.random() < 0.8
 
-    def _detect_ipc(self) -> List[IPCConnection]:
+    def _detect_ipc(self, processes: Dict[int, ProcessInfo]) -> List[IPCConnection]:
         conns: List[IPCConnection] = []
         try:
             for c in psutil.net_connections(kind='inet'):
@@ -206,8 +283,8 @@ class PsutilProcessSource(IProcessSource):
         except (psutil.AccessDenied, psutil.NoSuchProcess):
             pass
         # Parent-child relationships as pseudo IPC
-        for p in self._processes.values():
-            if p.ppid in self._processes:
+        for p in processes.values():
+            if p.ppid in processes:
                 conns.append(IPCConnection(pid_a=p.ppid, pid_b=p.pid, kind="parent-child"))
         return conns
 
@@ -230,7 +307,7 @@ class EbpfProcessSource(IProcessSource):
     BPF_PERF_OUTPUT(exit_events);
 
     TRACEPOINT_PROBE(sched, sched_process_fork) {
-        struct fork_event_t evt = {}; 
+        struct fork_event_t evt = {};
         evt.ts = bpf_ktime_get_ns();
         evt.ppid = args->parent_pid;
         evt.pid = args->child_pid;
@@ -282,7 +359,7 @@ class EbpfProcessSource(IProcessSource):
             self._bpf["exec_events"].open_perf_buffer(self._handle_exec)
             self._bpf["exit_events"].open_perf_buffer(self._handle_exit)
             self.available = True
-            
+
             # ハイブリッドモード: 初期スキャンで既存プロセスを収集
             if self.hybrid_mode:
                 self._perform_initial_scan()
@@ -299,7 +376,7 @@ class EbpfProcessSource(IProcessSource):
                 error_detail = "eBPFサブシステムが利用できません"
             else:
                 error_detail = f"予期しないエラー: {e}"
-            
+
             self._lifecycle_buffer.append(ProcessLifecycleEvent(
                 event_type="exec", pid=0, ppid=None, timestamp=time.time(),
                 details={"error": error_detail}
@@ -356,7 +433,7 @@ class EbpfProcessSource(IProcessSource):
                     exe = p.exe()
                 except (psutil.AccessDenied, psutil.NoSuchProcess):
                     pass  # exe取得失敗は無視
-                
+
                 info = ProcessInfo(
                     pid=pid,
                     ppid=p.ppid() if ppid_hint is None else ppid_hint,
@@ -391,7 +468,7 @@ class EbpfProcessSource(IProcessSource):
         print("[eBPF] 初期プロセススキャンを実行中...")
         start_time = time.time()
         count = 0
-        
+
         for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'memory_percent',
                                          'cpu_percent', 'num_threads', 'create_time',
                                          'status', 'cmdline']):
@@ -399,11 +476,11 @@ class EbpfProcessSource(IProcessSource):
                 info = proc.info
                 pid = info['pid']
                 name = (info['name'] or 'unknown')
-                
+
                 # 簡単なフィルタリング（重要なプロセスのみ）
                 if not self._should_include_in_scan(name, info.get('memory_percent', 0)):
                     continue
-                
+
                 proc_info = ProcessInfo(
                     pid=pid,
                     ppid=info['ppid'] or 0,
@@ -419,13 +496,13 @@ class EbpfProcessSource(IProcessSource):
                     last_update=datetime.now(),
                     is_new=False,  # 初期スキャンなので新規ではない
                 )
-                
+
                 self._processes[pid] = proc_info
                 count += 1
-                
+
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
-        
+
         self._initial_scan_done = True
         self._event_stats["initial_scan"] = count
         elapsed = time.time() - start_time
@@ -435,18 +512,18 @@ class EbpfProcessSource(IProcessSource):
         """初期スキャン時のフィルタリング（すべてのプロセスを表示）"""
         # すべてのプロセスを可視化するため、フィルタリングを無効化
         return True
-        
+
         # 元のフィルタリングロジック（コメントアウト）
         # # システムプロセスは除外
         # excluded = {'kthreadd', 'ksoftirqd', 'rcu_', 'watchdog', 'swapper'}
         # if any(ex in name.lower() for ex in excluded):
         #     return False
-        # 
+        #
         # # メモリ使用量が一定以上、または重要なプロセス名
         # important = {'python', 'node', 'java', 'chrome', 'firefox', 'code', 'docker', 'nginx', 'apache'}
         # if any(imp in name.lower() for imp in important) or (mem_percent and mem_percent > 0.5):
         #     return True
-        # 
+        #
         # # ランダムサンプリング（負荷軽減）
         # import random
         # return random.random() < 0.3
@@ -459,7 +536,7 @@ class EbpfProcessSource(IProcessSource):
         if now - self._last_poll < self.poll_interval:
             return
         self._last_poll = now
-        
+
         # eBPFイベントのみをポーリング（軽量）
         try:
             self._bpf.perf_buffer_poll(timeout=0)
