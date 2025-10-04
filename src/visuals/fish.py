@@ -9,6 +9,7 @@ import random
 import time
 from typing import Tuple, Optional, List
 
+WORD_SIZE = 1000
 
 MAX_THREAD_SATELLITES = 14
 """Maximum number of thread satellites rendered around a fish."""
@@ -54,10 +55,10 @@ class Fish:
         # 群れ行動の属性
         self.school_members: List[int] = []  # 群れのメンバーPID
         self.is_leader = False  # 群れのリーダーかどうか
-        self.flocking_strength = 0.8  # 群れ行動の強さ
+        self.flocking_strength = 1.5  # 群れ行動の強さ（0.8→1.5に増加）
         self.separation_distance = 30.0  # 分離距離
-        self.alignment_distance = 50.0   # 整列距離
-        self.cohesion_distance = 70.0    # 結束距離
+        self.alignment_distance = 60.0   # 整列距離（50→60に増加）
+        self.cohesion_distance = 120.0    # 結束距離（70→120に増加）
 
         # IPC通信の吸引力
         self.ipc_attraction_x = 0.0  # IPC接続による吸引力X
@@ -288,8 +289,8 @@ class Fish:
                 flocking_force_x, flocking_force_y = self.calculate_flocking_forces(school_fish)
 
         # 目標位置の更新システム
-        world_size = 3000  # 仮想世界のサイズ
-        
+        world_size = WORD_SIZE  # 仮想世界のサイズ
+
         if self.school_members and nearby_fish:
             # 群れの場合：代表魚システム
             leader = self.get_school_leader_fish(nearby_fish)
@@ -408,19 +409,19 @@ class Fish:
         self.y += self.vy
 
         # 仮想空間の境界反射システム
-        world_boundary = 3000
+        world_boundary = WORD_SIZE
         bounce_damping = 0.8  # 反射時の減衰係数
-        
+
         # X軸の境界チェック
         if self.x < -world_boundary:
             self.x = -world_boundary
             self.vx = abs(self.vx) * bounce_damping  # 右向きに反射
             self.target_x = random.uniform(-world_boundary + 100, world_boundary)  # 新しい目標
         elif self.x > world_boundary:
-            self.x = world_boundary  
+            self.x = world_boundary
             self.vx = -abs(self.vx) * bounce_damping  # 左向きに反射
             self.target_x = random.uniform(-world_boundary, world_boundary - 100)  # 新しい目標
-            
+
         # Y軸の境界チェック
         if self.y < -world_boundary:
             self.y = -world_boundary
@@ -1011,8 +1012,8 @@ class Fish:
 
         # 重み付きで合成
         separation_weight = 2.0
-        alignment_weight = 1.0
-        cohesion_weight = 1.0
+        alignment_weight = 1.5
+        cohesion_weight = 2.5  # 結束力を大幅増加（1.0→2.5）
 
         force_x = (sep_x * separation_weight +
                   ali_x * alignment_weight +
