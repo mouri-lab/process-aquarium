@@ -288,9 +288,10 @@ class Fish:
 
         # ランダムな目標位置の変更（群れ行動がない場合）
         if not self.school_members and random.random() < 0.02:  # 2%に上げてより活発に
-            # 単独魚も全画面で泳ぐ（自然な分散）
-            self.target_x = random.uniform(50, screen_width - 50)
-            self.target_y = random.uniform(50, screen_height - 50)
+            # 広大な仮想空間で泳ぐ（カメラシステム対応）
+            world_size = 3000  # 仮想世界のサイズ
+            self.target_x = random.uniform(-world_size, world_size)
+            self.target_y = random.uniform(-world_size, world_size)
 
         # 基本的な移動計算
         # 回避力の初期化（運動エネルギーシステムで統一管理）
@@ -463,8 +464,11 @@ class Fish:
 
         return size
 
-    def _draw_memory_giant_effects(self, screen: pygame.Surface, alpha: int):
+    def _draw_memory_giant_effects(self, screen: pygame.Surface, alpha: int, zoom_adjusted_size: float = None):
         """メモリ巨大魚用の特別エフェクト（波紋など）"""
+        # ズーム調整されたサイズを使用（渡されていない場合は現在のサイズを使用）
+        effective_size = zoom_adjusted_size if zoom_adjusted_size is not None else self.current_size
+
         # 波紋エフェクト：3つの同心円
         ripple_color = (150, 215, 255)  # 少し落ち着いた水色
         base_ripple_alpha = max(50, min(200, int(alpha * 0.45)))
@@ -472,8 +476,9 @@ class Fish:
         for i in range(3):  # 波紋を3層に抑制
             # 各波紋の半径と透明度を脈動に合わせて変化（より大きな範囲）
             ripple_phase = self.pulsation_phase + i * (math.pi / 4)
-            # 波紋の範囲を2倍に拡大：巨大魚に相応しいスケール
-            ripple_radius = self.current_size * (3.0 + i * 1.2) * (1.0 + 0.5 * math.sin(ripple_phase))
+            # 波紋の範囲を2倍に拡大：巨大魚に相応しいスケール（ズームレベル考慮）
+            base_ripple_size = effective_size * (3.0 + i * 1.2) * (1.0 + 0.5 * math.sin(ripple_phase))
+            ripple_radius = base_ripple_size
             falloff = max(0.3, 1.0 - i * 0.3)
             ripple_alpha = int(base_ripple_alpha * falloff)
 
@@ -489,12 +494,15 @@ class Fish:
                 except (ValueError, pygame.error):
                     pass  # 描画エラーを無視
 
-    def _draw_lightning_effects(self, screen: pygame.Surface, alpha: int):
+    def _draw_lightning_effects(self, screen: pygame.Surface, alpha: int, zoom_adjusted_size: float = None):
         """超巨大魚用の雷エフェクト（メモリ使用率20%以上）"""
         if not hasattr(self, 'lightning_timer'):
             self.lightning_timer = 0
 
         self.lightning_timer += 1
+
+        # ズーム調整されたサイズを使用
+        effective_size = zoom_adjusted_size if zoom_adjusted_size is not None else self.current_size
 
         # ランダムに雷を発生（30フレームに1回程度）
         if self.lightning_timer % 30 == 0 or random.random() < 0.1:
@@ -503,10 +511,10 @@ class Fish:
             # 魚の周りに3-5本の雷を描画
             num_bolts = random.randint(3, 5)
             for _ in range(num_bolts):
-                # 雷の起点と終点をランダムに設定
+                # 雷の起点と終点をランダムに設定（ズームレベル考慮）
                 angle = random.uniform(0, 2 * math.pi)
-                start_radius = self.current_size * 0.8
-                end_radius = self.current_size * 2.5
+                start_radius = effective_size * 0.8
+                end_radius = effective_size * 2.5
 
                 start_x = self.x + math.cos(angle) * start_radius
                 start_y = self.y + math.sin(angle) * start_radius
@@ -521,9 +529,10 @@ class Fish:
                         t = i / segments
                         mid_x = start_x + (end_x - start_x) * t
                         mid_y = start_y + (end_y - start_y) * t
-                        # ランダムな揺れを追加
-                        offset_x = random.uniform(-20, 20)
-                        offset_y = random.uniform(-20, 20)
+                        # ランダムな揺れを追加（ズームレベルに応じて調整）
+                        jitter_range = 20 * (effective_size / self.base_size)  # 基本サイズとの比率でスケール
+                        offset_x = random.uniform(-jitter_range, jitter_range)
+                        offset_y = random.uniform(-jitter_range, jitter_range)
                         points.append((mid_x + offset_x, mid_y + offset_y))
                     points.append((end_x, end_y))
 
@@ -533,7 +542,7 @@ class Fish:
                 except (ValueError, pygame.error):
                     pass
 
-    def get_thread_satellites(self) -> list:
+    def get_thread_satellites(self, zoom_adjusted_size: float = None) -> list:
         """スレッド数に応じた衛星の位置を計算"""
         satellites = []
         if self.thread_count > 1:
@@ -545,6 +554,9 @@ class Fish:
 
             effective_threads = min(self.thread_count, MAX_THREAD_SATELLITES + 1)
 
+            # ズーム調整されたサイズを使用
+            effective_size = zoom_adjusted_size if zoom_adjusted_size is not None else self.current_size
+
             for i in range(satellite_count):
                 angle = (2 * math.pi * i) / satellite_count + self.age * 0.018
                 radius_multiplier = (
@@ -552,7 +564,7 @@ class Fish:
                     + effective_threads * SATELLITE_RADIUS_LINEAR_FACTOR
                     + math.log1p(effective_threads) * SATELLITE_RADIUS_EASING_FACTOR
                 )
-                radius = self.current_size * radius_multiplier
+                radius = effective_size * radius_multiplier
                 sat_x = self.x + math.cos(angle) * radius
                 sat_y = self.y + math.sin(angle) * radius
                 satellites.append((sat_x, sat_y))
@@ -612,7 +624,7 @@ class Fish:
             self._draw_generic_fish(screen, color, alpha, body_length, body_width)
 
     def draw(self, screen: pygame.Surface, font: pygame.font.Font = None, quality: str = "full",
-             text_renderer=None):
+             text_renderer=None, zoom_level: float = 1.0):
         """Fishの描画（魚らしい見た目版）"""
         if self.death_progress >= 1.0:
             return
@@ -620,7 +632,7 @@ class Fish:
         # 現在の描画属性を取得
         color = self.get_display_color()
         alpha = self.get_display_alpha()
-        size = self.get_display_size()
+        size = self.get_display_size() * zoom_level  # ズームレベルでサイズを調整
 
         if quality not in {"full", "reduced", "minimal"}:
             quality = "full"
@@ -639,10 +651,10 @@ class Fish:
         enable_memory_fx = (quality == "full")
         if enable_memory_fx and self.is_memory_giant and hasattr(self, 'memory_percent'):
             if self.memory_percent >= 5.0:
-                self._draw_memory_giant_effects(screen, alpha)
+                self._draw_memory_giant_effects(screen, alpha, size)
             # 超巨大魚（20%以上）には追加の雷エフェクト
             if self.memory_percent >= 20.0:
-                self._draw_lightning_effects(screen, alpha)
+                self._draw_lightning_effects(screen, alpha, size)
 
         # メイン生命体の描画（魚の形状）
         if alpha > 20:  # 透明度が低すぎる場合はスキップ
@@ -650,7 +662,7 @@ class Fish:
 
         # スレッド衛星の描画（小魚の群れとして）
         if quality == "full" and self.thread_count > 1 and size > 5:
-            satellites = self.get_thread_satellites()
+            satellites = self.get_thread_satellites(size)
             # スレッド数に応じて表示数を増加（制限は MAX_THREAD_SATELLITES で一元管理）
             max_display = min(len(satellites), MAX_THREAD_SATELLITES)
             for i, (sat_x, sat_y) in enumerate(satellites[:max_display]):

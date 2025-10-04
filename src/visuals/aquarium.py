@@ -1383,9 +1383,9 @@ class Aquarium:
                 original_x, original_y = fish.x, fish.y
                 fish.x, fish.y = screen_x, screen_y
                 
-                # 魚を描画
+                # 魚を描画（ズームレベルを渡す）
                 fish.draw(self.screen, self.bubble_font, quality=self.render_quality,
-                          text_renderer=self._render_text)
+                          text_renderer=self._render_text, zoom_level=self.zoom_level)
                 
                 # 元の座標に戻す
                 fish.x, fish.y = original_x, original_y
