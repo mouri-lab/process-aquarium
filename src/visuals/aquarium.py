@@ -230,7 +230,7 @@ class Aquarium:
 
         # デバッグ情報表示
         self.show_debug = False  # デフォルトでデバッグ表示をオフ
-        self.show_ipc = True    # IPC可視化をオン
+        self.show_ipc = False   # IPC可視化をデフォルトでオフ
         self.highlight_schools = False  # 群れ強調表示（孤立プロセス半透明化）
         self.debug_text_lines = []
 

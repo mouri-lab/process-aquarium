@@ -9,7 +9,7 @@ import random
 import time
 from typing import Tuple, Optional, List
 
-WORD_SIZE = 2000
+WORD_SIZE = 4096
 
 MAX_THREAD_SATELLITES = 14
 """Maximum number of thread satellites rendered around a fish."""
