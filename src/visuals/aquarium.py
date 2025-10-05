@@ -104,7 +104,7 @@ class Aquarium:
                 self._init_gpu_renderer(width, height)
             if not self.use_gpu:
                 self.screen = pygame.display.set_mode((width, height))
-                pygame.display.set_caption("Process Aquarium- Process Aquarium")
+                pygame.display.set_caption("Process Aquarium - プロセス水族館")
         else:
             # Provide a dummy surface for rendering in headless mode
             self.screen = pygame.Surface((width, height))
@@ -2125,7 +2125,7 @@ class Aquarium:
         try:
             from pygame._sdl2.video import Window, Renderer, Texture
 
-            self.gpu_window = Window("Process Aquarium- Process Aquarium (GPUモード)",
+            self.gpu_window = Window("Process Aquarium - プロセス水族館 (GPUモード)",
                                      size=(width, height), resizable=True)
             vsync_enabled = self._env_flag("AQUARIUM_VSYNC", True)
             self.gpu_renderer = Renderer(self.gpu_window, -1, True, vsync_enabled)
@@ -2161,7 +2161,7 @@ class Aquarium:
             self.use_gpu = False
             self.gpu_renderer = None
             self.gpu_window = None
-            pygame.display.set_caption("Process Aquarium- Process Aquarium")
+            pygame.display.set_caption("Process Aquarium - プロセス水族館")
             self.screen = pygame.display.set_mode((self.width, self.height))
 
     def _update_gpu_render_size(self, width: int, height: int):
