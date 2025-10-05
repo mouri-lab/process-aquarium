@@ -1,5 +1,5 @@
 """
-Digital Life Aquarium - Fish Entity
+Process Aquarium- Fish Entity
 Class managing the visual representation of a digital lifeform (a process).
 It adapts visual attributes (size, color, movement) based on process state
 (memory, CPU, thread count, etc.).

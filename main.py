@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Digital Life Aquarium - main entrypoint
-Starts the digital life aquarium application.
+Process Aquarium- main entrypoint
+Starts the Process Aquariumapplication.
 
 Usage:
     python main.py
@@ -23,7 +23,7 @@ from src.visuals.aquarium import Aquarium
 
 
 def main_cli():
-    parser = argparse.ArgumentParser(description="Digital Life Aquarium")
+    parser = argparse.ArgumentParser(description="Process Aquarium")
     parser.add_argument("--headless", action="store_true", help="Run without opening a window; periodic stats to stdout")
     parser.add_argument("--headless-interval", type=float, default=1.0, help="Interval seconds between stats prints in headless mode")
     parser.add_argument("--width", type=int, default=1200)

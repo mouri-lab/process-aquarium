@@ -1,4 +1,4 @@
-"""Digital Life Aquarium - process management module
+"""Process Aquarium- process management module
 
 Compatibility wrapper designed to introduce an abstraction layer so the
 legacy polling implementation (psutil) can be replaced by an event-driven
@@ -785,7 +785,7 @@ def test_process_manager():
     """Test function for ProcessManager."""
     manager = ProcessManager()
 
-    print("=== Digital Life Aquarium - Process Monitor Test ===")
+    print("=== Process Aquarium- Process Monitor Test ===")
     print("プロセス情報を10秒間監視します...")
 
     for i in range(20):  # 10秒間（0.5秒間隔）
