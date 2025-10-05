@@ -6,7 +6,7 @@ English | [日本語 README](./README.md)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)
 
-Visualize your running system processes as a living aquarium of fish. Each fish represents one process; size, glow, satellites, and subtle effects encode runtime metrics so you can spot anomalies at a glance.
+Visualize your running processes as a living aquarium of fish. Each fish represents one process; size, glow, satellites, and subtle effects encode runtime metrics so you can spot anomalies at a glance.
 
 ## Features
 
