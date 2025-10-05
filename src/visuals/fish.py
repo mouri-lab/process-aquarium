@@ -30,13 +30,14 @@ class Fish:
     視覚的な属性（サイズ、色、動きなど）を動的に変更する
     """
 
-    def __init__(self, pid: int, name: str, x: float, y: float):
+    def __init__(self, pid: int, name: str, x: float, y: float, world_size: int = 4096):
         # プロセス基本情報
         self.pid = pid
         self.name = name
         self.process_name = name  # aquarium.pyとの互換性
         self.parent_pid: Optional[int] = None
         self.creation_time = time.time()  # 作成時刻を記録
+        self.world_size = world_size  # 動的ワールドサイズ
 
         # 位置と動き
         self.x = x
@@ -298,7 +299,7 @@ class Fish:
         self.behavior_timer += 1
 
         # 目標位置の更新システム（個体ごとの独立したタイミング）
-        world_size = WORD_SIZE  # 仮想世界のサイズ
+        world_size = self.world_size  # 動的ワールドサイズ
 
         if self.school_members and nearby_fish:
             # 群れの場合：代表魚システム
@@ -425,7 +426,7 @@ class Fish:
         self.y += self.vy
 
         # 仮想空間の境界反射システム
-        world_boundary = WORD_SIZE
+        world_boundary = self.world_size
         bounce_damping = 0.8  # 反射時の減衰係数
 
         # X軸の境界チェック

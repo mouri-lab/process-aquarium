@@ -155,6 +155,10 @@ class Aquarium:
             self.process_manager.set_process_limit(self.process_limit)
         self.process_manager.set_sort_config(self.sort_by, self.sort_order)
 
+        # 動的ワールドサイズ（プロセス制限数に基づく）
+        self.world_size = self._calculate_world_size(self.process_limit)
+        print(f"🌍 ワールドサイズ: {self.world_size} (プロセス制限: {self.process_limit})")
+
         # パフォーマンス最適化（制限緩和）
         self.surface_cache = {}  # 描画キャッシュ
         self.background_cache = None  # 背景キャッシュ
@@ -245,6 +249,52 @@ class Aquarium:
         self.running = True
         if self.headless:
             print("[Headless] モードで起動しました。統計情報のみを出力します。Ctrl+Cで終了。")
+
+    def _calculate_world_size(self, process_limit: int = None) -> int:
+        """プロセス制限数に基づいてワールドサイズを動的に計算"""
+        if process_limit is None:
+            # 制限なしの場合はデフォルトサイズ
+            return 4096
+
+        # プロセス数に応じたワールドサイズの計算
+        # 少ないプロセス数: コンパクトなワールド
+        # 多いプロセス数: 広いワールド
+        if process_limit <= 20:
+            return 1024  # 小さなワールド
+        elif process_limit <= 50:
+            return 2048  # 中サイズワールド
+        elif process_limit <= 100:
+            return 3072  # 大サイズワールド
+        elif process_limit <= 200:
+            return 4096  # 標準サイズワールド
+        else:
+            return int(4096 + (process_limit - 200) * 8)  # さらに大きなワールド
+
+    def _update_world_size(self, new_limit: int = None):
+        """ワールドサイズを更新し、既存の魚の設定も更新"""
+        old_world_size = self.world_size
+        new_world_size = self._calculate_world_size(new_limit)
+
+        if old_world_size != new_world_size:
+            self.world_size = new_world_size
+            print(f"🌍 ワールドサイズ更新: {old_world_size} → {new_world_size}")
+
+            # 既存の魚のワールドサイズを更新
+            scale_factor = new_world_size / old_world_size
+            for fish in self.fishes.values():
+                fish.world_size = new_world_size
+
+                # 境界外にいる魚の位置調整
+                if abs(fish.x) > new_world_size:
+                    fish.x = fish.x * scale_factor
+                if abs(fish.y) > new_world_size:
+                    fish.y = fish.y * scale_factor
+
+                # ターゲット位置も調整
+                if hasattr(fish, 'target_x') and abs(fish.target_x) > new_world_size:
+                    fish.target_x = fish.target_x * scale_factor
+                if hasattr(fish, 'target_y') and abs(fish.target_y) > new_world_size:
+                    fish.target_y = fish.target_y * scale_factor
 
     def init_background_particles(self):
         """背景の水泡パーティクルを初期化（適応的）"""
@@ -389,7 +439,7 @@ class Aquarium:
                 x = random.uniform(50, self.width - 50)
                 y = random.uniform(50, self.height - 50)
 
-                fish = Fish(pid, proc.name, x, y)
+                fish = Fish(pid, proc.name, x, y, self.world_size)
                 self.fishes[pid] = fish
 
                 # プロセス誕生ログ
@@ -1197,6 +1247,9 @@ class Aquarium:
         self.process_manager.set_process_limit(self.process_limit)
         limit_str = "無制限" if self.process_limit is None else str(self.process_limit)
         print(f"🔢 プロセス制限: {limit_str}")
+
+        # ワールドサイズの動的更新
+        self._update_world_size(self.process_limit)
 
     def _cycle_sort_field(self):
         """ソートフィールドを切り替え"""
