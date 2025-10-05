@@ -14,7 +14,7 @@ from ..core.process_manager import ProcessManager
 try:
     # Extension point to swap in an eBPF source implementation when available
     from ..core.sources import EbpfProcessSource
-except Exception:  # pragma: no cover - 安全なフォールバック
+except Exception:  # pragma: no cover - safe fallback
     EbpfProcessSource = None  # type: ignore
 from .fish import Fish
 
@@ -26,12 +26,12 @@ except:
     try:
         locale.setlocale(locale.LC_ALL, 'C.UTF-8')
     except:
-        pass  # ロケール設定に失敗しても続行
+        pass  # continue even if locale setup fails
 
 class Aquarium:
     """
-    デジタル生命の水族館メインクラス
-    プロセス監視とビジュアライゼーションを統合管理
+    Main class for the Digital Life Aquarium.
+    Integrates process monitoring with visualization and interaction management.
     """
 
     def __init__(self, width: int = 1200, height: int = 800, headless: bool = False,
@@ -48,7 +48,8 @@ class Aquarium:
         self.gpu_texture = None
         self.requested_gpu = use_gpu if use_gpu is not None else self._env_flag("AQUARIUM_GPU", False)
         if self.headless and self.requested_gpu:
-            print("[GPU] ヘッドレスモードのためGPUレンダラは無効化されます。")
+            # Developer log: GPU renderer disabled when running in headless mode
+            print("[GPU] GPU renderer disabled because headless mode is active.")
             self.requested_gpu = False
         self.gpu_driver_hint = os.environ.get("AQUARIUM_GPU_DRIVER")
         if self.requested_gpu and self.gpu_driver_hint:
@@ -78,13 +79,13 @@ class Aquarium:
             pass
 
     # macOS Retina-related environment variable settings
-        os.environ['SDL_VIDEO_HIGHDPI_DISABLED'] = '0'  # 高DPI有効化
+        os.environ['SDL_VIDEO_HIGHDPI_DISABLED'] = '0'  # Enable high DPI support
 
     # Read settings from environment variables (significantly relaxed limits)
-        max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '2000'))  # 500から2000に増加
+        max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '2000'))  # Increased default from 500 to 2000
         target_fps = int(os.environ.get('AQUARIUM_FPS', '30'))
 
-        # 画面設定
+    # Screen settings
         self.base_width = width
         self.base_height = height
         self.width = width
@@ -125,47 +126,51 @@ class Aquarium:
                 eb = EbpfProcessSource(enable=True, hybrid_mode=True)
                 if getattr(eb, 'available', False):
                     source = eb
+                    # Developer log: eBPF hybrid source enabled
                     print("[eBPF] EbpfProcessSource 有効化（ハイブリッドモード）")
                 else:
-                    # エラー詳細をライフサイクルイベントから取得
+                    # Attempt to extract error details from lifecycle events
                     error_details = ""
                     try:
                         events = eb.drain_lifecycle_events()
                         for event in events:
                             if event.details and ('error' in event.details or 'warning' in event.details):
                                 error_msg = event.details.get('error') or event.details.get('warning')
-                                error_details = f" - 理由: {error_msg}"
+                                error_details = f" - reason: {error_msg}"
                                 break
                     except:
                         pass
+                    # Developer log: fallback to psutil when eBPF unavailable
                     print(f"[eBPF] 利用不可のため psutil にフォールバック{error_details}")
             except Exception as e:
+                # Developer log: eBPF initialization failed; fall back to psutil
                 print(f"[eBPF] 初期化失敗: {e} -> psutil フォールバック")
         self.process_manager = ProcessManager(max_processes=max_processes, source=source)
         self.fishes: Dict[int, Fish] = {}  # PID -> Fish
 
-        # プロセス制限とソート設定
+    # Process limit and sort configuration
         limit_str = os.environ.get("AQUARIUM_LIMIT")
         self.process_limit = int(limit_str) if limit_str else None
         self.sort_by = os.environ.get("AQUARIUM_SORT_BY", "cpu")
         self.sort_order = os.environ.get("AQUARIUM_SORT_ORDER", "desc")
 
-        # ProcessManagerに設定を反映
+    # Apply settings to ProcessManager
         if self.process_limit is not None:
             self.process_manager.set_process_limit(self.process_limit)
         self.process_manager.set_sort_config(self.sort_by, self.sort_order)
 
     # Dynamic world size calculation based on process limit
         self.world_size = self._calculate_world_size(self.process_limit)
+        # Developer log: world size for visualization
         print(f"🌍 ワールドサイズ: {self.world_size} (プロセス制限: {self.process_limit})")
 
-    # Performance optimizations (relaxed limits)
-        self.surface_cache = {}  # 描画キャッシュ
-        self.background_cache = None  # 背景キャッシュ
+        # Performance optimizations (relaxed limits)
+        self.surface_cache = {}  # drawing cache
+        self.background_cache = None  # background cache
         self.last_process_update = 0
-        self.process_update_interval = 1.0  # プロセス更新を1秒間隔に短縮（2秒から1秒へ）
+        self.process_update_interval = 1.0  # process update interval shortened to 1s (was 2s)
         self.last_cache_cleanup = time.time()
-        self.cache_cleanup_interval = 60.0  # キャッシュクリーンアップを1分間隔に延長
+        self.cache_cleanup_interval = 60.0  # cache cleanup interval extended to 1 minute
 
     # Dynamic performance adjustments
         self.performance_monitor = {
@@ -238,25 +243,27 @@ class Aquarium:
         self.highlight_schools = False  # highlight schools (dim isolated processes)
         self.debug_text_lines = []
 
-        # 通信相手のハイライト
-        self.highlighted_partners = []  # ハイライトする通信相手のPIDリスト
+        # Highlighted communication partners
+        self.highlighted_partners = []  # list of PIDs to highlight as partners
 
-        # フルスクリーン管理
+        # Fullscreen management
         self.original_size = (width, height)
         self._windowed_size = (width, height)
 
-        # 実行状態
+        # Runtime state
         self.running = True
         if self.headless:
-            print("[Headless] モードで起動しました。統計情報のみを出力します。Ctrl+Cで終了。")
+            # Developer log: running in headless mode — only statistics will be printed
+            print("[Headless] Running in headless mode. Only statistics will be printed. Press Ctrl+C to exit.")
 
     def _calculate_world_size(self, process_limit: int = None) -> int:
-        """プロセス制限数に基づいてワールドサイズを動的に計算"""
-        # 最小サイズ：ディスプレイサイズに基づく
+        """Dynamically calculate the world size based on the process limit."""
+        # Minimum base size: use display dimensions
         min_size = max(self.width, self.height)
 
         if process_limit is None:
-            # 制限なしの場合は実際のプロセス数を参照して201以上と同じ計算式を使用
+            # When unlimited, use the actual process count and apply the same
+            # formula used for limits >= 201.
             current_process_count = 0
             if hasattr(self, 'fishes') and self.fishes:
                 current_process_count = len(self.fishes)
@@ -264,31 +271,31 @@ class Aquarium:
                 current_process_count = self.total_processes
 
             if current_process_count == 0:
-                # 初期化時や魚がいない場合は3072を返す
+                # During initialization or when there are no fishes, default to 3072
                 return max(min_size, 3072)
             else:
-                # 201以上と同じ計算式を適用（実際のプロセス数を基準に）
+                # Apply same formula as for limits >= 201 using actual process count
                 effective_limit = max(201, current_process_count)
                 return max(min_size, int(3072 + (effective_limit - 200) * 6))
 
-        # プロセス数に応じたワールドサイズの計算
-        # 少ないプロセス数: よりコンパクトなワールド
-        # 多いプロセス数: 広いワールド
+        # World size calculation based on process_limit
+        # Few processes: compact world
+        # Many processes: larger world
         if process_limit <= 10:
-            return min_size                              # ディスプレイサイズ
+            return min_size                              # Use display size
         elif process_limit <= 30:
-            return max(min_size, 1024)                   # 小さなワールド
+            return max(min_size, 1024)                   # Small world
         elif process_limit <= 60:
-            return max(min_size, 1536)                   # 中小サイズワールド
+            return max(min_size, 1536)                   # Small-medium world
         elif process_limit <= 100:
-            return max(min_size, 2048)                   # 中サイズワールド
+            return max(min_size, 2048)                   # Medium world
         elif process_limit <= 200:
-            return max(min_size, 3072)                   # 大サイズワールド
+            return max(min_size, 3072)                   # Large world
         else:
-            return max(min_size, int(3072 + (process_limit - 200) * 6))  # さらに大きなワールド
+            return max(min_size, int(3072 + (process_limit - 200) * 6))  # Extra large
 
     def _update_world_size(self, new_limit: int = None):
-        """ワールドサイズを更新し、既存の魚の設定も更新"""
+        """Update the world size and adjust existing fish settings accordingly."""
         old_world_size = self.world_size
         new_world_size = self._calculate_world_size(new_limit)
 
@@ -296,29 +303,29 @@ class Aquarium:
             self.world_size = new_world_size
             print(f"🌍 ワールドサイズ更新: {old_world_size} → {new_world_size}")
 
-            # 既存の魚のワールドサイズを更新
+            # Update existing fishes' world size
             scale_factor = new_world_size / old_world_size
             for fish in self.fishes.values():
                 fish.world_size = new_world_size
 
-                # 境界外にいる魚の位置調整
+                # Adjust positions for fishes outside the new bounds
                 if abs(fish.x) > new_world_size:
                     fish.x = fish.x * scale_factor
                 if abs(fish.y) > new_world_size:
                     fish.y = fish.y * scale_factor
 
-                # ターゲット位置も調整
+                # Adjust target positions as well
                 if hasattr(fish, 'target_x') and abs(fish.target_x) > new_world_size:
                     fish.target_x = fish.target_x * scale_factor
                 if hasattr(fish, 'target_y') and abs(fish.target_y) > new_world_size:
                     fish.target_y = fish.target_y * scale_factor
 
     def init_background_particles(self):
-        """背景の水泡パーティクルを初期化（適応的）"""
-        self.background_particles = []  # 既存のパーティクルをクリア
+        """Initialize background bubble particles (adaptive)."""
+        self.background_particles = []  # clear existing particles
 
-        # 適応的パーティクル数を使用
-        base_count = min(100, int(self.width * self.height / 15000))  # 画面サイズに応じた基本数
+        # Use adaptive particle count
+        base_count = min(100, int(self.width * self.height / 15000))  # Base count depending on screen size
         particle_count = min(base_count, self.performance_monitor['adaptive_particle_count'])
 
         for _ in range(particle_count):
@@ -331,29 +338,29 @@ class Aquarium:
             }
             self.background_particles.append(particle)
 
-        # 背景キャッシュをクリア（サイズ変更に対応）
+        # Clear background cache (handle size changes)
         self.background_cache = None
 
     def update_background_particles(self):
-        """背景パーティクルの更新"""
+        """Update background particles positions."""
         for particle in self.background_particles:
             particle['y'] -= particle['speed']
 
-            # 画面上部を超えたら下から再登場
+            # If the particle goes above the top of the screen, respawn at the bottom
             if particle['y'] < -10:
                 particle['y'] = self.height + 10
                 particle['x'] = random.uniform(0, self.width)
 
     def draw_background(self):
-        """背景の描画（キャッシュ最適化版）"""
-        # 背景キャッシュがない場合は作成
+        """Draw background using a cached surface for efficiency."""
+        # Create background cache if missing or size changed
         if self.background_cache is None or self.background_cache.get_size() != (self.width, self.height):
             self._create_background_cache()
 
-        # キャッシュされた背景を描画
+        # Draw the cached background surface
         self.screen.blit(self.background_cache, (0, 0))
 
-        # 動的な水泡パーティクル（適応的な数）
+        # Dynamic bubble particles (adaptive count)
         particle_count = min(len(self.background_particles), self.performance_monitor['adaptive_particle_count'])
 
         for i, particle in enumerate(self.background_particles[:particle_count]):
@@ -366,29 +373,29 @@ class Aquarium:
                            (particle['x'] - particle['size'],
                             particle['y'] - particle['size']))
 
-    # ===== カメラシステム =====
+    # ===== Camera system =====
     def world_to_screen(self, world_x: float, world_y: float) -> Tuple[int, int]:
-        """ワールド座標をスクリーン座標に変換"""
+        """Convert world coordinates to screen coordinates."""
         screen_x = (world_x - self.camera_x) * self.zoom_level + self.width // 2
         screen_y = (world_y - self.camera_y) * self.zoom_level + self.height // 2
         return (int(screen_x), int(screen_y))
 
     def screen_to_world(self, screen_x: int, screen_y: int) -> Tuple[float, float]:
-        """スクリーン座標をワールド座標に変換"""
+        """Convert screen coordinates to world coordinates."""
         world_x = (screen_x - self.width // 2) / self.zoom_level + self.camera_x
         world_y = (screen_y - self.height // 2) / self.zoom_level + self.camera_y
         return (world_x, world_y)
 
     def is_visible(self, world_x: float, world_y: float, margin: float = 100) -> bool:
-        """オブジェクトが画面内（マージン込み）に表示されるかチェック"""
+        """Check whether an object is visible on screen (with margin)."""
         screen_x, screen_y = self.world_to_screen(world_x, world_y)
         return (-margin <= screen_x <= self.width + margin and
                 -margin <= screen_y <= self.height + margin)
 
     def update_camera(self):
-        """カメラの更新（追従機能など）"""
+        """Update camera position (auto-centering, follow modes, etc.)."""
         if self.camera_mode == 0:
-            # 自動センタリング：全ての魚の重心を追跡
+            # Auto-centering: track the centroid of all fishes
             if self.fishes:
                 center_x = sum(fish.x for fish in self.fishes.values()) / len(self.fishes)
                 center_y = sum(fish.y for fish in self.fishes.values()) / len(self.fishes)
@@ -398,108 +405,114 @@ class Aquarium:
                 self.camera_x += (center_x - self.camera_x) * lerp_factor
                 self.camera_y += (center_y - self.camera_y) * lerp_factor
         elif self.camera_mode == 1:
-            # 選択魚追従モード：selected_fishを自動追従
+            # Selected-fish follow mode: automatically follow selected_fish
             if self.selected_fish and self.selected_fish in self.fishes.values():
-                # 選択された魚を画面中央に保つ
+                # Keep the selected fish near the screen center
                 target_x = self.selected_fish.x
                 target_y = self.selected_fish.y
 
-                # スムーズな追従（線形補間）
-                lerp_factor = 0.08  # 少し速めの追従
+                # Smooth follow using linear interpolation
+                lerp_factor = 0.08  # slightly faster follow
                 self.camera_x += (target_x - self.camera_x) * lerp_factor
                 self.camera_y += (target_y - self.camera_y) * lerp_factor
         # camera_mode == 2 の場合は何もしない（手動制御のみ）
 
     def _create_background_cache(self):
-        """背景キャッシュを作成"""
+        """Create the background cache surface."""
         self.background_cache = pygame.Surface((self.width, self.height))
 
-        # 深海のグラデーション背景
+    # Deep-sea gradient background
         for y in range(self.height):
-            # 上部は濃い青、下部は黒に近い青
+            # Top is darker blue, bottom approaches near-black blue
             intensity = 1.0 - (y / self.height)
             blue_intensity = int(20 + intensity * 30)
             color = (0, 0, blue_intensity)
             pygame.draw.line(self.background_cache, color, (0, y), (self.width, y))
 
     def update_process_data(self):
-        """プロセス情報の更新"""
+        """Update process information from the ProcessManager and sync fishes.
+
+        This polls the process manager, updates statistics, creates Fish
+        instances for newly discovered processes, and handles lifecycle
+        transitions (spawn/exec/exit)."""
         current_time = time.time()
 
-        # プロセス更新間隔制御
+        # Throttle process updates to configured interval
         if current_time - self.last_process_update < self.process_update_interval:
             return
 
         self.last_process_update = current_time
 
-        # ProcessManagerのupdateを呼び出してデータを最新に
+        # Refresh data from ProcessManager
         self.process_manager.update()
 
-        # プロセス辞書を取得
+        # Obtain current process snapshot
         process_data = self.process_manager.processes
 
-        # 統計情報の更新
+        # Update aggregate statistics
         self.total_processes = len(process_data)
         self.total_memory = sum(proc.memory_percent for proc in process_data.values())
         self.avg_cpu = sum(proc.cpu_percent for proc in process_data.values()) / max(1, len(process_data))
         self.total_threads = sum(proc.num_threads for proc in process_data.values())
 
-        # unlimited時のワールドサイズ動的更新
+        # If unlimited, adjust world size dynamically
         if self.process_limit is None:
             self._update_world_size(None)
 
-        # 新規プロセス用のFish作成（制限解除）
+        # Create Fish objects for newly discovered processes (when not present)
         for pid, proc in process_data.items():
             if pid not in self.fishes:
-                # 制限を一時的に解除 - すべてのプロセスを表示
-                # max_fish = min(self.process_manager.max_processes, 150)  # 最大150匹
+                # Temporarily we could lift limits to display more processes.
+                # max_fish = min(self.process_manager.max_processes, 150)
                 # if len(self.fishes) >= max_fish:
                 #     self._remove_oldest_fish()
 
-                # より広範囲にランダム分散（初期群がり防止）
+                # Spread new fishes across a larger radius to avoid clumping
                 angle = random.uniform(0, 2 * math.pi)
-                distance = random.uniform(100, min(self.world_size * 0.6, 600))  # ワールドサイズの60%範囲内
+                distance = random.uniform(100, min(self.world_size * 0.6, 600))  # within 60% of world radius
                 x = distance * math.cos(angle)
                 y = distance * math.sin(angle)
 
                 fish = Fish(pid, proc.name, x, y, self.world_size)
                 self.fishes[pid] = fish
 
-                # プロセス誕生ログ
+                # Spawn logging (may be suppressed at low quality)
                 if not self._suppress_spawn_logs:
+                    # Developer log: new process observed
                     print(f"🐟 新しいプロセス誕生: PID {pid} ({proc.name})")
                 elif "spawn_logs_suppressed" not in self._quality_message_shown:
+                    # Developer log: suppress spawn logs in high-load mode
                     print("🐟 新規プロセス発生ログは高負荷モードのため抑制されています。")
                     self._quality_message_shown.add("spawn_logs_suppressed")
 
-                # 親子関係があれば分裂エフェクト
+                # If parent exists, trigger a fork effect and position child near parent
                 if proc.ppid in self.fishes:
                     parent_fish = self.fishes[proc.ppid]
                     parent_fish.set_fork_event()
-                    # 子プロセスは親の近くに配置
+                    # Place child near parent
                     fish.x = parent_fish.x + random.uniform(-50, 50)
                     fish.y = parent_fish.y + random.uniform(-50, 50)
                     print(f"👨‍👦 親子関係検出: 親PID {proc.ppid} → 子PID {pid}")
 
-        # exec検出とエフェクト
+    # exec detection and effects
         exec_processes = self.process_manager.detect_exec()
         for proc in exec_processes:
             if proc.pid in self.fishes:
                 self.fishes[proc.pid].set_exec_event()
 
-        # 群れ行動の設定
+    # Configure schooling behavior
         self._update_schooling_behavior()
 
-        # IPC接続の更新
+    # Update IPC connections
         self._update_ipc_connections()
 
-        # 通信履歴の更新と群れ形成
+    # Update communication history and form schools
         self._update_communication_history()
 
-        # IPC吸引力の適用
+    # Apply IPC attraction forces
         self._apply_ipc_attraction()
 
-        # 既存のFishデータ更新
+    # Update existing Fish data
         processes_marked_for_death = []
         for pid, fish in self.fishes.items():
             if pid in process_data:
@@ -511,15 +524,15 @@ class Aquarium:
                     proc.ppid
                 )
             else:
-                # プロセスが消滅した場合
-                # print(f"🔥 プロセス消失を検出: PID {pid} ({fish.process_name}) - 死亡フラグ設定")
+                # When the process disappears
+                # print(f"🔥 Detected process disappearance: PID {pid} ({fish.process_name}) - marking for death")
                 fish.set_death_event()
                 processes_marked_for_death.append(pid)
 
         # if processes_marked_for_death:
         #     print(f"📊 死亡フラグ設定済みプロセス数: {len(processes_marked_for_death)}")
 
-        # 死んだFishの除去
+    # Remove fishes that have finished dying
         dead_pids = []
         dying_fish_details = []
         for pid, fish in self.fishes.items():
@@ -529,7 +542,7 @@ class Aquarium:
                     dead_pids.append(pid)
                     # print(f"💀 魚の死亡処理完了: PID {pid} ({fish.process_name}) - 削除対象")
 
-        # 死亡中の魚の進行状況を定期的に表示（最大5匹まで）
+    # Periodically print progress of dying fishes (up to 5)
         # if dying_fish_details:
         #     print(f"⏰ 死亡進行中: {', '.join(dying_fish_details[:5])}{'...' if len(dying_fish_details) > 5 else ''}")
 
@@ -537,10 +550,11 @@ class Aquarium:
 
         for pid in dead_pids:
             fish_name = self.fishes[pid].process_name
-            # 追従対象の魚が削除される場合は自動センタリングモードに切り替え
+            # If the followed/selected fish is removed, switch camera to auto-center
             if self.selected_fish and self.selected_fish.pid == pid:
-                if self.camera_mode == 1:  # 選択魚追従モードの場合
-                    self.camera_mode = 0  # 自動センタリングモードに切り替え
+                if self.camera_mode == 1:  # If in follow-selected-fish mode
+                    self.camera_mode = 0  # Switch to auto-centering
+                    # Developer log: follow target removed; switch to auto-centering
                     print(f"📹 追従対象の魚が削除されました。自動センタリングモードに切り替えます。")
                 self.selected_fish = None
             if self.follow_target and self.follow_target.pid == pid:
@@ -552,33 +566,33 @@ class Aquarium:
         #     print(f"📊 削除後の魚数: {len(self.fishes)}")
 
     def _remove_oldest_fish(self):
-        """最も古い魚を削除してパフォーマンスを維持"""
+        """Remove the oldest fish to maintain performance"""
         if not self.fishes:
             return
 
-        # 作成時刻でソートして最も古い魚を特定
+        # Find the oldest fish by creation time
         oldest_fish = min(self.fishes.values(), key=lambda f: f.creation_time)
         # print(f"🗑️ 古い魚を削除: PID {oldest_fish.pid} ({oldest_fish.process_name})")
         del self.fishes[oldest_fish.pid]
 
     def _update_schooling_behavior(self):
-        """群れ行動の更新"""
-        # 関連プロセス群を取得して群れを形成
+        """Update schooling behavior."""
+        # Gather related process groups and form schools
         processed_pids = set()
 
-        # 関連プロセス群を形成
+        # For each fish, find related processes and form a school if applicable
         for pid, fish in self.fishes.items():
             if pid in processed_pids:
                 continue
 
-            # 関連プロセスを取得
+            # Get related processes (by parent/child / proximity in the process graph)
             related_processes = self.process_manager.get_related_processes(pid, max_distance=2)
             related_pids = [p.pid for p in related_processes if p.pid in self.fishes]
 
             if len(related_pids) > 1:
-                # 群れを形成
-                # 最も古いプロセスまたは親プロセスをリーダーに
-                leader_pid = min(related_pids)  # 単純にPIDが小さいものをリーダーに
+                # Form a school
+                # Choose a leader (e.g. oldest or parent). Here we simply pick the smallest PID.
+                leader_pid = min(related_pids)
 
                 for related_pid in related_pids:
                     if related_pid in self.fishes:
@@ -586,93 +600,93 @@ class Aquarium:
                         self.fishes[related_pid].set_school_members(related_pids, is_leader)
                         processed_pids.add(related_pid)
 
-        # 孤立プロセス同士の群れ形成
+        # Form schools for isolated processes (same-name grouping)
         self._form_isolated_process_schools(processed_pids)
 
     def _form_isolated_process_schools(self, processed_pids: set):
-        """同名プロセス群れ形成と真の孤立プロセス判定"""
-        # まだ群れに所属していないプロセスを収集
+        """Form schools for same-named processes and detect truly isolated processes."""
+        # Collect processes that are not yet assigned to any school
         unprocessed_pids = []
         for pid, fish in self.fishes.items():
             if pid not in processed_pids:
                 unprocessed_pids.append(pid)
 
-        # プロセス名でグループ化（真の群れ形成）
+        # Group processes by base name to identify real schools
         if len(unprocessed_pids) >= 2:
             name_groups = {}
             for pid in unprocessed_pids:
                 fish = self.fishes[pid]
-                base_name = fish.name.split()[0] if fish.name else "unknown"  # 基本プロセス名を取得
+                base_name = fish.name.split()[0] if fish.name else "unknown"  # Extract base process name
                 if base_name not in name_groups:
                     name_groups[base_name] = []
                 name_groups[base_name].append(pid)
 
-            # 各名前グループで群れを形成（2匹以上の場合は真の群れ）
+            # For each name group, form a school (groups with 2+ members are considered real schools)
             truly_isolated_pids = []
             for base_name, group_pids in name_groups.items():
                 if len(group_pids) >= 2:
-                    # 同名プロセスの真の群れを形成
-                    leader_pid = min(group_pids)  # 最小PIDをリーダーに
+                    # Form a real school for processes that share the same name
+                    leader_pid = min(group_pids)  # Choose the smallest PID as leader
                     for pid in group_pids:
                         if pid in self.fishes:
                             is_leader = (pid == leader_pid)
                             self.fishes[pid].set_school_members(group_pids, is_leader)
-                            self.fishes[pid].is_isolated = False  # 群れに所属したので孤立ではない
-                            self.fishes[pid].is_isolated_school = False  # 真の群れなので孤立群れではない
-                            processed_pids.add(pid)  # 処理済みに追加
+                            self.fishes[pid].is_isolated = False  # No longer considered isolated
+                            self.fishes[pid].is_isolated_school = False  # Not an isolated-school
+                            processed_pids.add(pid)
                 else:
-                    # 単独のプロセス = 真の孤立プロセス
+                    # Single process -> truly isolated
                     for pid in group_pids:
                         if pid in self.fishes:
                             truly_isolated_pids.append(pid)
-                            self.fishes[pid].is_isolated = True  # 真の孤立プロセス
-                            self.fishes[pid].is_isolated_school = False  # 群れに所属していない
+                            self.fishes[pid].is_isolated = True  # Mark as truly isolated
+                            self.fishes[pid].is_isolated_school = False  # Not part of a school
 
-            # 真の孤立プロセスを一つの特別な群れにまとめる
+            # Consolidate truly isolated processes into a special "isolates" school
             if len(truly_isolated_pids) >= 2:
-                # 複数の孤立プロセスがある場合、「孤立者の群れ」として統合
-                leader_pid = min(truly_isolated_pids)  # 最小PIDをリーダーに
+                # If multiple truly isolated processes exist, merge them into an "isolates" school
+                leader_pid = min(truly_isolated_pids)  # Choose smallest PID as leader
                 for pid in truly_isolated_pids:
                     if pid in self.fishes:
                         is_leader = (pid == leader_pid)
                         self.fishes[pid].set_school_members(truly_isolated_pids, is_leader)
-                        self.fishes[pid].is_isolated = True  # 孤立プロセス属性は維持
-                        self.fishes[pid].is_isolated_school = True  # 孤立者の群れフラグ
+                        self.fishes[pid].is_isolated = True  # Preserve isolated attribute
+                        self.fishes[pid].is_isolated_school = True  # Flag as an isolated-school
                         processed_pids.add(pid)
-                # print(f"🏝️ 孤立者の群れ形成: {len(truly_isolated_pids)}匹")
+                # print(f"🏝️ Formed isolates school: {len(truly_isolated_pids)} members")
             elif len(truly_isolated_pids) == 1:
-                # 単独の孤立プロセス（本当に1匹だけ）
+                # Single truly isolated process (only one)
                 pid = truly_isolated_pids[0]
                 if pid in self.fishes:
                     self.fishes[pid].is_isolated = True
                     self.fishes[pid].is_isolated_school = False
-                # print(f"🏝️ 真の単独プロセス: 1匹")
+                # print("🏝️ Single truly isolated process")
         else:
-            # 未処理プロセスが1匹以下の場合、それは真の孤立
+            # If 0 or 1 unprocessed processes remain, they are truly isolated
             for pid in unprocessed_pids:
                 if pid in self.fishes:
                     self.fishes[pid].is_isolated = True
                     self.fishes[pid].is_isolated_school = False
 
     def handle_mouse_click(self, pos: Tuple[int, int]):
-        """マウスクリックによるFish選択と吹き出しクリック処理"""
+        """Handle mouse clicks: select fish or detect bubble clicks."""
         x, y = pos
         world_x, world_y = self.screen_to_world(x, y)
 
-        # まず吹き出しのクリック判定をチェック（スクリーン座標での判定）
+    # First check whether a speech bubble was clicked (screen coordinates)
         for fish in self.fishes.values():
             if fish.bubble_rect and fish.is_talking:
                 bx, by, bw, bh = fish.bubble_rect
                 if bx <= x <= bx + bw and by <= y <= by + bh:
-                    # 吹き出しがクリックされた場合、通信相手をハイライト
+                    # If the bubble was clicked, highlight communication partners
                     self._highlight_communication_partners(fish)
                     return
 
-        # 吹き出しがクリックされなかった場合、通常のFish選択
+    # If no bubble was clicked, perform normal fish selection
         self.selected_fish = None
         self.highlighted_partners = []  # 通信相手のハイライトをクリア
 
-        # 最も近いFishを選択（ワールド座標で判定）
+    # Select the nearest fish (world-coordinate distance)
         min_distance = float('inf')
         for fish in self.fishes.values():
             distance = math.sqrt((fish.x - world_x)**2 + (fish.y - world_y)**2)
@@ -681,7 +695,7 @@ class Aquarium:
                 self.selected_fish = fish
 
     def select_follow_target(self, pos: Tuple[int, int]):
-        """右クリックで追従対象を選択"""
+        """Select a follow target with right-click."""
         x, y = pos
         world_x, world_y = self.screen_to_world(x, y)
 
@@ -704,10 +718,10 @@ class Aquarium:
             print("追従対象を解除しました")
 
     def _highlight_communication_partners(self, fish):
-        """通信相手をハイライト表示"""
+        """Highlight communication partners of the given fish."""
         self.highlighted_partners = fish.talk_partners.copy()
 
-        # 通信相手の情報を表示
+    # Print partner information
         partner_names = []
         for partner_pid in fish.talk_partners:
             if partner_pid in self.fishes:
@@ -775,7 +789,7 @@ class Aquarium:
         # if hasattr(self, 'retina_info') and self.retina_info['is_retina']:
         #     stats_lines.append(f"Retina: {self.retina_info['scale_factor']:.1f}x")
 
-        # カメラ情報
+        # Camera information
         stats_lines.append(f"カメラ座標: ({self.camera_x:.0f}, {self.camera_y:.0f})")
         stats_lines.append(f"カメラズーム: {self.zoom_level:.2f}x")
         if self.camera_mode == 0:
@@ -788,7 +802,7 @@ class Aquarium:
         else:  # camera_mode == 2
             stats_lines.append("カメラモード: 手動制御")
 
-        # 背景パネル
+    # Background panel
         panel_padding_x = 10
         panel_padding_y = 10
         font_linesize = self.small_font.get_linesize()
@@ -806,7 +820,7 @@ class Aquarium:
         panel_x, panel_y = 10, 10
         self.screen.blit(panel_surface, (panel_x, panel_y))
 
-        # 統計テキスト
+        # Statistics text
         for i, line in enumerate(stats_lines):
             color = (255, 100, 100) if current_fps < self.fps * 0.7 else (255, 255, 255)  # 低FPS時は赤
             text_surface = self._render_text(line, self.small_font, color)
@@ -814,7 +828,7 @@ class Aquarium:
             text_y = panel_y + panel_padding_y + i * line_height
             self.screen.blit(text_surface, (text_x, text_y))
 
-        # 選択されたFishの詳細情報（右上・左上パネルと同じスタイル）- フル表示モードのみ
+        # Selected fish detail panel (same style as the top-left panel) - full UI mode only
         if self.selected_fish and self.ui_mode == 0:
             info_lines = [
                 f"選択されたプロセス:",
@@ -826,7 +840,7 @@ class Aquarium:
                 f"年齢: {self.selected_fish.age}フレーム"
             ]
 
-            # 左上パネルと同じ方式で動的サイズ計算
+            # Dynamic sizing using the same approach as the top-left panel
             info_padding_x = 10
             info_padding_y = 10
             info_line_height = max(int(font_linesize * 1.15), font_linesize)
@@ -841,18 +855,18 @@ class Aquarium:
             info_panel_surface = pygame.Surface((info_panel_width, info_panel_height), pygame.SRCALPHA)
             info_panel_surface.fill((0, 50, 100, 180))
 
-            # 右上に配置
+            # Position in the top-right
             info_panel_x = self.width - info_panel_width - 10
             info_panel_y = 10
             self.screen.blit(info_panel_surface, (info_panel_x, info_panel_y))
 
-            # 詳細情報テキスト
+            # Detail text lines
             for i, line in enumerate(info_lines):
                 color = (255, 255, 255) if i == 0 else (200, 200, 200)
                 text_surface = self._render_text(line, self.small_font, color)
                 text_x = info_panel_x + info_padding_x
                 text_y = info_panel_y + info_padding_y + i * info_line_height
-                self.screen.blit(text_surface, (text_x, text_y))        # 操作説明 - フル表示モードのみ
+                self.screen.blit(text_surface, (text_x, text_y))        # Operation hints - full UI mode only
         if self.ui_mode == 0:
             help_lines = [
                 "操作:",
@@ -863,13 +877,13 @@ class Aquarium:
                 "T:UI表示 Q:群れ強調 ESC:終了"
             ]
         else:
-            # 簡素表示モードでは基本操作のみ
+            # In compact UI mode show only basic controls
             help_lines = [
                 "基本操作:",
                 "T:UI Q:群れ強調 ESC:終了"
             ]
 
-        # ヘルプ（左上パネルと同じスタイルで動的サイズ計算）
+    # Help panel (dynamic sizing, same style as top-left panel)
         help_padding_x = 10
         help_padding_y = 10
         help_line_height = max(int(font_linesize * 1.15), font_linesize)
@@ -995,21 +1009,21 @@ class Aquarium:
                 self.communication_history[key] = [
                     t for t in self.communication_history[key] if t > cutoff_time
                 ]
-                # 空のエントリを削除
+                # Remove empty entries
                 if not self.communication_history[key]:
                     del self.communication_history[key]
 
-        # 通信頻度の高いプロセス同士を追加で群れにする
+    # Promote frequently communicating process pairs into schools
         self._form_communication_based_schools(current_time)
 
     def _form_communication_based_schools(self, current_time: float):
-        """通信履歴に基づいて動的に群れを形成"""
+        """Dynamically form schools based on communication history."""
         cutoff_time = current_time - self.communication_window
 
         for (pid1, pid2), timestamps in self.communication_history.items():
             recent_communications = [t for t in timestamps if t > cutoff_time]
 
-            # 過去60秒間に3回以上通信があれば群れ関係とみなす
+            # Consider a school relationship if 3+ communications occurred in the past window
             if len(recent_communications) >= 3:
                 if pid1 in self.fishes and pid2 in self.fishes:
                     fish1, fish2 = self.fishes[pid1], self.fishes[pid2]
@@ -1022,7 +1036,7 @@ class Aquarium:
                         fish2.set_school_members(comm_group, is_leader=False)
 
     def draw_ipc_connections(self):
-        """IPC接続の描画（デジタル神経網のような線で）"""
+        """Draw IPC connections as pulsing network-like lines."""
         if self.headless or not self.show_ipc:
             return
 
@@ -1033,16 +1047,16 @@ class Aquarium:
                 fish1 = self.fishes[proc1.pid]
                 fish2 = self.fishes[proc2.pid]
 
-                # 可視判定（どちらかの魚が画面内にある場合のみ描画）
+                # Visibility check: draw only if either fish is on-screen
                 if self.is_visible(fish1.x, fish1.y, 100) or self.is_visible(fish2.x, fish2.y, 100):
                     # ワールド座標での距離チェック
                     distance = math.sqrt((fish1.x - fish2.x)**2 + (fish1.y - fish2.y)**2)
-                    if distance < 400 / self.zoom_level:  # ズームレベルに応じて距離を調整
-                        # 脈動する線の効果
+                    if distance < 400 / self.zoom_level:  # Adjust distance threshold by zoom level
+                        # Pulsing line effect
                         pulse = math.sin(time.time() * 3) * 0.3 + 0.7
                         alpha = int(80 * pulse)
 
-                        # CPU使用率に応じて線の色を変更
+                        # Change line color according to CPU usage
                         cpu_intensity = (fish1.cpu_percent + fish2.cpu_percent) / 200.0
                         red = int(100 + cpu_intensity * 155)
                         green = int(150 - cpu_intensity * 50)
@@ -1055,11 +1069,11 @@ class Aquarium:
 
                         color = (red, green, blue)  # pygame.draw.linesは3要素のRGBのみサポート
 
-                        # ワールド座標で曲線の中点を計算
+                        # Compute a midpoint in world coordinates to curve the line
                         mid_world_x = (fish1.x + fish2.x) / 2 + math.sin(time.time() * 2) * 20
                         mid_world_y = (fish1.y + fish2.y) / 2 + math.cos(time.time() * 2) * 20
 
-                        # ベジェ曲線をワールド座標で計算してからスクリーン座標に変換
+                        # Calculate quadratic bezier in world coordinates then convert to screen
                         steps = 10
                         points = []
                         for i in range(steps + 1):
@@ -1080,7 +1094,7 @@ class Aquarium:
         self.screen.blit(connection_surface, (0, 0))
 
     def handle_events(self):
-        """イベント処理"""
+        """Process input and window events."""
         if self.headless:
             return
         for event in pygame.event.get():
@@ -1115,13 +1129,15 @@ class Aquarium:
                     self.show_debug = not self.show_debug
                 elif event.key == pygame.K_i:
                     self.show_ipc = not self.show_ipc
+                    # Toggle IPC visualization (developer log)
                     print(f"IPC可視化: {'オン' if self.show_ipc else 'オフ'}")
                 elif event.key == pygame.K_t:
-                    # UI表示切り替え (T key)
+                    # Toggle UI display (T key)
                     self._toggle_ui_display()
                 elif event.key == pygame.K_q:
-                    # 群れ強調表示切り替え (Q key)
+                    # Toggle highlight schools (Q key)
                     self.highlight_schools = not self.highlight_schools
+                    # Developer log for school highlighting
                     print(f"🐠 群れ強調表示: {'オン (孤立プロセス半透明)' if self.highlight_schools else 'オフ'}")
                 elif event.key == pygame.K_f or event.key == pygame.K_F11:
                     self.toggle_fullscreen()
@@ -1135,7 +1151,7 @@ class Aquarium:
                     # ソート順序の切り替え
                     self._toggle_sort_order()
                 elif event.key == pygame.K_c:
-                    # カメラモードの循環切り替え
+                    # Cycle camera mode
                     self.camera_mode = (self.camera_mode + 1) % 3
                     if self.camera_mode == 0:
                         print("📹 カメラモード: 自動センタリング")
@@ -1143,7 +1159,7 @@ class Aquarium:
                         if self.selected_fish:
                             print(f"📹 カメラモード: 選択魚追従 (PID {self.selected_fish.pid} - {self.selected_fish.process_name})")
                         else:
-                            print("📹 カメラモード: 選択魚追従 (魚を選択してください)")
+                            print("📹 カメラモード: 選択魚追従 (魚未選択)")
                     else:  # camera_mode == 2
                         print("📹 カメラモード: 手動制御")
                 elif event.key == pygame.K_r:
@@ -1152,7 +1168,7 @@ class Aquarium:
                     self.camera_y = 0.0
                     self.zoom_level = 1.0
                     self.follow_target = None
-                    self.camera_mode = 0  # 自動センタリングモードにリセット
+                    self.camera_mode = 0  # reset to auto-centering mode
                     print("カメラをリセットしました（自動センタリングモード）")
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # 左クリック
@@ -1820,7 +1836,7 @@ class Aquarium:
         return max(12, min(24, scaled_size))
 
     def _validate_japanese_font(self, font: pygame.font.Font, test_texts: list, font_name: str) -> bool:
-        """フォントが日本語文字を正しく描画できるかを検証"""
+        """Validate whether a font can properly render Japanese characters."""
         try:
             fallback_surfaces = {}
 
@@ -1886,7 +1902,7 @@ class Aquarium:
             return False
 
     def _get_japanese_font(self, size: int) -> pygame.font.Font:
-        """日本語対応フォントを取得（クロスプラットフォーム対応）"""
+        """Obtain a Japanese-capable font (cross-platform fallback logic)."""
         cached = self._font_cache.get(size)
         if cached:
             return cached
@@ -1992,30 +2008,30 @@ class Aquarium:
                     add_candidate("path", matched_path)
 
         # フォールバックとして明示的なフォント名も登録
-        for font_name in fallback_names:
-            add_candidate("sysfont", font_name)
+            for font_name in fallback_names:
+                add_candidate("sysfont", font_name)
 
-        test_texts = ["あいう", "アイウ", "日本語", "テスト", "通信中...", "データ送信"]
+            test_texts = ["あいう", "アイウ", "日本語", "テスト", "通信中...", "データ送信"]
 
-        for kind, identifier in candidate_specs:
-            try:
-                if kind == "sysfont":
-                    font = pygame.font.SysFont(identifier, size)
-                else:
-                    font = pygame.font.Font(identifier, size)
-
-                if self._validate_japanese_font(font, test_texts, identifier):
-                    self._font_cache[size] = font
+            for kind, identifier in candidate_specs:
+                try:
                     if kind == "sysfont":
-                        self._preferred_font_name = identifier
-                        print(f"✅ 日本語フォント '{identifier}' を使用します (サイズ: {size}) - {system}")
+                        font = pygame.font.SysFont(identifier, size)
                     else:
-                        self._preferred_font_path = identifier
-                        print(f"✅ フォントファイル '{identifier}' を使用します (サイズ: {size})")
-                    return font
-            except Exception as e:
-                print(f"❌ フォント '{identifier}' の読み込みに失敗: {e}")
-                continue
+                        font = pygame.font.Font(identifier, size)
+
+                    if self._validate_japanese_font(font, test_texts, identifier):
+                        self._font_cache[size] = font
+                        if kind == "sysfont":
+                            self._preferred_font_name = identifier
+                            print(f"✅ 日本語フォント '{identifier}' を使用します (サイズ: {size}) - {system}")
+                        else:
+                            self._preferred_font_path = identifier
+                            print(f"✅ フォントファイル '{identifier}' を使用します (サイズ: {size})")
+                        return font
+                except Exception as e:
+                    print(f"❌ フォント '{identifier}' の読み込みに失敗: {e}")
+                    continue
 
         try:
             default_font_path = pygame.font.get_default_font()
@@ -2028,7 +2044,7 @@ class Aquarium:
         return fallback_font
 
     def _render_text(self, text: str, font: pygame.font.Font, color: Tuple[int, int, int]) -> pygame.Surface:
-        """日本語テキストを安全にレンダリング"""
+        """Safely render text (supports Japanese where possible)."""
         try:
             # UTF-8エンコーディングを確実にする
             if isinstance(text, bytes):

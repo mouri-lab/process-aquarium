@@ -19,7 +19,7 @@ from datetime import datetime
 import random
 
 try:
-    # 新しい抽象層 (存在しない場合でも旧来構造で動作できるよう try)
+    # New abstraction layer (try import so legacy structure still works if absent)
     from .sources import IProcessSource, PsutilProcessSource
     from .types import ProcessInfo as UnifiedProcessInfo, ProcessLifecycleEvent, IPCConnection
 except Exception:
@@ -31,7 +31,7 @@ except Exception:
 
 
 if UnifiedProcessInfo is None:
-    # フォールバック: 旧来データクラス (新しい types.py が見つからない場合用)
+    # Fallback: legacy data class (used when new types.py is not available)
     @dataclass
     class ProcessInfo:  # type: ignore
         pid: int
@@ -99,7 +99,7 @@ class ProcessManager:
         self.sort_by: str = "cpu"  # cpu, memory, name, pid
         self.sort_order: str = "desc"  # asc, desc
 
-        # ソース確立
+        # Establish data source
         if self._external_source is None and PsutilProcessSource is not None:
             self._external_source = PsutilProcessSource(max_processes=max_processes)
 
@@ -129,11 +129,11 @@ class ProcessManager:
     def update(self) -> None:
         """Update process information via the configured abstract source."""
         if self._external_source is not None:
-            # 新実装経路
+            # New implementation path
             self._external_source.update()
             snapshot = self._external_source.get_processes()
 
-            # ソートと制限を適用
+            # Apply sorting and limits
             snapshot = self._apply_sort_and_limit(snapshot)
 
             # 互換フィールドへ反映
@@ -197,7 +197,7 @@ class ProcessManager:
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
 
-        # ソートと制限を適用
+    # Apply sorting and limits
         new_snapshot = self._apply_sort_and_limit(new_snapshot)
 
         self._detect_exec_events(current_exe)
@@ -223,7 +223,7 @@ class ProcessManager:
 
     def _should_include_process(self, process_name: str, memory_percent: float, cpu_percent: float) -> bool:
         """Decide whether a process should be included for display."""
-        # Noneチェック
+        # None checks
         if memory_percent is None:
             memory_percent = 0.0
         if cpu_percent is None:
@@ -256,7 +256,7 @@ class ProcessManager:
         # プロセスリストに変換
         process_list = list(processes.values())
 
-        # ソートキーを決定
+    # Determine sort key
         if self.sort_by == "cpu":
             key_func = lambda p: p.cpu_percent
         elif self.sort_by == "memory":
@@ -268,11 +268,11 @@ class ProcessManager:
         else:
             key_func = lambda p: p.cpu_percent
 
-        # ソート
+    # Sort
         reverse = (self.sort_order == "desc")
         process_list.sort(key=key_func, reverse=reverse)
 
-        # 制限を適用
+        # Apply limit
         if self.process_limit is not None and self.process_limit > 0:
             process_list = process_list[:self.process_limit]
 
@@ -335,7 +335,7 @@ class ProcessManager:
                 parent = self.processes[proc.ppid]
                 forks.append((parent, proc))
 
-        # 最近のfork履歴を更新
+    # Update recent fork history
         self.recent_forks.extend(forks)
         # 履歴は最大10個まで保持
         self.recent_forks = self.recent_forks[-10:]
@@ -370,12 +370,12 @@ class ProcessManager:
         self.process_families.clear()
 
         for proc in new_processes.values():
-            if proc.ppid > 0:  # 親プロセスが存在する場合
+            if proc.ppid > 0:  # if a parent process exists
                 if proc.ppid not in self.process_families:
                     self.process_families[proc.ppid] = []
                 self.process_families[proc.ppid].append(proc.pid)
 
-                # 新しい親子関係の記録
+                # Record new parent-child bond
                 if proc.pid not in self.parent_child_bonds:
                     self.parent_child_bonds[proc.pid] = current_time
 
@@ -462,7 +462,7 @@ class ProcessManager:
 
     def _form_isolated_process_school(self, current_pid: int, current_related: List[ProcessInfo]) -> List[ProcessInfo]:
         """Form a large school from isolated processes (lightweight version)."""
-        isolated_group = current_related.copy()  # 自分を含める
+        isolated_group = current_related.copy()  # include self
 
     # Lightweight: increase group size to reduce processing
         group_size = 100
@@ -493,8 +493,8 @@ class ProcessManager:
 
     def _is_isolated_process(self, pid: int) -> bool:
         """Determine whether a process is isolated (lightweight check)."""
-        # 軽量化：簡易判定のみ
-        return pid not in self.process_families  # 子プロセスがない = 孤立
+        # Lightweight: simple check only
+        return pid not in self.process_families  # no child processes = isolated
 
     def _should_maintain_parent_child_bond(self, child_pid: int, current_time: float) -> bool:
         """Decide whether a parent-child bond should be maintained."""
@@ -768,7 +768,7 @@ class ProcessManager:
         return connections
 
     def shutdown(self) -> None:
-        """バックエンドソースを安全に停止"""
+        """Safely shutdown the backend source."""
         if self._external_source is not None and hasattr(self._external_source, "shutdown"):
             try:
                 self._external_source.shutdown()
@@ -782,7 +782,7 @@ class ProcessManager:
             pass
 
 def test_process_manager():
-    """ProcessManagerのテスト関数"""
+    """Test function for ProcessManager."""
     manager = ProcessManager()
 
     print("=== Digital Life Aquarium - Process Monitor Test ===")

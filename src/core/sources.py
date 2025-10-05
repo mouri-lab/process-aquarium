@@ -70,16 +70,35 @@ class PsutilProcessSource(IProcessSource):
         self._last_ipc_refresh = 0.0
         self._ipc_refresh_interval = 2.0  # seconds
 
-        # Filtering heuristics (copied from original with slight cleanup)
+        # Filtering heuristics (cross-platform defaults). We favor Linux desktop
+        # / server names while preserving common macOS names so this module can
+        # run well on both platforms. The sets below are substrings matched
+        # against process names to bias inclusion or exclusion when filtering.
         self.important_names = {
+            # Cross-platform user-facing and developer tools
             'python', 'chrome', 'firefox', 'safari', 'code', 'terminal',
+            'zoom', 'slack', 'discord', 'spotify', 'photoshop', 'illustrator',
+            'aftereffects', 'node', 'java', 'docker',
+            # macOS-specific UI/system names (kept for compatibility)
             'finder', 'dock', 'systemuiserver', 'windowserver', 'kernel_task',
-            'launchd', 'zoom', 'slack', 'discord', 'spotify', 'photoshop',
-            'illustrator', 'aftereffects', 'node', 'java', 'docker'
+            'launchd',
+            # Linux-specific desktop/server names to prioritize
+            'systemd', 'gnome-shell', 'gnome', 'kde', 'plasmashell', 'xorg',
+            'xwayland', 'pulseaudio', 'pipewire', 'dbus-daemon', 'sshd', 'ssh',
+            'nginx', 'apache2', 'mysql', 'mysqld', 'mariadb', 'postgres',
+            'redis-server', 'containerd', 'kubelet', 'cron', 'crond'
         }
+
+        # Excluded name patterns (platform/system noise). This includes common
+        # macOS background daemons as well as Linux kernel threads and service
+        # names that are generally uninteresting for visualization.
         self.excluded_patterns = {
             'com.apple.', 'cfprefsd', 'distnoted', 'trustd', 'secd',
-            'bluetoothd', 'audiomxd', 'logd_helper', 'deleted'
+            'bluetoothd', 'audiomxd', 'logd_helper', 'deleted',
+            # Linux kernel threads & system daemons
+            'kthreadd', 'ksoftirqd', 'rcu_', 'watchdog', 'swapper',
+            'systemd', 'systemd-journal', 'udevd', 'dbus-daemon',
+            'snap', 'flatpak', 'modprobe'
         }
 
         # Async polling support
@@ -254,7 +273,7 @@ class PsutilProcessSource(IProcessSource):
                 break
 
     def _should_include(self, name: str, mem: float, cpu: float) -> bool:
-        # すべてのプロセスを可視化するため、フィルタリングを無効化
+        # Disable filtering so all processes are visible
         return True
 
         # 元のフィルタリングロジック（コメントアウト）
@@ -290,11 +309,11 @@ class PsutilProcessSource(IProcessSource):
 
 
 class EbpfProcessSource(IProcessSource):
-    """eBPF ベースのプロセスイベントソース (fork/exec/exit MVP)。
+    """eBPF-based process event source (fork/exec/exit MVP).
 
-    BCC を利用して kernel tracepoint からイベントを取得し lifecycle events
-    を生成する。詳細メトリクス(CPU/MEM)は保持しないため、必要なら上位で
-    ハイブリッド構成 (psutil 併用) を行う想定。
+    Uses BCC to capture kernel tracepoint events and generate lifecycle events.
+    This source does not retain detailed metrics (CPU/MEM); when those are
+    required a hybrid configuration (psutil + eBPF) is expected.
     """
 
     BPF_PROGRAM = r"""
@@ -336,12 +355,12 @@ class EbpfProcessSource(IProcessSource):
         self.available = False
         self._processes: Dict[int, ProcessInfo] = {}
         self._lifecycle_buffer: List[ProcessLifecycleEvent] = []
-        # ハイブリッドモード: 初期スキャン + eBPF イベント追跡
+    # Hybrid mode: initial scan + eBPF event tracking
         self.hybrid_mode = hybrid_mode
         self._initial_scan_done = False
-        # イベント統計
+    # Event statistics
         self._event_stats = {"spawn": 0, "exec": 0, "exit": 0, "captured": 0, "initial_scan": 0}
-        # 並行アクセス制御
+    # Concurrency control
         self._lock = Lock()
         self._shutdown = Event()
         self._ready = Event()
@@ -433,7 +452,7 @@ class EbpfProcessSource(IProcessSource):
                 event_type="exit", pid=evt.pid, ppid=ppid, timestamp=now,
                 details={"source": "ebpf", "raw_ts": evt.ts}
             ))
-            # 終了したプロセスを削除（メモリ効率化）
+            # Remove exited process to free memory
             if evt.pid in self._processes:
                 del self._processes[evt.pid]
         self._ready.set()
@@ -448,7 +467,7 @@ class EbpfProcessSource(IProcessSource):
                 try:
                     exe = p.exe()
                 except (psutil.AccessDenied, psutil.NoSuchProcess):
-                    pass  # exe取得失敗は無視
+                    pass  # ignore failures to retrieve exe
 
                 info = ProcessInfo(
                     pid=pid,
@@ -482,7 +501,7 @@ class EbpfProcessSource(IProcessSource):
         return False
 
     def _perform_initial_scan(self):
-        """初期スキャン: 既存のプロセス群をpsutilで一度だけ取得"""
+        """Initial scan: collect existing processes once using psutil."""
         print("[eBPF] 初期プロセススキャンを実行中...")
         start_time = time.time()
         count = 0
@@ -496,7 +515,7 @@ class EbpfProcessSource(IProcessSource):
                 pid = info['pid']
                 name = (info['name'] or 'unknown')
 
-                # 簡単なフィルタリング（重要なプロセスのみ）
+                # Simple filtering (important processes only)
                 if not self._should_include_in_scan(name, info.get('memory_percent', 0)):
                     continue
 
@@ -513,7 +532,7 @@ class EbpfProcessSource(IProcessSource):
                     cmdline=info['cmdline'] or [],
                     birth_time=datetime.now(),
                     last_update=datetime.now(),
-                    is_new=False,  # 初期スキャンなので新規ではない
+                    is_new=False,  # not new because this is an initial scan
                 )
 
                 snapshot[pid] = proc_info
@@ -531,8 +550,8 @@ class EbpfProcessSource(IProcessSource):
         print(f"[eBPF] 初期スキャン完了: {count}プロセス収集 ({elapsed:.2f}秒)")
 
     def _should_include_in_scan(self, name: str, mem_percent: float) -> bool:
-        """初期スキャン時のフィルタリング（すべてのプロセスを表示）"""
-        # すべてのプロセスを可視化するため、フィルタリングを無効化
+        """Filtering used during the initial scan (display all processes)."""
+        # Disable filtering to visualize all processes
         return True
 
         # 元のフィルタリングロジック（コメントアウト）
@@ -569,7 +588,7 @@ class EbpfProcessSource(IProcessSource):
             return buf
 
     def get_ipc_connections(self, limit: int = 20) -> List[IPCConnection]:  # type: ignore[override]
-        # IPC は未実装 (TODO: ソケット tracepoint / kprobe 拡張)
+        # IPC is not implemented (TODO: socket tracepoint / kprobe extension)
         return []
 
     # ---------- Thread management ---------- #
