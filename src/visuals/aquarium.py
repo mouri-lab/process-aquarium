@@ -718,14 +718,14 @@ class Aquarium:
                 "クリック:選択 C:カメラ R:リセット",
                 "ホイール:ズーム 右ドラッグ:パン",
                 "D:デバッグ I:IPC F:フルスクリーン",
-                "L:制限 S:ソート O:順序 M:モード",
+                "L:制限 S:ソート O:順序",
                 "T:UI表示 Q:群れ強調 ESC:終了"
             ]
         else:
             # 簡素表示モードでは基本操作のみ
             help_lines = [
                 "基本操作:",
-                "M:モード T:UI Q:群れ強調 ESC:終了"
+                "T:UI Q:群れ強調 ESC:終了"
             ]
 
         # ヘルプ（左上パネルと同じスタイルで動的サイズ計算）
@@ -975,9 +975,6 @@ class Aquarium:
                 elif event.key == pygame.K_i:
                     self.show_ipc = not self.show_ipc
                     print(f"IPC可視化: {'オン' if self.show_ipc else 'オフ'}")
-                elif event.key == pygame.K_m:
-                    # モード一括切り替え (M key)
-                    self._cycle_display_modes()
                 elif event.key == pygame.K_t:
                     # UI表示切り替え (T key)
                     self._toggle_ui_display()
