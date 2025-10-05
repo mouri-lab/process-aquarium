@@ -110,6 +110,26 @@ class Fish:
         self.is_isolated = False  # 孤立プロセス（PPID=1など）かどうか
         self.is_isolated_school = False  # 孤立プロセス群れに所属しているか
 
+        # 周回運動システム
+        self.orbit_mode = False  # 周回モードかどうか
+        self.orbit_center_x = 0.0  # 周回中心X
+        self.orbit_center_y = 0.0  # 周回中心Y
+        self.orbit_radius = 100.0  # 周回半径
+        self.orbit_angle = random.uniform(0, 2 * math.pi)  # 現在の角度
+        self.orbit_speed = random.uniform(0.02, 0.05)  # 周回速度（ラジアン/フレーム）
+        self.orbit_timer = 0  # 周回継続時間
+        self.orbit_duration = random.randint(300, 600)  # 周回持続フレーム数（5-10秒）
+
+        # 周回運動システム
+        self.orbit_mode = False  # 周回モードかどうか
+        self.orbit_center_x = 0.0  # 周回中心X
+        self.orbit_center_y = 0.0  # 周回中心Y
+        self.orbit_radius = 100.0  # 周回半径
+        self.orbit_angle = random.uniform(0, 2 * math.pi)  # 現在の角度
+        self.orbit_speed = random.uniform(0.02, 0.05)  # 周回速度（ラジアン/フレーム）
+        self.orbit_timer = 0  # 周回継続時間
+        self.orbit_duration = random.randint(300, 600)  # 周回持続フレーム数（5-10秒）
+
     def _generate_color(self) -> Tuple[int, int, int]:
         """プロセス名に基づいて固有の色を生成"""
         # プロセス名のハッシュ値を使って色を決定
@@ -329,6 +349,9 @@ class Fish:
                 self.target_x = random.uniform(-world_size, world_size)
                 self.target_y = random.uniform(-world_size, world_size)
 
+        # 周回運動システム（動的で自然な動き）
+        self._update_orbit_behavior(world_size)
+
         # 基本的な移動計算
         # 回避力の初期化（運動エネルギーシステムで統一管理）
         avoidance_x = 0.0
@@ -508,10 +531,15 @@ class Fish:
 
         # 群れ強調表示が有効な場合の透明度調整
         if highlight_schools:
-            # 群れに所属している場合（親子関係の群れ + 同名プロセス群れ）: ハイライト表示
+            # 群れに所属している場合の透明度処理
             if self.school_members and len(self.school_members) > 1:
-                pass  # 群れはハイライト（フル表示）
-            # 真の孤立プロセス（どの群れにも所属していない）: 25%透明度
+                # 孤立者の群れ（集まった単独プロセス）は25%透明度
+                if getattr(self, 'is_isolated_school', False):
+                    alpha = int(alpha * 0.25)
+                # 真の群れ（親子関係・同名プロセス）はハイライト表示
+                else:
+                    pass  # フル表示
+            # 真の単独プロセス（どの群れにも所属していない）: 25%透明度
             else:
                 alpha = int(alpha * 0.25)
 
@@ -1399,3 +1427,34 @@ class Fish:
                 max_cpu = fish.cpu_percent
 
         return leader
+
+    def _update_orbit_behavior(self, world_size: float):
+        """周回運動システムの更新"""
+        # 周回モードの開始判定（確率的に開始）
+        if not self.orbit_mode and random.randint(1, 600) == 1:  # 約1/600の確率
+            self.orbit_mode = True
+            self.orbit_center_x = random.uniform(-world_size * 0.5, world_size * 0.5)
+            self.orbit_center_y = random.uniform(-world_size * 0.5, world_size * 0.5)
+            self.orbit_radius = random.uniform(80, 200)
+            self.orbit_speed = random.uniform(0.02, 0.06)  # 速度にもバリエーション
+            self.orbit_timer = 0
+            self.orbit_duration = random.randint(200, 500)  # 3-8秒間周回
+
+        # 周回モード中の処理
+        if self.orbit_mode:
+            self.orbit_timer += 1
+            self.orbit_angle += self.orbit_speed
+
+            # 周回位置を目標位置に設定
+            self.target_x = self.orbit_center_x + self.orbit_radius * math.cos(self.orbit_angle)
+            self.target_y = self.orbit_center_y + self.orbit_radius * math.sin(self.orbit_angle)
+
+            # 境界チェック
+            self.target_x = max(-world_size, min(world_size, self.target_x))
+            self.target_y = max(-world_size, min(world_size, self.target_y))
+
+            # 周回終了判定
+            if self.orbit_timer >= self.orbit_duration:
+                self.orbit_mode = False
+                # 次回の周回のために新しい設定を準備
+                self.orbit_duration = random.randint(300, 600)

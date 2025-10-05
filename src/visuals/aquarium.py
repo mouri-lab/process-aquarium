@@ -456,9 +456,11 @@ class Aquarium:
                 # if len(self.fishes) >= max_fish:
                 #     self._remove_oldest_fish()
 
-                # ランダムな初期位置
-                x = random.uniform(50, self.width - 50)
-                y = random.uniform(50, self.height - 50)
+                # より広範囲にランダム分散（初期群がり防止）
+                angle = random.uniform(0, 2 * math.pi)
+                distance = random.uniform(100, min(self.world_size * 0.6, 600))  # ワールドサイズの60%範囲内
+                x = distance * math.cos(angle)
+                y = distance * math.sin(angle)
 
                 fish = Fish(pid, proc.name, x, y, self.world_size)
                 self.fishes[pid] = fish
@@ -626,8 +628,25 @@ class Aquarium:
                             self.fishes[pid].is_isolated = True  # 真の孤立プロセス
                             self.fishes[pid].is_isolated_school = False  # 群れに所属していない
 
-            # 真の孤立プロセスには特殊な処理は行わない（個別行動）
-            # print(f"🏝️ 真の孤立プロセス数: {len(truly_isolated_pids)}")
+            # 真の孤立プロセスを一つの特別な群れにまとめる
+            if len(truly_isolated_pids) >= 2:
+                # 複数の孤立プロセスがある場合、「孤立者の群れ」として統合
+                leader_pid = min(truly_isolated_pids)  # 最小PIDをリーダーに
+                for pid in truly_isolated_pids:
+                    if pid in self.fishes:
+                        is_leader = (pid == leader_pid)
+                        self.fishes[pid].set_school_members(truly_isolated_pids, is_leader)
+                        self.fishes[pid].is_isolated = True  # 孤立プロセス属性は維持
+                        self.fishes[pid].is_isolated_school = True  # 孤立者の群れフラグ
+                        processed_pids.add(pid)
+                # print(f"🏝️ 孤立者の群れ形成: {len(truly_isolated_pids)}匹")
+            elif len(truly_isolated_pids) == 1:
+                # 単独の孤立プロセス（本当に1匹だけ）
+                pid = truly_isolated_pids[0]
+                if pid in self.fishes:
+                    self.fishes[pid].is_isolated = True
+                    self.fishes[pid].is_isolated_school = False
+                # print(f"🏝️ 真の単独プロセス: 1匹")
         else:
             # 未処理プロセスが1匹以下の場合、それは真の孤立
             for pid in unprocessed_pids:
