@@ -9,7 +9,7 @@ import random
 import time
 from typing import Tuple, Optional, List
 
-WORD_SIZE = 3000
+WORD_SIZE = 2000
 
 MAX_THREAD_SATELLITES = 14
 """Maximum number of thread satellites rendered around a fish."""
@@ -489,7 +489,7 @@ class Fish:
 
         return (r, g, b)
 
-    def get_display_alpha(self) -> int:
+    def get_display_alpha(self, highlight_schools: bool = False) -> int:
         """現在の状態に応じた透明度を取得"""
         alpha = self.alpha
 
@@ -500,6 +500,10 @@ class Fish:
         # 死亡時のフェードアウト
         if self.is_dying:
             alpha = int(255 * (1.0 - self.death_progress))
+
+        # 群れ強調表示が有効な場合、孤立プロセスは半透明にする
+        if highlight_schools and (not self.school_members or len(self.school_members) <= 1):
+            alpha = int(alpha * 0.25)  # 透明度を25%にする
 
         return alpha
 
@@ -693,14 +697,14 @@ class Fish:
             self._draw_generic_fish(screen, color, alpha, body_length, body_width)
 
     def draw(self, screen: pygame.Surface, font: pygame.font.Font = None, quality: str = "full",
-             text_renderer=None, zoom_level: float = 1.0):
+             text_renderer=None, zoom_level: float = 1.0, highlight_schools: bool = False):
         """Fishの描画（魚らしい見た目版）"""
         if self.death_progress >= 1.0:
             return
 
         # 現在の描画属性を取得
         color = self.get_display_color()
-        alpha = self.get_display_alpha()
+        alpha = self.get_display_alpha(highlight_schools)
         size = self.get_display_size() * zoom_level  # ズームレベルでサイズを調整
 
         if quality not in {"full", "reduced", "minimal"}:
@@ -713,7 +717,12 @@ class Fish:
         if quality == "minimal":
             # 超過密モードではシンプルな円のみ描画
             radius = max(2, min(int(size), 24))
-            pygame.draw.circle(screen, color, (int(self.x), int(self.y)), radius)
+            if alpha >= 255:
+                pygame.draw.circle(screen, color, (int(self.x), int(self.y)), radius)
+            else:
+                temp_surface = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
+                pygame.draw.circle(temp_surface, (*color, alpha), (radius + 2, radius + 2), radius)
+                screen.blit(temp_surface, (int(self.x) - radius - 2, int(self.y) - radius - 2))
             return
 
         # メモリ巨大魚の波紋エフェクト（メモリ使用率5%以上）
@@ -780,28 +789,48 @@ class Fish:
     def _draw_shark(self, screen: pygame.Surface, color: Tuple[int, int, int],
                     alpha: int, body_length: float, body_width: float):
         """サメの描画"""
-        pygame.draw.ellipse(screen, (*color, alpha),
-                            (self.x - body_length / 2, self.y - body_width / 2,
-                             body_length, body_width))
+        if alpha >= 255:
+            pygame.draw.ellipse(screen, color,
+                                (self.x - body_length / 2, self.y - body_width / 2,
+                                 body_length, body_width))
+        else:
+            temp_surface = pygame.Surface((body_length + 4, body_width + 4), pygame.SRCALPHA)
+            pygame.draw.ellipse(temp_surface, (*color, alpha),
+                                (2, 2, body_length, body_width))
+            screen.blit(temp_surface, (self.x - body_length / 2 - 2, self.y - body_width / 2 - 2))
 
         # 尻尾の描画
         tail_length = body_length * 0.7
         tail_width = body_width * 0.3
         tail_angle = self.angle + math.pi / 2 + self.tail_swing
 
-        pygame.draw.polygon(screen, (*color, alpha),
-                            [(self.x, self.y),
-                             (self.x + math.cos(tail_angle) * tail_length,
-                              self.y + math.sin(tail_angle) * tail_length),
-                             (self.x + math.cos(tail_angle) * tail_length * 0.8,
-                              self.y + math.sin(tail_angle) * tail_length * 0.8)])
+        tail_points = [(self.x, self.y),
+                       (self.x + math.cos(tail_angle) * tail_length,
+                        self.y + math.sin(tail_angle) * tail_length),
+                       (self.x + math.cos(tail_angle) * tail_length * 0.8,
+                        self.y + math.sin(tail_angle) * tail_length * 0.8)]
+
+        if alpha >= 255:
+            pygame.draw.polygon(screen, color, tail_points)
+        else:
+            temp_surface = pygame.Surface((tail_length + 10, tail_length + 10), pygame.SRCALPHA)
+            offset_x, offset_y = tail_length // 2 + 5, tail_length // 2 + 5
+            adjusted_points = [(p[0] - self.x + offset_x, p[1] - self.y + offset_y) for p in tail_points]
+            pygame.draw.polygon(temp_surface, (*color, alpha), adjusted_points)
+            screen.blit(temp_surface, (self.x - offset_x, self.y - offset_y))
 
     def _draw_tropical_fish(self, screen: pygame.Surface, color: Tuple[int, int, int],
                             alpha: int, body_length: float, body_width: float):
         """熱帯魚の描画"""
-        pygame.draw.ellipse(screen, (*color, alpha),
-                            (self.x - body_length / 2, self.y - body_width / 2,
-                             body_length, body_width))
+        if alpha >= 255:
+            pygame.draw.ellipse(screen, color,
+                                (self.x - body_length / 2, self.y - body_width / 2,
+                                 body_length, body_width))
+        else:
+            temp_surface = pygame.Surface((body_length + 4, body_width + 4), pygame.SRCALPHA)
+            pygame.draw.ellipse(temp_surface, (*color, alpha),
+                                (2, 2, body_length, body_width))
+            screen.blit(temp_surface, (self.x - body_length / 2 - 2, self.y - body_width / 2 - 2))
 
         # 尻尾の描画
         tail_length = body_length * 0.6
@@ -830,90 +859,154 @@ class Fish:
     def _draw_ray(self, screen: pygame.Surface, color: Tuple[int, int, int],
                   alpha: int, body_length: float, body_width: float):
         """エイの描画"""
-        pygame.draw.ellipse(screen, (*color, alpha),
-                            (self.x - body_length / 2, self.y - body_width / 2,
-                             body_length, body_width))
+        if alpha >= 255:
+            pygame.draw.ellipse(screen, color,
+                                (self.x - body_length / 2, self.y - body_width / 2,
+                                 body_length, body_width))
+        else:
+            temp_surface = pygame.Surface((body_length + 4, body_width + 4), pygame.SRCALPHA)
+            pygame.draw.ellipse(temp_surface, (*color, alpha),
+                                (2, 2, body_length, body_width))
+            screen.blit(temp_surface, (self.x - body_length / 2 - 2, self.y - body_width / 2 - 2))
 
         # 尻尾の描画
         tail_length = body_length * 0.8
         tail_width = body_width * 0.2
         tail_angle = self.angle + math.pi + self.tail_swing
 
-        pygame.draw.polygon(screen, (*color, alpha),
-                            [(self.x, self.y),
-                             (self.x + math.cos(tail_angle) * tail_length,
-                              self.y + math.sin(tail_angle) * tail_length),
-                             (self.x + math.cos(tail_angle) * tail_length * 0.9,
-                              self.y + math.sin(tail_angle) * tail_length * 0.9)])
+        tail_points = [(self.x, self.y),
+                       (self.x + math.cos(tail_angle) * tail_length,
+                        self.y + math.sin(tail_angle) * tail_length),
+                       (self.x + math.cos(tail_angle) * tail_length * 0.9,
+                        self.y + math.sin(tail_angle) * tail_length * 0.9)]
+
+        if alpha >= 255:
+            pygame.draw.polygon(screen, color, tail_points)
+        else:
+            temp_surface = pygame.Surface((tail_length + 10, tail_length + 10), pygame.SRCALPHA)
+            offset_x, offset_y = tail_length // 2 + 5, tail_length // 2 + 5
+            adjusted_points = [(p[0] - self.x + offset_x, p[1] - self.y + offset_y) for p in tail_points]
+            pygame.draw.polygon(temp_surface, (*color, alpha), adjusted_points)
+            screen.blit(temp_surface, (self.x - offset_x, self.y - offset_y))
 
     def _draw_dolphin(self, screen: pygame.Surface, color: Tuple[int, int, int],
                       alpha: int, body_length: float, body_width: float):
         """イルカの描画"""
-        pygame.draw.ellipse(screen, (*color, alpha),
-                            (self.x - body_length / 2, self.y - body_width / 2,
-                             body_length, body_width))
+        if alpha >= 255:
+            pygame.draw.ellipse(screen, color,
+                                (self.x - body_length / 2, self.y - body_width / 2,
+                                 body_length, body_width))
+        else:
+            temp_surface = pygame.Surface((body_length + 4, body_width + 4), pygame.SRCALPHA)
+            pygame.draw.ellipse(temp_surface, (*color, alpha),
+                                (2, 2, body_length, body_width))
+            screen.blit(temp_surface, (self.x - body_length / 2 - 2, self.y - body_width / 2 - 2))
 
         # 尻尾の描画
         tail_length = body_length * 0.7
         tail_width = body_width * 0.3
         tail_angle = self.angle + math.pi / 2 + self.tail_swing
 
-        pygame.draw.polygon(screen, (*color, alpha),
-                            [(self.x, self.y),
-                             (self.x + math.cos(tail_angle) * tail_length,
-                              self.y + math.sin(tail_angle) * tail_length),
-                             (self.x + math.cos(tail_angle) * tail_length * 0.8,
-                              self.y + math.sin(tail_angle) * tail_length * 0.8)])
+        tail_points = [(self.x, self.y),
+                       (self.x + math.cos(tail_angle) * tail_length,
+                        self.y + math.sin(tail_angle) * tail_length),
+                       (self.x + math.cos(tail_angle) * tail_length * 0.8,
+                        self.y + math.sin(tail_angle) * tail_length * 0.8)]
+
+        if alpha >= 255:
+            pygame.draw.polygon(screen, color, tail_points)
+        else:
+            temp_surface = pygame.Surface((tail_length + 10, tail_length + 10), pygame.SRCALPHA)
+            offset_x, offset_y = tail_length // 2 + 5, tail_length // 2 + 5
+            adjusted_points = [(p[0] - self.x + offset_x, p[1] - self.y + offset_y) for p in tail_points]
+            pygame.draw.polygon(temp_surface, (*color, alpha), adjusted_points)
+            screen.blit(temp_surface, (self.x - offset_x, self.y - offset_y))
 
         # ひれの描画
         fin_length = body_length * 0.5
         fin_width = body_width * 0.2
         fin_angle = self.angle - math.pi / 2 + self.tail_swing
 
-        pygame.draw.polygon(screen, (*color, alpha),
-                            [(self.x, self.y),
-                             (self.x + math.cos(fin_angle) * fin_length,
-                              self.y + math.sin(fin_angle) * fin_length),
-                             (self.x + math.cos(fin_angle) * fin_length * 0.8,
-                              self.y + math.sin(fin_angle) * fin_length * 0.8)])
+        fin_points = [(self.x, self.y),
+                      (self.x + math.cos(fin_angle) * fin_length,
+                       self.y + math.sin(fin_angle) * fin_length),
+                      (self.x + math.cos(fin_angle) * fin_length * 0.8,
+                       self.y + math.sin(fin_angle) * fin_length * 0.8)]
+
+        if alpha >= 255:
+            pygame.draw.polygon(screen, color, fin_points)
+        else:
+            temp_surface = pygame.Surface((fin_length + 10, fin_length + 10), pygame.SRCALPHA)
+            offset_x, offset_y = fin_length // 2 + 5, fin_length // 2 + 5
+            adjusted_points = [(p[0] - self.x + offset_x, p[1] - self.y + offset_y) for p in fin_points]
+            pygame.draw.polygon(temp_surface, (*color, alpha), adjusted_points)
+            screen.blit(temp_surface, (self.x - offset_x, self.y - offset_y))
 
     def _draw_whale(self, screen: pygame.Surface, color: Tuple[int, int, int],
                     alpha: int, body_length: float, body_width: float):
         """クジラの描画"""
-        pygame.draw.ellipse(screen, (*color, alpha),
-                            (self.x - body_length / 2, self.y - body_width / 2,
-                             body_length, body_width))
+        if alpha >= 255:
+            pygame.draw.ellipse(screen, color,
+                                (self.x - body_length / 2, self.y - body_width / 2,
+                                 body_length, body_width))
+        else:
+            temp_surface = pygame.Surface((body_length + 4, body_width + 4), pygame.SRCALPHA)
+            pygame.draw.ellipse(temp_surface, (*color, alpha),
+                                (2, 2, body_length, body_width))
+            screen.blit(temp_surface, (self.x - body_length / 2 - 2, self.y - body_width / 2 - 2))
 
         # 尻尾の描画
         tail_length = body_length * 0.9
         tail_width = body_width * 0.4
         tail_angle = self.angle + math.pi / 2 + self.tail_swing
 
-        pygame.draw.polygon(screen, (*color, alpha),
-                            [(self.x, self.y),
-                             (self.x + math.cos(tail_angle) * tail_length,
-                              self.y + math.sin(tail_angle) * tail_length),
-                             (self.x + math.cos(tail_angle) * tail_length * 0.8,
-                              self.y + math.sin(tail_angle) * tail_length * 0.8)])
+        tail_points = [(self.x, self.y),
+                       (self.x + math.cos(tail_angle) * tail_length,
+                        self.y + math.sin(tail_angle) * tail_length),
+                       (self.x + math.cos(tail_angle) * tail_length * 0.8,
+                        self.y + math.sin(tail_angle) * tail_length * 0.8)]
+
+        if alpha >= 255:
+            pygame.draw.polygon(screen, color, tail_points)
+        else:
+            temp_surface = pygame.Surface((tail_length + 10, tail_length + 10), pygame.SRCALPHA)
+            offset_x, offset_y = tail_length // 2 + 5, tail_length // 2 + 5
+            adjusted_points = [(p[0] - self.x + offset_x, p[1] - self.y + offset_y) for p in tail_points]
+            pygame.draw.polygon(temp_surface, (*color, alpha), adjusted_points)
+            screen.blit(temp_surface, (self.x - offset_x, self.y - offset_y))
 
     def _draw_eel(self, screen: pygame.Surface, color: Tuple[int, int, int],
                   alpha: int, body_length: float, body_width: float):
         """ウナギの描画"""
-        pygame.draw.ellipse(screen, (*color, alpha),
-                            (self.x - body_length / 2, self.y - body_width / 2,
-                             body_length, body_width))
+        if alpha >= 255:
+            pygame.draw.ellipse(screen, color,
+                                (self.x - body_length / 2, self.y - body_width / 2,
+                                 body_length, body_width))
+        else:
+            temp_surface = pygame.Surface((body_length + 4, body_width + 4), pygame.SRCALPHA)
+            pygame.draw.ellipse(temp_surface, (*color, alpha),
+                                (2, 2, body_length, body_width))
+            screen.blit(temp_surface, (self.x - body_length / 2 - 2, self.y - body_width / 2 - 2))
 
         # 尻尾の描画
         tail_length = body_length * 0.5
         tail_width = body_width * 0.2
         tail_angle = self.angle + math.pi / 2 + self.tail_swing
 
-        pygame.draw.polygon(screen, (*color, alpha),
-                            [(self.x, self.y),
-                             (self.x + math.cos(tail_angle) * tail_length,
-                              self.y + math.sin(tail_angle) * tail_length),
-                             (self.x + math.cos(tail_angle) * tail_length * 0.7,
-                              self.y + math.sin(tail_angle) * tail_length * 0.7)])
+        tail_points = [(self.x, self.y),
+                       (self.x + math.cos(tail_angle) * tail_length,
+                        self.y + math.sin(tail_angle) * tail_length),
+                       (self.x + math.cos(tail_angle) * tail_length * 0.7,
+                        self.y + math.sin(tail_angle) * tail_length * 0.7)]
+
+        if alpha >= 255:
+            pygame.draw.polygon(screen, color, tail_points)
+        else:
+            temp_surface = pygame.Surface((tail_length + 10, tail_length + 10), pygame.SRCALPHA)
+            offset_x, offset_y = tail_length // 2 + 5, tail_length // 2 + 5
+            adjusted_points = [(p[0] - self.x + offset_x, p[1] - self.y + offset_y) for p in tail_points]
+            pygame.draw.polygon(temp_surface, (*color, alpha), adjusted_points)
+            screen.blit(temp_surface, (self.x - offset_x, self.y - offset_y))
 
     def _draw_generic_fish(self, screen: pygame.Surface, color: Tuple[int, int, int],
                             alpha: int, body_length: float, body_width: float):
@@ -1005,11 +1098,23 @@ class Fish:
             eye_x = body_x + cos_angle * body_length * 0.3 + sin_angle * body_width * 0.2
             eye_y = body_y + sin_angle * body_length * 0.3 - cos_angle * body_width * 0.2
 
-            # 白い目
-            pygame.draw.circle(screen, (255, 255, 255), (int(eye_x), int(eye_y)), int(eye_size))
-            # 黒い瞳
-            pupil_size = max(1, eye_size * 0.6)
-            pygame.draw.circle(screen, (0, 0, 0), (int(eye_x), int(eye_y)), int(pupil_size))
+            if alpha >= 255:
+                # 白い目
+                pygame.draw.circle(screen, (255, 255, 255), (int(eye_x), int(eye_y)), int(eye_size))
+                # 黒い瞳
+                pupil_size = max(1, eye_size * 0.6)
+                pygame.draw.circle(screen, (0, 0, 0), (int(eye_x), int(eye_y)), int(pupil_size))
+            else:
+                # 半透明での目の描画
+                eye_surface = pygame.Surface((eye_size * 2 + 4, eye_size * 2 + 4), pygame.SRCALPHA)
+                # 白い目
+                pygame.draw.circle(eye_surface, (255, 255, 255, alpha),
+                                 (int(eye_size + 2), int(eye_size + 2)), int(eye_size))
+                # 黒い瞳
+                pupil_size = max(1, eye_size * 0.6)
+                pygame.draw.circle(eye_surface, (0, 0, 0, alpha),
+                                 (int(eye_size + 2), int(eye_size + 2)), int(pupil_size))
+                screen.blit(eye_surface, (int(eye_x - eye_size - 2), int(eye_y - eye_size - 2)))
 
     def set_school_members(self, member_pids: List[int], is_leader: bool = False):
         """群れのメンバーを設定"""

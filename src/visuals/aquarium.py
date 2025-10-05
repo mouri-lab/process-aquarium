@@ -201,8 +201,8 @@ class Aquarium:
         self._font_cache: Dict[int, pygame.font.Font] = {}
         self.font_scale = 1.0
         self._update_font_scale()
-        self.font = self._get_japanese_font(int(24 * self.font_scale))
-        self.small_font = self._get_japanese_font(int(18 * self.font_scale))
+        self.font = self._get_japanese_font(int(20 * self.font_scale))  # より小さく：24→20
+        self.small_font = self._get_japanese_font(int(14 * self.font_scale))  # より小さく：18→14
         self.bubble_font = self._get_japanese_font(self._determine_bubble_font_size())  # IPC会話吹き出し用フォント
 
         # 背景とエフェクト（動的パーティクル数）
@@ -231,6 +231,7 @@ class Aquarium:
         # デバッグ情報表示
         self.show_debug = False  # デフォルトでデバッグ表示をオフ
         self.show_ipc = True    # IPC可視化をオン
+        self.highlight_schools = False  # 群れ強調表示（孤立プロセス半透明化）
         self.debug_text_lines = []
 
         # 通信相手のハイライト
@@ -492,30 +493,7 @@ class Aquarium:
         # 関連プロセス群を取得して群れを形成
         processed_pids = set()
 
-        # 同じプロセス名のものを群れにする
-        process_name_groups = {}
-        all_processes = self.process_manager.get_all_processes()
-
-        # プロセス名ごとにグループ化
-        for process in all_processes.values():
-            if process.pid in self.fishes:
-                name = process.name
-                if name not in process_name_groups:
-                    process_name_groups[name] = []
-                process_name_groups[name].append(process.pid)
-
-        # 同名プロセスが複数ある場合のみ群れを形成
-        for name, pids in process_name_groups.items():
-            if len(pids) > 1:
-                leader_pid = min(pids)  # PIDが最小のものをリーダーに
-
-                for pid in pids:
-                    if pid in self.fishes:
-                        is_leader = (pid == leader_pid)
-                        self.fishes[pid].set_school_members(pids, is_leader)
-                        processed_pids.add(pid)
-
-        # 通常の関連プロセス群を形成
+        # 関連プロセス群を形成
         for pid, fish in self.fishes.items():
             if pid in processed_pids:
                 continue
@@ -606,6 +584,15 @@ class Aquarium:
         """UI情報の描画"""
         if self.headless:
             return  # ヘッドレスではUI描画をスキップ
+
+        # UI表示モードの確認
+        if not hasattr(self, 'ui_mode'):
+            self.ui_mode = 0  # デフォルトはフル表示
+
+        # 最小表示モード(2)の場合は何も描画しない
+        if self.ui_mode == 2:
+            return
+
         current_fps = self.clock.get_fps()
 
         # 統計情報（パフォーマンス情報を含む）
@@ -617,16 +604,22 @@ class Aquarium:
         # プロセス制限とソート情報を追加
         limit_str = "無制限" if self.process_limit is None else str(self.process_limit)
 
-        stats_lines = [
-            f"総プロセス数: {self.total_processes}",
-            f"表示中の魚: {len(self.fishes)}",
-            f"制限: {limit_str}",
-            f"総メモリ使用率: {self.total_memory:.1f}%",
-            f"平均CPU使用率: {self.avg_cpu:.2f}%",
-            f"総スレッド数: {self.total_threads}",
-            f"FPS: {current_fps:.1f}",
-            f"描画品質: {quality_label}",
-        ]
+        if self.ui_mode == 0:  # フル表示
+            stats_lines = [
+                f"総プロセス数: {self.total_processes}",
+                f"表示中の魚: {len(self.fishes)}",
+                f"制限: {limit_str}",
+                f"総メモリ使用率: {self.total_memory:.1f}%",
+                f"平均CPU使用率: {self.avg_cpu:.2f}%",
+                f"総スレッド数: {self.total_threads}",
+                f"FPS: {current_fps:.1f}",
+                f"描画品質: {quality_label}",
+            ]
+        else:  # 簡素表示
+            stats_lines = [
+                f"プロセス: {self.total_processes} | 魚: {len(self.fishes)}",
+                f"FPS: {current_fps:.1f} | 制限: {limit_str}",
+            ]
 
         if self.enable_adaptive_quality:
             reduced_threshold, minimal_threshold = self._quality_thresholds
@@ -680,8 +673,8 @@ class Aquarium:
             text_y = panel_y + panel_padding_y + i * line_height
             self.screen.blit(text_surface, (text_x, text_y))
 
-        # 選択されたFishの詳細情報（右上・左上パネルと同じスタイル）
-        if self.selected_fish:
+        # 選択されたFishの詳細情報（右上・左上パネルと同じスタイル）- フル表示モードのみ
+        if self.selected_fish and self.ui_mode == 0:
             info_lines = [
                 f"選択されたプロセス:",
                 f"PID: {self.selected_fish.pid}",
@@ -718,22 +711,22 @@ class Aquarium:
                 text_surface = self._render_text(line, self.small_font, color)
                 text_x = info_panel_x + info_padding_x
                 text_y = info_panel_y + info_padding_y + i * info_line_height
-                self.screen.blit(text_surface, (text_x, text_y))        # 操作説明
-        help_lines = [
-            "操作方法:",
-            "クリック: プロセスを選択",
-            "C: カメラモード切替",
-            "ホイール: ズーム",
-            "右クリック+ドラッグ: パン",
-            "R: カメラリセット",
-            "ESC: 終了",
-            "D: デバッグ表示切替",
-            "I: IPC接続表示切替",
-            "F/F11: フルスクリーン切替",
-            "L: プロセス制限切替",
-            "S: ソートフィールド切替",
-            "O: ソート順序切替"
-        ]
+                self.screen.blit(text_surface, (text_x, text_y))        # 操作説明 - フル表示モードのみ
+        if self.ui_mode == 0:
+            help_lines = [
+                "操作:",
+                "クリック:選択 C:カメラ R:リセット",
+                "ホイール:ズーム 右ドラッグ:パン",
+                "D:デバッグ I:IPC F:フルスクリーン",
+                "L:制限 S:ソート O:順序 M:モード",
+                "T:UI表示 Q:群れ強調 ESC:終了"
+            ]
+        else:
+            # 簡素表示モードでは基本操作のみ
+            help_lines = [
+                "基本操作:",
+                "M:モード T:UI Q:群れ強調 ESC:終了"
+            ]
 
         # ヘルプ（左上パネルと同じスタイルで動的サイズ計算）
         help_padding_x = 10
@@ -809,12 +802,14 @@ class Aquarium:
                 distance = math.sqrt(dx*dx + dy*dy)
 
                 if distance > 5:  # 極端に近い場合は無視
-                    # 吸引力の強さを距離に応じて調整
-                    attraction_strength = 0.002  # 基本の吸引力
-                    if distance < 100:  # 近い場合は弱く
-                        attraction_strength *= 0.5
-                    elif distance > 300:  # 遠い場合は強く
-                        attraction_strength *= 2.0
+                    # 吸引力の強さを距離に応じて調整（強化版）
+                    attraction_strength = 0.008  # 基本の吸引力を4倍に増加
+                    if distance < 80:  # 近い場合は適度に弱く
+                        attraction_strength *= 0.6
+                    elif distance > 250:  # 遠い場合はより強く
+                        attraction_strength *= 3.0
+                    elif distance > 150:  # 中距離も強化
+                        attraction_strength *= 1.5
 
                     # 正規化された方向ベクトル
                     force_x = (dx / distance) * attraction_strength
@@ -826,8 +821,8 @@ class Aquarium:
                     fish2.ipc_attraction_x -= force_x
                     fish2.ipc_attraction_y -= force_y
 
-                    # 近距離で会話フラグをセット
-                    if distance < 80:  # 80ピクセル以内で会話
+                    # 近距離で会話フラグをセット（距離を拡大）
+                    if distance < 120:  # 120ピクセル以内で会話（範囲拡大）
                         fish1.is_talking = True
                         fish1.talk_timer = 60  # 1秒間会話
                         fish1.talk_message = "通信中..."
@@ -911,7 +906,7 @@ class Aquarium:
                         red = int(100 + cpu_intensity * 155)
                         green = int(150 - cpu_intensity * 50)
                         blue = int(200 - cpu_intensity * 100)
-                        
+
                         # 値の範囲を確実に0-255に制限
                         red = max(0, min(255, red))
                         green = max(0, min(255, green))
@@ -980,6 +975,16 @@ class Aquarium:
                 elif event.key == pygame.K_i:
                     self.show_ipc = not self.show_ipc
                     print(f"IPC可視化: {'オン' if self.show_ipc else 'オフ'}")
+                elif event.key == pygame.K_m:
+                    # モード一括切り替え (M key)
+                    self._cycle_display_modes()
+                elif event.key == pygame.K_t:
+                    # UI表示切り替え (T key)
+                    self._toggle_ui_display()
+                elif event.key == pygame.K_q:
+                    # 群れ強調表示切り替え (Q key)
+                    self.highlight_schools = not self.highlight_schools
+                    print(f"🐠 群れ強調表示: {'オン (孤立プロセス半透明)' if self.highlight_schools else 'オフ'}")
                 elif event.key == pygame.K_f or event.key == pygame.K_F11:
                     self.toggle_fullscreen()
                 elif event.key == pygame.K_l:
@@ -1212,6 +1217,44 @@ class Aquarium:
         self.process_manager.set_sort_config(self.sort_by, self.sort_order)
         order_name = "昇順" if self.sort_order == "asc" else "降順"
         print(f"🔄 ソート順序: {order_name}")
+
+    def _cycle_display_modes(self):
+        """表示モードを循環切り替え (M key)"""
+        # デバッグとIPCの組み合わせを循環
+        if not self.show_debug and self.show_ipc:
+            # 通常モード → デバッグオンリー
+            self.show_debug = True
+            self.show_ipc = False
+            print("📋 表示モード: デバッグのみ")
+        elif self.show_debug and not self.show_ipc:
+            # デバッグオンリー → 両方オン
+            self.show_debug = True
+            self.show_ipc = True
+            print("📋 表示モード: デバッグ + IPC")
+        elif self.show_debug and self.show_ipc:
+            # 両方オン → IPCオンリー
+            self.show_debug = False
+            self.show_ipc = True
+            print("📋 表示モード: IPCのみ")
+        else:
+            # IPCオンリー or すべてオフ → 通常モード
+            self.show_debug = False
+            self.show_ipc = True
+            print("📋 表示モード: 通常")
+
+    def _toggle_ui_display(self):
+        """UI表示の簡素化切り替え (T key)"""
+        if not hasattr(self, 'ui_mode'):
+            self.ui_mode = 0  # 0: フル表示, 1: 簡素表示, 2: 最小表示
+
+        self.ui_mode = (self.ui_mode + 1) % 3
+
+        if self.ui_mode == 0:
+            print("🎛️ UI表示: フル")
+        elif self.ui_mode == 1:
+            print("🎛️ UI表示: 簡素")
+        else:  # ui_mode == 2
+            print("🎛️ UI表示: 最小")
 
     def _configure_quality_thresholds(self):
         """FPSベースの品質閾値を設定"""
@@ -1477,9 +1520,10 @@ class Aquarium:
                 original_x, original_y = fish.x, fish.y
                 fish.x, fish.y = screen_x, screen_y
 
-                # 魚を描画（ズームレベルを渡す）
+                # 魚を描画（ズームレベルと群れ強調表示を渡す）
                 fish.draw(self.screen, self.bubble_font, quality=self.render_quality,
-                          text_renderer=self._render_text, zoom_level=self.zoom_level)
+                          text_renderer=self._render_text, zoom_level=self.zoom_level,
+                          highlight_schools=self.highlight_schools)
 
                 # 元の座標に戻す
                 fish.x, fish.y = original_x, original_y
@@ -1976,8 +2020,8 @@ class Aquarium:
         self.init_background_particles()
         self.adjust_fish_positions_for_screen_resize()
         self._update_font_scale()
-        base_font_size = 24
-        small_font_size = 18
+        base_font_size = 20  # より小さく：24→20
+        small_font_size = 14  # より小さく：18→14
         self.font = self._get_japanese_font(int(base_font_size * self.font_scale))
         self.small_font = self._get_japanese_font(int(small_font_size * self.font_scale))
         self.bubble_font = self._get_japanese_font(self._determine_bubble_font_size())

@@ -75,6 +75,11 @@ class ProcessManager:
         self.recent_forks: List[tuple] = []
         self.recent_execs: List[int] = []
 
+        # 親離れシステム
+        self.parent_child_bonds: Dict[int, float] = {}  # {child_pid: bond_creation_time}
+        self.bond_duration = 90.0  # 90秒（1分30秒）で親離れ
+        self.bond_weakening_start = 45.0  # 45秒後から結合が弱くなり始める
+
         # 重要/除外フィルタ (psutil直利用時のみ使用)
         self.important_processes = {
             'python', 'chrome', 'firefox', 'safari', 'code', 'terminal',
@@ -359,12 +364,25 @@ class ProcessManager:
 
     def _update_process_families(self, new_processes: Dict[int, ProcessInfo]):
         """プロセスファミリー（親子関係）を更新"""
+        current_time = time.time()
         self.process_families.clear()
+
         for proc in new_processes.values():
             if proc.ppid > 0:  # 親プロセスが存在する場合
                 if proc.ppid not in self.process_families:
                     self.process_families[proc.ppid] = []
                 self.process_families[proc.ppid].append(proc.pid)
+
+                # 新しい親子関係の記録
+                if proc.pid not in self.parent_child_bonds:
+                    self.parent_child_bonds[proc.pid] = current_time
+
+        # 存在しなくなったプロセスの結合記録を削除
+        existing_pids = set(new_processes.keys())
+        self.parent_child_bonds = {
+            pid: bond_time for pid, bond_time in self.parent_child_bonds.items()
+            if pid in existing_pids
+        }
 
     def get_process_children(self, pid: int) -> List[ProcessInfo]:
         """指定されたプロセスの子プロセス一覧を取得"""
@@ -378,18 +396,38 @@ class ProcessManager:
         return children
 
     def get_related_processes(self, pid: int, max_distance: int = 2) -> List[ProcessInfo]:
-        """指定されたプロセスに関連するプロセス群を取得（群れ行動用）"""
-        # まず起点プロセスの親を確認
+        """指定されたプロセスに関連するプロセス群を取得（群れ行動用・親離れ対応）"""
         start_proc = self.processes.get(pid)
-        if start_proc is not None and start_proc.ppid <= 1:
-            # launchd配下のプロセスは群れ形成禁止 - 単独行動のみ
-            return [start_proc]
+        if start_proc is None or start_proc.ppid <= 1:
+            return []
 
+        current_time = time.time()
+
+        # # PID=1配下のプロセスは軽量な制限付き群れ形成（高速化）
+        # if start_proc.ppid <= 1:
+        #     related = [start_proc]
+        #     # 同名の兄弟プロセスのみ最大2つまで追加（シンプル処理）
+        #     if start_proc.ppid in self.process_families:
+        #         count = 0
+        #         for sibling_pid in self.process_families[start_proc.ppid]:
+        #             if (sibling_pid != pid and
+        #                 count < 2 and
+        #                 sibling_pid in self.processes):
+        #                 sibling = self.processes[sibling_pid]
+        #                 if sibling.name == start_proc.name:
+        #                     related.append(sibling)
+        #                     count += 1
+
+        #     # PID=1配下でも孤立の場合は群れ形成
+        #     if len(related) == 1:  # 自分だけの場合
+        #         related = self._form_isolated_process_school(pid, related)
+
+        #     return related        # 通常のプロセス：シンプルな群れ形成ロジック
         related = []
         visited = set()
 
         def collect_related(current_pid: int, distance: int):
-            if distance > max_distance or current_pid in visited:
+            if distance > max_distance or current_pid in visited or len(related) >= 8:
                 return
 
             visited.add(current_pid)
@@ -404,13 +442,77 @@ class ProcessManager:
             # 兄弟プロセスを追加
             if current_proc is not None:
                 parent_pid = current_proc.ppid
-                # 通常の親プロセス配下では全兄弟を含める
                 for sibling_pid in self.process_families.get(parent_pid, []):
                     if sibling_pid != current_pid:
                         collect_related(sibling_pid, distance + 1)
 
         collect_related(pid, 0)
+
+        # # 孤立プロセス（単独）の場合は他の孤立プロセスと大きな群れを形成
+        # if len(related) == 1:  # 自分だけの場合
+        #     related = self._form_isolated_process_school(pid, related)
+
         return related
+
+    def _form_isolated_process_school(self, current_pid: int, current_related: List[ProcessInfo]) -> List[ProcessInfo]:
+        """孤立プロセス同士で大きな群れを形成（軽量版）"""
+        isolated_group = current_related.copy()  # 自分を含める
+
+        # 軽量化：グループサイズを大きくして処理を減らす
+        group_size = 100
+        current_group_index = current_pid // group_size
+
+        # 軽量化：同じPIDグループの範囲内のプロセスのみをチェック
+        start_pid = current_group_index * group_size
+        end_pid = start_pid + group_size
+
+        count = 0
+        for pid in range(start_pid, end_pid):
+            if pid == current_pid or pid not in self.processes:
+                continue
+
+            # 簡易孤立判定（重い処理を削除）
+            proc = self.processes[pid]
+
+            # 子プロセスがある場合はスキップ
+            if pid in self.process_families:
+                continue
+
+            isolated_group.append(proc)
+            count += 1
+            if count >= 8:  # 群れサイズを小さく制限
+                break
+
+        return isolated_group
+
+    def _is_isolated_process(self, pid: int) -> bool:
+        """プロセスが孤立（単独）かどうかを判定（軽量版）"""
+        # 軽量化：簡易判定のみ
+        return pid not in self.process_families  # 子プロセスがない = 孤立
+
+    def _should_maintain_parent_child_bond(self, child_pid: int, current_time: float) -> bool:
+        """親子の結合を維持すべきかどうかを判定"""
+        bond_time = self.parent_child_bonds.get(child_pid)
+        if bond_time is None:
+            return True  # 新しいプロセスは結合を維持
+
+        # 自分に子プロセスができたら即座に親離れ（大人になった証拠）
+        if child_pid in self.process_families and len(self.process_families[child_pid]) > 0:
+            return False  # 子を持ったプロセスは親離れ
+
+        age = current_time - bond_time
+
+        # 基本的な親離れ判定
+        if age > self.bond_duration:
+            return False  # 完全に親離れ
+
+        # 結合が弱くなり始めた段階では確率的に親離れ
+        if age > self.bond_weakening_start:
+            weakening_progress = (age - self.bond_weakening_start) / (self.bond_duration - self.bond_weakening_start)
+            # 時間が経つにつれて親離れの確率が上がる
+            return random.random() > weakening_progress * 0.7  # 最大70%の確率で親離れ
+
+        return True  # まだ親離れしない
 
     def detect_ipc_connections(self) -> List[tuple]:
         """プロセス間通信（IPC）接続を検出（大幅強化版）
