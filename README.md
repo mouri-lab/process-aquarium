@@ -1,5 +1,7 @@
 # 🐠 プロセス水族館 (アクアリウム) - Process Aquarium
 
+日本語 | [English README](./README.en.md)
+
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)
