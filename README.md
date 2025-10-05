@@ -183,12 +183,6 @@ Process Aquariumの改善にご協力いただける方を歓迎します！
 
 このプロジェクトはMITライセンスの下で公開されています。詳細は[LICENSE](LICENSE)ファイルをご覧ください。
 
-## 謝辞
-
-- **numpy**: 高性能な数値計算ライブラリ
-- **psutil**: システム情報取得ライブラリ
-- **pygame-ce**: グラフィック描画ライブラリ
-
 ## サポート
 
 - **バグレポート**: [GitHub Issues](https://github.com/mouri-lab/process-aquarium/issues)
