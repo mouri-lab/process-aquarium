@@ -584,6 +584,57 @@ class Aquarium:
                         self.fishes[related_pid].set_school_members(related_pids, is_leader)
                         processed_pids.add(related_pid)
 
+        # 孤立プロセス同士の群れ形成
+        self._form_isolated_process_schools(processed_pids)
+
+    def _form_isolated_process_schools(self, processed_pids: set):
+        """同名プロセス群れ形成と真の孤立プロセス判定"""
+        # まだ群れに所属していないプロセスを収集
+        unprocessed_pids = []
+        for pid, fish in self.fishes.items():
+            if pid not in processed_pids:
+                unprocessed_pids.append(pid)
+
+        # プロセス名でグループ化（真の群れ形成）
+        if len(unprocessed_pids) >= 2:
+            name_groups = {}
+            for pid in unprocessed_pids:
+                fish = self.fishes[pid]
+                base_name = fish.name.split()[0] if fish.name else "unknown"  # 基本プロセス名を取得
+                if base_name not in name_groups:
+                    name_groups[base_name] = []
+                name_groups[base_name].append(pid)
+
+            # 各名前グループで群れを形成（2匹以上の場合は真の群れ）
+            truly_isolated_pids = []
+            for base_name, group_pids in name_groups.items():
+                if len(group_pids) >= 2:
+                    # 同名プロセスの真の群れを形成
+                    leader_pid = min(group_pids)  # 最小PIDをリーダーに
+                    for pid in group_pids:
+                        if pid in self.fishes:
+                            is_leader = (pid == leader_pid)
+                            self.fishes[pid].set_school_members(group_pids, is_leader)
+                            self.fishes[pid].is_isolated = False  # 群れに所属したので孤立ではない
+                            self.fishes[pid].is_isolated_school = False  # 真の群れなので孤立群れではない
+                            processed_pids.add(pid)  # 処理済みに追加
+                else:
+                    # 単独のプロセス = 真の孤立プロセス
+                    for pid in group_pids:
+                        if pid in self.fishes:
+                            truly_isolated_pids.append(pid)
+                            self.fishes[pid].is_isolated = True  # 真の孤立プロセス
+                            self.fishes[pid].is_isolated_school = False  # 群れに所属していない
+
+            # 真の孤立プロセスには特殊な処理は行わない（個別行動）
+            # print(f"🏝️ 真の孤立プロセス数: {len(truly_isolated_pids)}")
+        else:
+            # 未処理プロセスが1匹以下の場合、それは真の孤立
+            for pid in unprocessed_pids:
+                if pid in self.fishes:
+                    self.fishes[pid].is_isolated = True
+                    self.fishes[pid].is_isolated_school = False
+
     def handle_mouse_click(self, pos: Tuple[int, int]):
         """マウスクリックによるFish選択と吹き出しクリック処理"""
         x, y = pos

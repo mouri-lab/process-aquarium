@@ -106,6 +106,10 @@ class Fish:
         self.bubble_rect = None  # 吹き出しのクリック領域 (x, y, width, height)
         self.exec_timer = 0
 
+        # 孤立プロセス関連
+        self.is_isolated = False  # 孤立プロセス（PPID=1など）かどうか
+        self.is_isolated_school = False  # 孤立プロセス群れに所属しているか
+
     def _generate_color(self) -> Tuple[int, int, int]:
         """プロセス名に基づいて固有の色を生成"""
         # プロセス名のハッシュ値を使って色を決定
@@ -502,9 +506,14 @@ class Fish:
         if self.is_dying:
             alpha = int(255 * (1.0 - self.death_progress))
 
-        # 群れ強調表示が有効な場合、孤立プロセスは半透明にする
-        if highlight_schools and (not self.school_members or len(self.school_members) <= 1):
-            alpha = int(alpha * 0.25)  # 透明度を25%にする
+        # 群れ強調表示が有効な場合の透明度調整
+        if highlight_schools:
+            # 群れに所属している場合（親子関係の群れ + 同名プロセス群れ）: ハイライト表示
+            if self.school_members and len(self.school_members) > 1:
+                pass  # 群れはハイライト（フル表示）
+            # 真の孤立プロセス（どの群れにも所属していない）: 25%透明度
+            else:
+                alpha = int(alpha * 0.25)
 
         return alpha
 
