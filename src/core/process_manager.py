@@ -1,12 +1,13 @@
-"""Digital Life Aquarium - プロセス管理モジュール
+"""Digital Life Aquarium - process management module
 
-従来のポーリング方式(psutil)による実装に加えて、今後 eBPF ベースの
-イベント駆動ソースへ差し替え可能な抽象レイヤを導入するための
-互換ラッパークラス。
+Compatibility wrapper designed to introduce an abstraction layer so the
+legacy polling implementation (psutil) can be replaced by an event-driven
+eBPF-based source in the future.
 
-新設: ``src.core.sources`` に `IProcessSource` 抽象と `PsutilProcessSource` を
-定義し、ここではレガシー API (`update()`, `get_process_statistics()` など) を
-保ったまま内部的にソースへ委譲する。
+New: `src.core.sources` defines `IProcessSource` and `PsutilProcessSource`.
+This module keeps the legacy public API (e.g. `update()`,
+`get_process_statistics()`) while delegating to the configured source
+internally.
 """
 
 import psutil
@@ -53,34 +54,35 @@ else:
 
 
 class ProcessManager:
-    """プロセス情報を管理するメインクラス (互換ラッパー)。
+    """Main class that manages process information (compatibility wrapper).
 
-    既存コードとの互換性維持のため public API は保持しつつ、内部で
-    `IProcessSource` に委譲する。指定されなければ psutil ベースを使用。
+    The public API is preserved for backwards compatibility while the actual
+    data is delegated to an `IProcessSource` implementation. If no source is
+    provided, a psutil-based source is used as a fallback.
     """
 
     def __init__(self, max_processes: int = 100, source: Optional[Any] = None):  # source: IProcessSource | None
         self.max_processes = max_processes
         self._external_source = source
 
-        # 旧来フィールド（互換目的 / 一部ロジックで参照される）
+    # Legacy fields (kept for compatibility / referenced by some logic)
         self.processes: Dict[int, ProcessInfo] = {}
         self.previous_pids: Set[int] = set()
         self.previous_process_exes: Dict[int, str] = {}
         self.update_interval = 1.0
         self.last_update = time.time()
 
-        # プロセス関係追跡
+    # Process relationship tracking
         self.process_families: Dict[int, List[int]] = {}
         self.recent_forks: List[tuple] = []
         self.recent_execs: List[int] = []
 
-        # 親離れシステム
+    # Parent-child bond system
         self.parent_child_bonds: Dict[int, float] = {}  # {child_pid: bond_creation_time}
         self.bond_duration = 90.0  # 90秒（1分30秒）で親離れ
         self.bond_weakening_start = 45.0  # 45秒後から結合が弱くなり始める
 
-        # 重要/除外フィルタ (psutil直利用時のみ使用)
+    # Important/excluded filters (used only when directly using psutil)
         self.important_processes = {
             'python', 'chrome', 'firefox', 'safari', 'code', 'terminal',
             'finder', 'dock', 'systemuiserver', 'windowserver', 'kernel_task',
@@ -92,7 +94,7 @@ class ProcessManager:
             'bluetoothd', 'audiomxd', 'logd_helper', 'deleted'
         }
 
-        # プロセス制限とソート設定
+    # Process limit and sort configuration
         self.process_limit: Optional[int] = None
         self.sort_by: str = "cpu"  # cpu, memory, name, pid
         self.sort_order: str = "desc"  # asc, desc
@@ -102,17 +104,17 @@ class ProcessManager:
             self._external_source = PsutilProcessSource(max_processes=max_processes)
 
     def get_all_processes(self) -> Dict[int, ProcessInfo]:
-        """全プロセス情報を取得"""
+        """Return all process information."""
         return self.processes.copy()
 
     def set_process_limit(self, limit: Optional[int]) -> None:
-        """表示プロセス数の制限を設定"""
+        """Set a limit on the number of processes to display."""
         self.process_limit = limit
         if self._external_source is not None and hasattr(self._external_source, 'set_process_limit'):
             self._external_source.set_process_limit(limit)
 
     def set_sort_config(self, sort_by: str, sort_order: str = "desc") -> None:
-        """ソート設定を変更"""
+        """Change sorting configuration."""
         if sort_by in ["cpu", "memory", "name", "pid"]:
             self.sort_by = sort_by
         if sort_order in ["asc", "desc"]:
@@ -121,11 +123,11 @@ class ProcessManager:
             self._external_source.set_sort_config(sort_by, sort_order)
 
     def get_process(self, pid: int) -> Optional[ProcessInfo]:
-        """指定されたPIDのプロセス情報を取得"""
+        """Get process information for the specified PID."""
         return self.processes.get(pid)
 
     def update(self) -> None:
-        """プロセス情報を更新 (抽象ソース経由)。"""
+        """Update process information via the configured abstract source."""
         if self._external_source is not None:
             # 新実装経路
             self._external_source.update()
@@ -160,11 +162,11 @@ class ProcessManager:
                                 self.recent_forks = self.recent_forks[-10:]
             return
 
-        # フォールバック：旧来ロジック（sources が無い環境用）
+    # Fallback: legacy logic for environments without a sources module
         current_time = time.time()
         if current_time - self.last_update < self.update_interval:
             return
-        # （旧実装を保持するのは冗長なので最小限。将来的に削除可能）
+    # (The legacy implementation is kept minimal and may be removed in the future)
         new_snapshot: Dict[int, ProcessInfo] = {}
         current_pids: Set[int] = set()
         current_exe: Dict[int, str] = {}
@@ -220,7 +222,7 @@ class ProcessManager:
         self.last_update = current_time
 
     def _should_include_process(self, process_name: str, memory_percent: float, cpu_percent: float) -> bool:
-        """プロセスを表示対象に含めるかどうかを判定"""
+        """Decide whether a process should be included for display."""
         # Noneチェック
         if memory_percent is None:
             memory_percent = 0.0
@@ -229,25 +231,25 @@ class ProcessManager:
         if process_name is None:
             process_name = "unknown"
 
-        # 除外リストのチェック
+    # Check excluded list
         for excluded in self.excluded_processes:
             if excluded in process_name.lower():
                 return False
 
-        # 重要なプロセスは常に含める
+    # Always include important processes
         for important in self.important_processes:
             if important in process_name.lower():
                 return True
 
-        # リソース使用量が一定以上のプロセスは含める
-        if memory_percent > 0.1 or cpu_percent > 0.5:  # 閾値を下げる
+        # Include processes that use a non-trivial amount of resources
+        if memory_percent > 0.1 or cpu_percent > 0.5:  # lowered thresholds
             return True
 
-        # その他のプロセスも高確率で選択（制限解除）
-        return random.random() < 0.8  # 30%から80%に増加
+        # Select other processes with a high probability (to relax limits)
+        return random.random() < 0.8  # increased from ~30% to ~80%
 
     def _apply_sort_and_limit(self, processes: Dict[int, ProcessInfo]) -> Dict[int, ProcessInfo]:
-        """プロセスをソートして制限を適用"""
+        """Sort processes and apply the configured limit."""
         if not processes:
             return processes
 
@@ -278,15 +280,15 @@ class ProcessManager:
         return {p.pid: p for p in process_list}
 
     def get_new_processes(self) -> List[ProcessInfo]:
-        """新しく生成されたプロセスのリストを取得"""
+        """Return a list of newly spawned processes."""
         return [proc for proc in self.processes.values() if proc.is_new]
 
     def get_dying_processes(self) -> List[ProcessInfo]:
-        """消滅するプロセスのリストを取得"""
+        """Return a list of processes marked as dying/exiting."""
         return [proc for proc in self.processes.values() if proc.is_dying]
 
     def get_data_source(self) -> str:
-        """現在使用中のデータソース名を取得"""
+        """Return the name of the currently active data source."""
         if self._external_source is not None:
             source_class = self._external_source.__class__.__name__
             if "Ebpf" in source_class:
@@ -298,7 +300,7 @@ class ProcessManager:
         return "psutil"  # フォールバック時
 
     def get_process_statistics(self) -> Dict[str, any]:
-        """プロセス統計情報を取得"""
+        """Return summary statistics about the current process set."""
         total_processes = len(self.processes)
         total_memory = sum(proc.memory_percent for proc in self.processes.values())
         avg_cpu = sum(proc.cpu_percent for proc in self.processes.values()) / total_processes if total_processes > 0 else 0
@@ -314,7 +316,7 @@ class ProcessManager:
             'data_source': self.get_data_source()
         }
 
-        # eBPFソースの場合はイベント統計を含める
+    # Include event stats if the backend source tracks eBPF-like events
         if (self._external_source is not None and
             hasattr(self._external_source, '_event_stats')):
             event_stats = self._external_source._event_stats
@@ -326,7 +328,7 @@ class ProcessManager:
         return stats
 
     def detect_fork(self) -> List[tuple]:
-        """fork操作を検知（親子関係の新規作成）"""
+        """Detect fork operations (new parent-child relationships)."""
         forks = []
         for proc in self.get_new_processes():
             if proc.ppid in self.processes:
@@ -341,7 +343,7 @@ class ProcessManager:
         return forks
 
     def detect_exec(self) -> List[ProcessInfo]:
-        """exec操作を検知（実行ファイルパスの変更）"""
+        """Detect exec operations (executable path changes)."""
         # recent_execsから該当するプロセス情報を取得
         execs = []
         for pid in self.recent_execs:
@@ -354,7 +356,7 @@ class ProcessManager:
         return execs
 
     def _detect_exec_events(self, current_process_exes: Dict[int, str]):
-        """exec操作を検知する内部メソッド"""
+        """Internal helper to detect exec events by exe path differences."""
         for pid, current_exe in current_process_exes.items():
             if pid in self.previous_process_exes:
                 previous_exe = self.previous_process_exes[pid]
@@ -363,7 +365,7 @@ class ProcessManager:
                     self.recent_execs.append(pid)
 
     def _update_process_families(self, new_processes: Dict[int, ProcessInfo]):
-        """プロセスファミリー（親子関係）を更新"""
+        """Update process family relationships (parent/child mapping)."""
         current_time = time.time()
         self.process_families.clear()
 
@@ -377,7 +379,7 @@ class ProcessManager:
                 if proc.pid not in self.parent_child_bonds:
                     self.parent_child_bonds[proc.pid] = current_time
 
-        # 存在しなくなったプロセスの結合記録を削除
+    # Remove bond records for processes that no longer exist
         existing_pids = set(new_processes.keys())
         self.parent_child_bonds = {
             pid: bond_time for pid, bond_time in self.parent_child_bonds.items()
@@ -385,7 +387,7 @@ class ProcessManager:
         }
 
     def get_process_children(self, pid: int) -> List[ProcessInfo]:
-        """指定されたプロセスの子プロセス一覧を取得"""
+        """Get the list of child processes for the specified PID."""
         if pid not in self.process_families:
             return []
 
@@ -396,14 +398,18 @@ class ProcessManager:
         return children
 
     def get_related_processes(self, pid: int, max_distance: int = 2) -> List[ProcessInfo]:
-        """指定されたプロセスに関連するプロセス群を取得（群れ行動用・親離れ対応）"""
+        """Return processes related to the given PID for schooling/flocking logic.
+
+        This considers parent/child and sibling relationships and limits
+        traversal depth via `max_distance`.
+        """
         start_proc = self.processes.get(pid)
         if start_proc is None or start_proc.ppid <= 1:
             return []
 
         current_time = time.time()
 
-        # # PID=1配下のプロセスは軽量な制限付き群れ形成（高速化）
+    # # Processes under PID=1 use a lightweight limited-school formation (fast-path)
         # if start_proc.ppid <= 1:
         #     related = [start_proc]
         #     # 同名の兄弟プロセスのみ最大2つまで追加（シンプル処理）
@@ -455,14 +461,14 @@ class ProcessManager:
         return related
 
     def _form_isolated_process_school(self, current_pid: int, current_related: List[ProcessInfo]) -> List[ProcessInfo]:
-        """孤立プロセス同士で大きな群れを形成（軽量版）"""
+        """Form a large school from isolated processes (lightweight version)."""
         isolated_group = current_related.copy()  # 自分を含める
 
-        # 軽量化：グループサイズを大きくして処理を減らす
+    # Lightweight: increase group size to reduce processing
         group_size = 100
         current_group_index = current_pid // group_size
 
-        # 軽量化：同じPIDグループの範囲内のプロセスのみをチェック
+    # Lightweight: only check processes within the same PID group range
         start_pid = current_group_index * group_size
         end_pid = start_pid + group_size
 
@@ -486,12 +492,12 @@ class ProcessManager:
         return isolated_group
 
     def _is_isolated_process(self, pid: int) -> bool:
-        """プロセスが孤立（単独）かどうかを判定（軽量版）"""
+        """Determine whether a process is isolated (lightweight check)."""
         # 軽量化：簡易判定のみ
         return pid not in self.process_families  # 子プロセスがない = 孤立
 
     def _should_maintain_parent_child_bond(self, child_pid: int, current_time: float) -> bool:
-        """親子の結合を維持すべきかどうかを判定"""
+        """Decide whether a parent-child bond should be maintained."""
         bond_time = self.parent_child_bonds.get(child_pid)
         if bond_time is None:
             return True  # 新しいプロセスは結合を維持
@@ -515,10 +521,10 @@ class ProcessManager:
         return True  # まだ親離れしない
 
     def detect_ipc_connections(self) -> List[tuple]:
-        """プロセス間通信（IPC）接続を検出（大幅強化版）
+        """Detect inter-process communication (IPC) connections (enhanced).
 
         Returns:
-            List[tuple]: (ProcessInfo, ProcessInfo)のタプルリスト
+            List[tuple]: list of (ProcessInfo, ProcessInfo) tuples
         """
         if self._external_source is not None and hasattr(self._external_source, 'get_ipc_connections'):
             try:
@@ -539,36 +545,36 @@ class ProcessManager:
 
         connections = []
 
-        # 強化されたIPC検出
+    # Enhanced IPC detection
         try:
-            # 1. lsofコマンドによる包括的なファイル記述子検出
+            # 1. Comprehensive file-descriptor based detection using lsof
             connections.extend(self._detect_lsof_connections())
         except Exception:
             pass
 
         try:
-            # 2. 従来のネットワーク接続検出（拡張版）
+            # 2. Traditional network connection detection (extended)
             connections.extend(self._detect_network_connections())
         except Exception:
             pass
 
         try:
-            # 3. Unix domain socket検出（詳細版）
+            # 3. Unix domain socket detection (detailed)
             connections.extend(self._detect_unix_sockets())
         except Exception:
             pass
 
         try:
-            # 4. 共有メモリ検出
+            # 4. Shared memory detection
             connections.extend(self._detect_shared_memory())
         except Exception:
             pass
 
         try:
-            # ネットワーク接続からプロセス間通信を推定
+            # Infer IPC from network connections
             net_connections = psutil.net_connections(kind='inet')
 
-            # ローカル接続を抽出
+            # Extract local loopback connections
             local_connections = {}
             for conn in net_connections:
                 if (conn.laddr and conn.raddr and
@@ -583,7 +589,7 @@ class ProcessManager:
                         local_connections[key] = []
                     local_connections[key].append(conn.pid)
 
-            # 同じポートペアを使用するプロセス同士を接続として扱う
+            # Treat processes using the same port pair as connected
             for port_pair, pids in local_connections.items():
                 if len(pids) >= 2:
                     unique_pids = list(set(pids))
@@ -595,7 +601,7 @@ class ProcessManager:
                                 proc2 = self.processes[pid2]
                                 connections.append((proc1, proc2))
 
-            # Unixドメインソケット接続の検出
+            # Detect Unix domain socket connections
             try:
                 unix_connections = psutil.net_connections(kind='unix')
                 unix_socket_map = {}
@@ -607,7 +613,7 @@ class ProcessManager:
                             unix_socket_map[socket_path] = []
                         unix_socket_map[socket_path].append(conn.pid)
 
-                # 同じUnixソケットパスを使用するプロセス同士を接続として扱う
+                # Treat processes sharing the same Unix socket path as connected
                 for socket_path, pids in unix_socket_map.items():
                     if len(pids) >= 2:
                         unique_pids = list(set(pids))
@@ -627,7 +633,7 @@ class ProcessManager:
                 # Unixソケットへのアクセス権限がない場合はスキップ
                 pass
 
-            # 親子関係も一種のIPC接続として扱う
+            # Treat parent-child relationships as a form of IPC
             for proc in self.processes.values():
                 if proc.ppid in self.processes:
                     parent = self.processes[proc.ppid]
@@ -644,11 +650,11 @@ class ProcessManager:
                     parent = self.processes[proc.ppid]
                     connections.append((parent, proc))
 
-        # 接続数を制限（パフォーマンス考慮）
-        return connections[:50]  # より多くの接続を許可
+        # Limit the number of returned connections for performance
+        return connections[:50]
 
     def _detect_lsof_connections(self) -> List[tuple]:
-        """lsofコマンドを使用した包括的なファイル記述子ベース接続検出"""
+        """Comprehensive file-descriptor based connection detection using lsof."""
         connections = []
         try:
             import subprocess
@@ -657,7 +663,7 @@ class ProcessManager:
                                   capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 lines = result.stdout.strip().split('\n')[1:]  # ヘッダーをスキップ
-                fd_map = {}  # ファイル -> PIDのマッピング
+                fd_map = {}  # file -> list of PIDs map
 
                 for line in lines:
                     parts = line.split()
@@ -675,7 +681,7 @@ class ProcessManager:
                         except (ValueError, IndexError):
                             continue
 
-                # 同じファイル記述子を共有するプロセス同士を接続
+                # Connect processes that share the same file descriptor
                 for name, pids in fd_map.items():
                     if len(pids) >= 2:
                         unique_pids = list(set(pids))
@@ -686,10 +692,11 @@ class ProcessManager:
                                     connections.append((self.processes[pid1], self.processes[pid2]))
         except Exception:
             pass
-        return connections[:10]  # lsofは重いので制限
+        # Limit results because lsof is expensive
+        return connections[:10]
 
     def _detect_network_connections(self) -> List[tuple]:
-        """ネットワーク接続検出（拡張版）"""
+        """Network connection detection (extended)."""
         connections = []
         local_connections = {}
 
@@ -716,7 +723,7 @@ class ProcessManager:
         return connections
 
     def _detect_unix_sockets(self) -> List[tuple]:
-        """Unix domain socket検出（詳細版）"""
+        """Unix domain socket detection (detailed)."""
         connections = []
         try:
             unix_connections = psutil.net_connections(kind='unix')
@@ -746,15 +753,15 @@ class ProcessManager:
         return connections
 
     def _detect_shared_memory(self) -> List[tuple]:
-        """共有メモリ接続検出"""
+        """Shared memory connection detection."""
         connections = []
         try:
             import subprocess
-            # ipcsコマンドで共有メモリセグメントを調査
+            # Inspect shared memory segments using `ipcs`.
+            # Detailed parsing of shared memory requires /proc/*/maps analysis
+            # which is non-trivial, so keep a simple placeholder implementation.
             result = subprocess.run(['ipcs', '-m'], capture_output=True, text=True, timeout=1)
             if result.returncode == 0:
-                # 共有メモリの詳細な解析は複雑なので、シンプルな実装
-                # 実際の実装では/proc/*/maps等を解析する必要がある
                 pass
         except Exception:
             pass

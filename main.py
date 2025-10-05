@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Digital Life Aquarium - メイン実行ファイル
-デジタル生命の水族館を起動します
+Digital Life Aquarium - main entrypoint
+Starts the digital life aquarium application.
 
-使用方法:
+Usage:
     python main.py
-    
-あるいは直接実行:
+
+Or run directly after making executable:
     chmod +x main.py
     ./main.py
 """
@@ -15,7 +15,7 @@ import sys
 import os
 import argparse
 
-# プロジェクトルートディレクトリをパスに追加
+# Add project root directory to the import path
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 

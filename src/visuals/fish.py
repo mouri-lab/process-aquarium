@@ -1,6 +1,8 @@
 """
 Digital Life Aquarium - Fish Entity
-デジタル生命体（プロセス）の視覚的表現を管理するクラス
+Class managing the visual representation of a digital lifeform (a process).
+It adapts visual attributes (size, color, movement) based on process state
+(memory, CPU, thread count, etc.).
 """
 
 import pygame
@@ -25,117 +27,106 @@ SATELLITE_RADIUS_EASING_FACTOR = 0.06
 
 class Fish:
     """
-    プロセスを表現するデジタル生命体クラス
-    プロセスの状態（メモリ、CPU、スレッド数など）に応じて
-    視覚的な属性（サイズ、色、動きなど）を動的に変更する
+    Digital lifeform class that represents a process. Visual attributes
+    (size, color, movement) are adjusted dynamically based on process
+    metrics (memory, CPU, threads, ...).
     """
 
     def __init__(self, pid: int, name: str, x: float, y: float, world_size: int = 4096):
-        # プロセス基本情報
+        # Basic process metadata
         self.pid = pid
         self.name = name
-        self.process_name = name  # aquarium.pyとの互換性
+        self.process_name = name  # compatibility with aquarium.py
         self.parent_pid: Optional[int] = None
-        self.creation_time = time.time()  # 作成時刻を記録
-        self.world_size = world_size  # 動的ワールドサイズ
+        self.creation_time = time.time()  # record creation time
+        self.world_size = world_size  # dynamic world size
 
-        # 位置と動き
+        # Position and velocity
         self.x = x
         self.y = y
-        self.vx = random.uniform(-1, 1)  # 水平速度
-        self.vy = random.uniform(-1, 1)  # 垂直速度
+        self.vx = random.uniform(-1, 1)  # horizontal velocity
+        self.vy = random.uniform(-1, 1)  # vertical velocity
         self.target_x = x
         self.target_y = y
 
-        # 魚の向きと形状
-        self.angle = 0.0  # 魚の向き（ラジアン）
-        self.tail_swing = 0.0  # 尻尾の振り
-        self.swim_cycle = 0.0  # 泳ぎのサイクル
-        self.fish_shape = self._determine_fish_shape(name)  # プロセス名による形状
+        # Orientation and shape
+        self.angle = 0.0  # fish orientation (radians)
+        self.tail_swing = 0.0  # tail swing
+        self.swim_cycle = 0.0  # swim cycle
+        self.fish_shape = self._determine_fish_shape(name)  # shape determined by process name
 
-        # 群れ行動の属性
-        self.school_members: List[int] = []  # 群れのメンバーPID
-        self.is_leader = False  # 群れのリーダーかどうか
-        self.flocking_strength = 1.5  # 群れ行動の強さ（0.8→1.5に増加）
-        self.separation_distance = 30.0  # 分離距離
-        self.alignment_distance = 60.0   # 整列距離（50→60に増加）
-        self.cohesion_distance = 120.0    # 結束距離（70→120に増加）
+        # Flocking-related attributes
+        self.school_members: List[int] = []  # PIDs of school members
+        self.is_leader = False  # whether this fish is the school leader
+        self.flocking_strength = 1.5  # strength of flocking behavior (increased from 0.8)
+        self.separation_distance = 30.0  # separation distance
+        self.alignment_distance = 60.0   # alignment distance (increased from 50)
+        self.cohesion_distance = 120.0    # cohesion distance (increased from 70)
 
-        # IPC通信の吸引力
-        self.ipc_attraction_x = 0.0  # IPC接続による吸引力X
-        self.ipc_attraction_y = 0.0  # IPC接続による吸引力Y
+        # IPC attraction forces
+        self.ipc_attraction_x = 0.0  # attraction force X from IPC connections
+        self.ipc_attraction_y = 0.0  # attraction force Y from IPC connections
 
-        # 視覚的属性
+        # Visual attributes
         self.base_size = 10
         self.current_size = self.base_size
         self.color = self._generate_color()
         self.alpha = 255
         self.glow_intensity = 0
-        self.is_memory_giant = False  # メモリ巨大魚フラグ
-        self.pulsation_phase = 0.0  # 脈動エフェクト用
+        self.is_memory_giant = False  # flag for memory-giant fish
+        self.pulsation_phase = 0.0  # phase for pulsation effect
 
-        # 生命活動指標
+        # Vital statistics
         self.memory_percent = 0.0
         self.cpu_percent = 0.0
         self.thread_count = 1
-        self.age = 0  # フレーム数
+        self.age = 0  # frame counter
 
-        # 個体の個性（同期を避けるため）
-        self.behavior_timer = random.randint(0, 100)  # 個体ごとの行動タイマー
-        self.decision_interval = random.randint(40, 80)  # 決定を行う間隔（40-80フレーム）
-        self.swim_phase_offset = random.uniform(0, 2 * math.pi)  # 泳ぎのフェーズオフセット
-        self.personality_factor = random.uniform(0.7, 1.3)  # 個性係数
+        # Individual personality (to avoid synchronized behavior)
+        self.behavior_timer = random.randint(0, 100)  # per-individual behavior timer
+        self.decision_interval = random.randint(40, 80)  # decision interval (frames)
+        self.swim_phase_offset = random.uniform(0, 2 * math.pi)  # swim phase offset
+        self.personality_factor = random.uniform(0.7, 1.3)  # personality multiplier
 
-        # アニメーション状態
+        # Animation state
         self.is_spawning = True
         self.spawn_progress = 0.0
         self.is_dying = False
         self.death_progress = 0.0
 
-        # 特殊状態
+        # Special states
         self.recently_forked = False
         self.fork_glow_timer = 0
         self.exec_transition = False
         self.exec_timer = 0
 
-        # IPC会話状態
-        self.is_talking = False  # 会話中かどうか
-        self.talk_timer = 0  # 会話アニメーションタイマー
-        self.talk_message = ""  # 表示するメッセージ
-        self.talk_partners = []  # 通信相手のPIDリスト
-        self.bubble_rect = None  # 吹き出しのクリック領域 (x, y, width, height)
-        self.exec_timer = 0
+        # IPC conversation state
+        self.is_talking = False  # whether the fish is in a conversation
+        self.talk_timer = 0  # timer for talk animation
+        self.talk_message = ""  # message to display
+        self.talk_partners = []  # list of partner PIDs
+        self.bubble_rect = None  # clickable area for speech bubble (x, y, w, h)
 
-        # 孤立プロセス関連
-        self.is_isolated = False  # 孤立プロセス（PPID=1など）かどうか
-        self.is_isolated_school = False  # 孤立プロセス群れに所属しているか
+        # Isolated-process related flags
+        self.is_isolated = False  # whether this is an isolated process (e.g., PPID=1)
+        self.is_isolated_school = False  # whether part of an isolated-process school
 
-        # 周回運動システム
-        self.orbit_mode = False  # 周回モードかどうか
-        self.orbit_center_x = 0.0  # 周回中心X
-        self.orbit_center_y = 0.0  # 周回中心Y
-        self.orbit_radius = 100.0  # 周回半径
-        self.orbit_angle = random.uniform(0, 2 * math.pi)  # 現在の角度
-        self.orbit_speed = random.uniform(0.02, 0.05)  # 周回速度（ラジアン/フレーム）
-        self.orbit_timer = 0  # 周回継続時間
-        self.orbit_duration = random.randint(300, 600)  # 周回持続フレーム数（5-10秒）
-
-        # 周回運動システム
-        self.orbit_mode = False  # 周回モードかどうか
-        self.orbit_center_x = 0.0  # 周回中心X
-        self.orbit_center_y = 0.0  # 周回中心Y
-        self.orbit_radius = 100.0  # 周回半径
-        self.orbit_angle = random.uniform(0, 2 * math.pi)  # 現在の角度
-        self.orbit_speed = random.uniform(0.02, 0.05)  # 周回速度（ラジアン/フレーム）
-        self.orbit_timer = 0  # 周回継続時間
-        self.orbit_duration = random.randint(300, 600)  # 周回持続フレーム数（5-10秒）
+        # Orbiting movement system
+        self.orbit_mode = False  # whether orbiting mode is active
+        self.orbit_center_x = 0.0  # orbit center X
+        self.orbit_center_y = 0.0  # orbit center Y
+        self.orbit_radius = 100.0  # orbit radius
+        self.orbit_angle = random.uniform(0, 2 * math.pi)  # current orbit angle
+        self.orbit_speed = random.uniform(0.02, 0.05)  # orbit speed (radians/frame)
+        self.orbit_timer = 0  # orbit duration counter
+        self.orbit_duration = random.randint(300, 600)  # orbit duration in frames (approx 5-10s)
 
     def _generate_color(self) -> Tuple[int, int, int]:
-        """プロセス名に基づいて固有の色を生成"""
-        # プロセス名のハッシュ値を使って色を決定
+        """Generate a deterministic color based on the process name."""
+    # Use a hash of the process name to pick a color
         hash_value = hash(self.name) % 360
 
-        # HSVからRGBに変換（彩度と明度は固定）
+    # Convert from HSV to RGB (fixed saturation/value)
         saturation = 0.7
         value = 0.9
 
@@ -168,48 +159,48 @@ class Fish:
         return (int(r * 255), int(g * 255), int(b * 255))
 
     def _determine_fish_shape(self, process_name: str) -> str:
-        """プロセス名に基づいて魚の形状を決定"""
+        """Determine fish shape based on the process name."""
         name_lower = process_name.lower()
 
-        # ブラウザ系：サメ（大きくて速い）
+    # Browsers -> shark (large and fast)
         if any(browser in name_lower for browser in ['chrome', 'firefox', 'safari', 'edge']):
             return 'shark'
 
-        # 開発系：熱帯魚（カラフル）
+    # Development tools -> tropical (colorful)
         elif any(dev in name_lower for dev in ['code', 'vscode', 'atom', 'sublime', 'vim']):
             return 'tropical'
 
-        # システム系：エイ（平たく神秘的）
+    # System daemons -> ray (flat, mysterious)
         elif any(sys in name_lower for sys in ['kernel', 'system', 'daemon', 'service']):
             return 'ray'
 
-        # 通信系：イルカ（群れを作る）
+    # Communication apps -> dolphin (forms pods)
         elif any(comm in name_lower for comm in ['zoom', 'slack', 'discord', 'teams']):
             return 'dolphin'
 
-        # 重いプロセス：クジラ（大きい）
+    # Heavy processes -> whale (large)
         elif any(heavy in name_lower for heavy in ['photoshop', 'docker', 'virtualbox']):
             return 'whale'
 
-        # ターミナル：ウナギ（細長い）
+    # Terminals -> eel (elongated)
         elif any(term in name_lower for term in ['terminal', 'bash', 'zsh', 'cmd']):
             return 'eel'
 
-        # その他：一般的な魚
+    # Default -> generic fish
         else:
             return 'fish'
 
     def update_process_data(self, memory_percent: float, cpu_percent: float,
                           thread_count: int, parent_pid: Optional[int] = None,
                           memory_peak: Optional[float] = None):
-        """プロセスデータの更新"""
+        """Update process metrics used to adjust visual behavior."""
         memory_percent = max(memory_percent, 0.0)
         self.memory_percent = memory_percent
         self.cpu_percent = cpu_percent
         self.thread_count = thread_count
         self.parent_pid = parent_pid
 
-        # メモリ使用量に応じたサイズ調整（相対シェアと対数圧縮のブレンド）
+        # Size adjustment based on memory usage (blend of relative share and log compression)
         memory_normalized = memory_percent / 100.0
         if memory_peak is not None and memory_peak > 0:
             relative_share = min(memory_percent / max(memory_peak, 1e-6), 1.0)
@@ -223,73 +214,70 @@ class Fish:
         memory_factor = max(1.0, min(memory_factor, 9.0))
         self.current_size = self.base_size * memory_factor
 
-        # メモリ巨大魚の判定（より抑制された閾値）
+        # Determine memory-giant status (using conservative thresholds)
         # self.is_memory_giant = memory_percent >= 8.0 or memory_factor >= 5.5
         self.is_memory_giant = memory_percent >= 2.0 or memory_factor >= 5.5
 
-        # CPU使用率に基づく光り方（指数関数的に強調）
+        # Glow intensity based on CPU usage (exponential emphasis)
         cpu_normalized = cpu_percent / 100.0
-        # 指数関数で光の強さを計算
+        # Compute glow intensity using an exponential curve
         glow_factor = (math.exp(3 * cpu_normalized) - 1) / (math.exp(3) - 1)
         self.glow_intensity = min(glow_factor * 255, 255)
 
-        # CPU使用率に基づく移動速度調整（指数関数的に高速化）
-        # 注意：この部分は後で群れの平均CPU使用率で上書きされる可能性がある
-        # 指数関数で速度倍率を計算：1.0 + (exp(4 * cpu) - 1) / (exp(4) - 1) * 6
-        # これにより0%で1倍、100%で約7倍の速度になる
+        # Speed adjustment based on CPU usage (exponential scaling).
+        # Note: this may be overridden later by the group's average CPU.
+        # Compute speed multiplier via an exponential mapping so 0% -> 1x and ~100% -> ~7x
         speed_factor = 1.0 + (math.exp(4 * cpu_normalized) - 1) / (math.exp(4) - 1) * 6.0
-        max_speed = 2.0 * min(speed_factor, 8.0)  # 最大8倍で制限
+        max_speed = 2.0 * min(speed_factor, 8.0)  # limit to 8x maximum
         self.vx = max(min(self.vx, max_speed), -max_speed)
         self.vy = max(min(self.vy, max_speed), -max_speed)
 
     def set_fork_event(self):
-        """フォーク（分裂）イベントの設定"""
+        """Set fork (split) event."""
         self.recently_forked = True
-        self.fork_glow_timer = 60  # 60フレーム間光る
+        self.fork_glow_timer = 60  # glow for 60 frames
 
     def set_exec_event(self):
-        """exec（変態）イベントの設定"""
+        """Set exec (transform) event."""
         self.exec_transition = True
         self.exec_timer = 30
-        # 新しい色を生成
+        # regenerate color to reflect transition
         self.color = self._generate_color()
 
     def set_death_event(self):
-        """死亡イベントの設定（既に死亡中の場合は進行状況をリセットしない）"""
-        if not self.is_dying:  # 初回のみリセット
+        """Trigger death event (do not reset progress if already dying)."""
+        if not self.is_dying:  # only reset on first trigger
             self.is_dying = True
             self.death_progress = 0.0
 
     def update_position(self, screen_width: int, screen_height: int, nearby_fish: List['Fish'] = None):
-        """位置の更新とバウンド処理（群れ行動対応版）"""
-        # 年齢を増やす
+        """Update position and handle boundary reflection (supports flocking)."""
+        # increase age counter
         self.age += 1
 
-        # メモリ巨大魚の脈動エフェクト
+        # Pulsation effect for memory-giant fish
         if self.is_memory_giant:
-            self.pulsation_phase += 0.15  # 脈動速度
+            self.pulsation_phase += 0.15  # pulsation speed
             if self.pulsation_phase > 2 * math.pi:
                 self.pulsation_phase -= 2 * math.pi
 
-        # スポーン時のアニメーション
+        # Spawn animation
         if self.is_spawning:
             self.spawn_progress += 0.05
             if self.spawn_progress >= 1.0:
                 self.is_spawning = False
                 self.spawn_progress = 1.0
 
-        # 死亡時のアニメーション
+        # Death animation
         if self.is_dying:
             old_progress = self.death_progress
             self.death_progress += 0.03
-            # デバッグ用：進行状況を定期的に出力
-            # if int(old_progress * 10) != int(self.death_progress * 10):  # 0.1刻みで出力
-            #     print(f"💀 死亡進行: PID {self.pid} ({self.process_name}) - {old_progress:.2f} -> {self.death_progress:.2f}")
-            # if self.death_progress >= 1.0 and old_progress < 1.0:
-            #     print(f"💀 魚の死亡完了: PID {self.pid} ({self.process_name}) - progress {old_progress:.2f} -> {self.death_progress:.2f}")
+            # Debug printing (kept commented)
+            # if int(old_progress * 10) != int(self.death_progress * 10):
+            #     print(f"💀 Death progress: PID {self.pid} ({self.process_name}) - {old_progress:.2f} -> {self.death_progress:.2f}")
             return self.death_progress < 1.0
 
-        # 特殊エフェクトのタイマー更新
+        # Update special effect timers
         if self.fork_glow_timer > 0:
             self.fork_glow_timer -= 1
             if self.fork_glow_timer == 0:
@@ -300,104 +288,100 @@ class Fish:
             if self.exec_timer == 0:
                 self.exec_transition = False
 
-        # 会話タイマーの更新
+        # Update talk/conversation timer
         if self.talk_timer > 0:
             self.talk_timer -= 1
             if self.talk_timer == 0:
                 self.is_talking = False
                 self.talk_message = ""
-                self.bubble_rect = None  # 吹き出し領域をクリア
-                self.talk_message = ""
+                self.bubble_rect = None  # clear speech bubble area
 
-        # 群れ行動の計算
+        # Compute flocking forces
         flocking_force_x = 0.0
         flocking_force_y = 0.0
 
         if nearby_fish and self.school_members:
-            # 群れのメンバーのみを対象にする
+            # Target only school members present nearby
             school_fish = [f for f in nearby_fish if f.pid in self.school_members]
             if school_fish:
                 flocking_force_x, flocking_force_y = self.calculate_flocking_forces(school_fish)
 
-        # 個体ごとの行動タイマーを更新
+        # Update per-individual behavior timer
         self.behavior_timer += 1
 
-        # 目標位置の更新システム（個体ごとの独立したタイミング）
-        world_size = self.world_size  # 動的ワールドサイズ
+        # Target position update system (individual timing)
+        world_size = self.world_size  # dynamic world size
 
         if self.school_members and nearby_fish:
-            # 群れの場合：代表魚システム
+            # For schools: leader/representative system
             leader = self.get_school_leader_fish(nearby_fish)
             if leader.pid == self.pid:
-                # 自分が代表魚の場合：個体の決定間隔で新目標を設定
+                # If I'm the leader, pick a new target at my decision interval
                 if self.behavior_timer % self.decision_interval == 0:
                     self.target_x = random.uniform(-world_size, world_size)
                     self.target_y = random.uniform(-world_size, world_size)
             else:
-                # 代表魚ではない場合：個体タイミングで代表魚寄りの目標を設定
+                # Non-leaders pick targets biased toward the leader at a different cadence
                 if self.behavior_timer % (self.decision_interval * 2) == 0:
-                    # 代表魚の目標位置に近い場所を新しい目標にする
-                    offset_range = 200 * self.personality_factor  # 個性に応じたオフセット
+                    offset_range = 200 * self.personality_factor  # offset scaled by personality
                     self.target_x = leader.target_x + random.uniform(-offset_range, offset_range)
                     self.target_y = leader.target_y + random.uniform(-offset_range, offset_range)
-                    # 境界チェック
+                    # Boundary clamp
                     self.target_x = max(-world_size, min(world_size, self.target_x))
                     self.target_y = max(-world_size, min(world_size, self.target_y))
         else:
-            # 単独魚の場合：個体タイマーベースでランダム目標
+            # Solo fish pick random targets periodically
             if self.behavior_timer % self.decision_interval == 0:
                 self.target_x = random.uniform(-world_size, world_size)
                 self.target_y = random.uniform(-world_size, world_size)
 
-        # 周回運動システム（動的で自然な動き）
+        # Orbiting movement system (dynamic, natural motion)
         self._update_orbit_behavior(world_size)
 
-        # 基本的な移動計算
-        # 回避力の初期化（運動エネルギーシステムで統一管理）
+        # Core movement calculations
+        # Initialize avoidance forces (managed by kinetic energy system)
         avoidance_x = 0.0
         avoidance_y = 0.0
 
-        # 群れ行動力の適用（群れ魚のみ）
+        # Apply flocking forces (only for school members)
         if self.school_members:
             self.vx += flocking_force_x * self.flocking_strength
             self.vy += flocking_force_y * self.flocking_strength
 
-        # 統一運動エネルギーバトルシステム（軽量化版・3フレームに1回計算）
-        # ルール: 運動エネルギーが低い方が高い方から逃げる
-        # 運動エネルギー = 1/2 × 質量(メモリ) × 速度(CPU)²
-        # - 単独魚: 自分の運動エネルギー
-        # - 群れ魚: 群れ全体の合計運動エネルギー
-        if nearby_fish and self.age % 3 == 0:  # 計算頻度を1/3に削減
-            # 自分の運動エネルギーを事前計算
+        # Kinetic-energy-based avoidance system (lightweight; computed every 3 frames)
+        # Rule: the one with lower kinetic energy flees from the one with higher energy
+        # Kinetic energy = 1/2 × mass(memory) × velocity(CPU)^2
+        if nearby_fish and self.age % 3 == 0:  # reduce calc frequency to 1/3
+            # Precompute my kinetic energy
             my_kinetic_energy = self._calculate_kinetic_energy_light(nearby_fish)
 
             for other_fish in nearby_fish:
-                # 早期スキップ：マンハッタン距離で大まかにチェック
+                # Early skip: rough Manhattan distance check
                 dx_abs = abs(self.x - other_fish.x)
                 dy_abs = abs(self.y - other_fish.y)
                 manhattan_dist = dx_abs + dy_abs
 
-                if manhattan_dist > 300:  # 遠すぎる場合はスキップ
+                if manhattan_dist > 300:
                     continue
 
-                # 相手の運動エネルギーを計算（同じ群れでない限り比較対象）
+                # Skip comparison if both are in the same school
                 if self.school_members and other_fish.school_members and self.school_members == other_fish.school_members:
-                    continue  # 同じ群れ同士は反発しない
+                    continue
 
                 other_kinetic_energy = other_fish._calculate_kinetic_energy_light(nearby_fish)
 
-                # 統一ルール: 運動エネルギーが負けている方が逃げる
+                # If I'm lower energy, apply avoidance
                 if my_kinetic_energy < other_kinetic_energy:
                     dx_avoid = self.x - other_fish.x
                     dy_avoid = self.y - other_fish.y
 
-                    # 簡略化距離計算（近い場合のみ平方根計算）
+                    # Simplified distance calc (sqrt only for nearby objects)
                     if manhattan_dist < 250:
-                        dist_avoid = math.sqrt(dx_avoid*dx_avoid + dy_avoid*dy_avoid)
-                        avoidance_distance = 180  # 回避距離短縮
+                        dist_avoid = math.sqrt(dx_avoid * dx_avoid + dy_avoid * dy_avoid)
+                        avoidance_distance = 180
 
                         if dist_avoid < avoidance_distance:
-                            # 運動エネルギー比で回避力計算
+                            # Compute avoidance strength based on kinetic energy ratio
                             energy_ratio = min(other_kinetic_energy / max(my_kinetic_energy, 0.01), 4.0)
                             avoidance_strength = (avoidance_distance - dist_avoid) / avoidance_distance * 0.015 * energy_ratio
 
@@ -405,84 +389,77 @@ class Fish:
                                 avoidance_x += (dx_avoid / dist_avoid) * avoidance_strength
                                 avoidance_y += (dy_avoid / dist_avoid) * avoidance_strength
 
-        # 目標位置に向かう力（自然な定速運動）
+        # Steering towards target position (natural constant-speed behavior)
         dx = self.target_x - self.x
         dy = self.target_y - self.y
-        # 平方根計算をスキップして距離の2乗で判定
-        distance_sq = dx*dx + dy*dy
+        # Skip sqrt check by comparing squared distance
+        distance_sq = dx * dx + dy * dy
 
-        if distance_sq > 25:  # distance > 5 の2乗
-            # 距離によらず一定の力で目標に向かう（自然な泳ぎ）
+        if distance_sq > 25:  # distance > 5 squared
             distance = math.sqrt(distance_sq)
             normalized_dx = dx / distance
             normalized_dy = dy / distance
 
-            # 一定の速度で目標に向かう（距離に関係なく）
             target_force = 0.4
             self.vx += normalized_dx * target_force
             self.vy += normalized_dy * target_force
 
-        # 回避力を適用（群れ魚・単独魚共通）
+        # Apply avoidance forces
         self.vx += avoidance_x
         self.vy += avoidance_y
 
-        # 微小なランダム運動で生物らしさを追加
+        # Small random motion for organic behavior
         self.vx += random.uniform(-0.05, 0.05)
         self.vy += random.uniform(-0.05, 0.05)
 
-        # 摩擦（0に設定：慣性による動き）
-        # self.vx *= 0.98
-        # self.vy *= 0.98
-
-        # IPC通信による吸引力を適用
+        # Apply IPC attraction
         self.vx += self.ipc_attraction_x
         self.vy += self.ipc_attraction_y
 
-        # 群れの移動速度システム：群れの平均CPU使用率で最終速度制限を再計算
+        # School speed system: recompute final speed cap using school's average CPU
         if nearby_fish and self.school_members:
             school_average_cpu = self.get_school_average_cpu(nearby_fish)
-            # 群れの平均CPU使用率で速度制限を再計算
             cpu_normalized = school_average_cpu / 100.0
             speed_factor = 1.0 + (math.exp(4 * cpu_normalized) - 1) / (math.exp(4) - 1) * 6.0
-            max_speed = 2.5 * min(speed_factor, 8.0)  # 群れは少し速く移動できる
+            max_speed = 2.5 * min(speed_factor, 8.0)
             self.vx = max(min(self.vx, max_speed), -max_speed)
             self.vy = max(min(self.vy, max_speed), -max_speed)
 
-        # 位置更新
+        # Position update
         self.x += self.vx
         self.y += self.vy
 
-        # 仮想空間の境界反射システム
+        # Virtual world boundary reflection
         world_boundary = self.world_size
-        bounce_damping = 0.8  # 反射時の減衰係数
+        bounce_damping = 0.8
 
-        # X軸の境界チェック
+        # X-axis boundary checks
         if self.x < -world_boundary:
             self.x = -world_boundary
-            self.vx = abs(self.vx) * bounce_damping  # 右向きに反射
-            self.target_x = random.uniform(-world_boundary + 100, world_boundary)  # 新しい目標
+            self.vx = abs(self.vx) * bounce_damping
+            self.target_x = random.uniform(-world_boundary + 100, world_boundary)
         elif self.x > world_boundary:
             self.x = world_boundary
-            self.vx = -abs(self.vx) * bounce_damping  # 左向きに反射
-            self.target_x = random.uniform(-world_boundary, world_boundary - 100)  # 新しい目標
+            self.vx = -abs(self.vx) * bounce_damping
+            self.target_x = random.uniform(-world_boundary, world_boundary - 100)
 
-        # Y軸の境界チェック
+        # Y-axis boundary checks
         if self.y < -world_boundary:
             self.y = -world_boundary
-            self.vy = abs(self.vy) * bounce_damping  # 下向きに反射
-            self.target_y = random.uniform(-world_boundary + 100, world_boundary)  # 新しい目標
+            self.vy = abs(self.vy) * bounce_damping
+            self.target_y = random.uniform(-world_boundary + 100, world_boundary)
         elif self.y > world_boundary:
             self.y = world_boundary
-            self.vy = -abs(self.vy) * bounce_damping  # 上向きに反射
-            self.target_y = random.uniform(-world_boundary, world_boundary - 100)  # 新しい目標
+            self.vy = -abs(self.vy) * bounce_damping
+            self.target_y = random.uniform(-world_boundary, world_boundary - 100)
 
-        return True  # まだ生きている
+        return True  # still alive
 
     def get_display_color(self) -> Tuple[int, int, int]:
-        """現在の状態に応じた表示色を取得"""
+        """Get the display color adjusted for current state."""
         r, g, b = self.color
 
-        # メモリ巨大魚の特別な色合い（赤みを強調）
+    # Special coloring for memory-giant fish (emphasize red)
         if self.is_memory_giant:
             # 脈動に合わせて赤色を強調
             red_boost = int(50 * (1.0 + 0.5 * math.sin(self.pulsation_phase)))
@@ -490,14 +467,14 @@ class Fish:
             # 青を少し減らして赤紫っぽく
             b = max(0, b - 20)
 
-        # フォーク時の白い光り
+    # White flash effect when recently forked
         if self.recently_forked:
             glow_factor = self.fork_glow_timer / 60.0
             r = int(r + (255 - r) * glow_factor)
             g = int(g + (255 - g) * glow_factor)
             b = int(b + (255 - b) * glow_factor)
 
-        # CPU使用時の光り（指数関数的に強調）
+    # Glow when CPU is active (exponentially emphasized)
         if self.glow_intensity > 0:
             intensity = self.glow_intensity / 255.0
             # 指数関数的な光の強調：最大150の明度追加（非常に明るく）
@@ -506,7 +483,7 @@ class Fish:
             g = min(255, int(g + glow_boost))
             b = min(255, int(b + glow_boost))
 
-        # exec変態時の色変化
+    # Color shift during exec transition
         if self.exec_transition:
             transition_factor = 1.0 - (self.exec_timer / 30.0)
             # 虹色エフェクト
@@ -518,57 +495,57 @@ class Fish:
         return (r, g, b)
 
     def get_display_alpha(self, highlight_schools: bool = False) -> int:
-        """現在の状態に応じた透明度を取得"""
+        """Get the display alpha (opacity) adjusted for current state."""
         alpha = self.alpha
 
-        # スポーン時のフェードイン
+        # Fade-in during spawning
         if self.is_spawning:
             alpha = int(255 * self.spawn_progress)
 
-        # 死亡時のフェードアウト
+        # Fade-out during death
         if self.is_dying:
             alpha = int(255 * (1.0 - self.death_progress))
 
-        # 群れ強調表示が有効な場合の透明度調整
+    # Adjust alpha when highlighting schools
         if highlight_schools:
             # 群れに所属している場合の透明度処理
             if self.school_members and len(self.school_members) > 1:
-                # 孤立者の群れ（集まった単独プロセス）は25%透明度
+                # Isolated-school (clustered single processes) are shown at 25% opacity
                 if getattr(self, 'is_isolated_school', False):
                     alpha = int(alpha * 0.25)
-                # 真の群れ（親子関係・同名プロセス）はハイライト表示
+                # True schools (parent-child or same-name processes) are highlighted
                 else:
-                    pass  # フル表示
-            # 真の単独プロセス（どの群れにも所属していない）: 25%透明度
+                    pass  # full opacity
+            # Lone processes (not part of any school): 25% opacity
             else:
                 alpha = int(alpha * 0.25)
 
         return alpha
 
     def get_display_size(self) -> float:
-        """現在の状態に応じた表示サイズを取得"""
+        """Get the display size adjusted for current state."""
         size = self.current_size
 
-        # 群れ魚は少し大きく表示して目立たせる
+        # School members are slightly enlarged to stand out
         if self.school_members and len(self.school_members) > 1:
             size *= 1.2  # 20%大きく
 
-        # メモリ巨大魚の脈動エフェクト（±30%の変動）
+    # Pulsation effect for memory-giant fish (±30% variation)
         if self.is_memory_giant:
             pulsation = 1.0 + 0.3 * math.sin(self.pulsation_phase)
             size *= pulsation
 
-        # スポーン時の拡大
+    # Scaling during spawning
         if self.is_spawning:
             spawn_scale = 0.1 + 0.9 * self.spawn_progress
             size *= spawn_scale
 
-        # 死亡時の縮小
+    # Shrink during death
         if self.is_dying:
             death_scale = 1.0 - self.death_progress
             size *= death_scale
 
-        # フォーク時の一時的拡大
+    # Temporary enlargement when forked
         if self.recently_forked:
             fork_scale = 1.0 + (self.fork_glow_timer / 60.0) * 0.3
             size *= fork_scale
@@ -576,53 +553,53 @@ class Fish:
         return size
 
     def _draw_memory_giant_effects(self, screen: pygame.Surface, alpha: int, zoom_adjusted_size: float = None):
-        """メモリ巨大魚用の特別エフェクト（波紋など）"""
+        """Special effects for memory-giant fish (ripples, etc.)."""
         # ズーム調整されたサイズを使用（渡されていない場合は現在のサイズを使用）
         effective_size = zoom_adjusted_size if zoom_adjusted_size is not None else self.current_size
-
-        # 波紋エフェクト：3つの同心円
-        ripple_color = (150, 215, 255)  # 少し落ち着いた水色
+        # Ripple effect: draw three concentric rings
+        ripple_color = (150, 215, 255)  # calm cyan
         base_ripple_alpha = max(50, min(200, int(alpha * 0.45)))
 
-        for i in range(3):  # 波紋を3層に抑制
-            # 各波紋の半径と透明度を脈動に合わせて変化（より大きな範囲）
+        for i in range(3):  # limit to 3 ripple layers
+            # Vary ripple radius and alpha according to pulsation
             ripple_phase = self.pulsation_phase + i * (math.pi / 4)
-            # 波紋の範囲を2倍に拡大：巨大魚に相応しいスケール（ズームレベル考慮）
+            # Scale ripple radius for giant fish (consider zoom level)
             base_ripple_size = effective_size * (3.0 + i * 1.2) * (1.0 + 0.5 * math.sin(ripple_phase))
             ripple_radius = base_ripple_size
             falloff = max(0.3, 1.0 - i * 0.3)
             ripple_alpha = int(base_ripple_alpha * falloff)
 
-            # 半透明の円を描画
+            # Draw a semi-transparent circle
             if ripple_radius > 0 and ripple_alpha > 0:
                 try:
-                    # 一時的なサーフェスを作成して半透明描画
-                    temp_surface = pygame.Surface((ripple_radius * 2 + 4, ripple_radius * 2 + 4), pygame.SRCALPHA)
-                    pygame.draw.circle(temp_surface, (*ripple_color[:3], ripple_alpha),
-                                     (ripple_radius + 2, ripple_radius + 2), int(ripple_radius), 2)
-                    screen.blit(temp_surface, (self.x - ripple_radius - 2, self.y - ripple_radius - 2),
+                    # Create a temporary surface for alpha drawing (use ints)
+                    surf_size = int(ripple_radius * 2 + 4)
+                    temp_surface = pygame.Surface((surf_size, surf_size), pygame.SRCALPHA)
+                    center = (int(ripple_radius + 2), int(ripple_radius + 2))
+                    pygame.draw.circle(temp_surface, (*ripple_color[:3], ripple_alpha), center, int(ripple_radius), 2)
+                    screen.blit(temp_surface, (int(self.x - ripple_radius - 2), int(self.y - ripple_radius - 2)),
                                special_flags=pygame.BLEND_ALPHA_SDL2)
                 except (ValueError, pygame.error):
-                    pass  # 描画エラーを無視
+                    pass  # ignore drawing errors
 
     def _draw_lightning_effects(self, screen: pygame.Surface, alpha: int, zoom_adjusted_size: float = None):
-        """超巨大魚用の雷エフェクト（メモリ使用率20%以上）"""
+        """Lightning effects for very large fish (memory usage >= 20%)."""
         if not hasattr(self, 'lightning_timer'):
             self.lightning_timer = 0
 
         self.lightning_timer += 1
 
-        # ズーム調整されたサイズを使用
+    # Use zoom-adjusted size if provided
         effective_size = zoom_adjusted_size if zoom_adjusted_size is not None else self.current_size
 
-        # ランダムに雷を発生（30フレームに1回程度）
+    # Randomly spawn lightning (approx once every 30 frames)
         if self.lightning_timer % 30 == 0 or random.random() < 0.1:
             lightning_color = (255, 255, 150, max(100, alpha // 2))  # 明るい黄色
 
             # 魚の周りに3-5本の雷を描画
             num_bolts = random.randint(3, 5)
             for _ in range(num_bolts):
-                # 雷の起点と終点をランダムに設定（ズームレベル考慮）
+                # Randomize bolt start/end points (consider zoom)
                 angle = random.uniform(0, 2 * math.pi)
                 start_radius = effective_size * 0.8
                 end_radius = effective_size * 2.5
@@ -632,7 +609,7 @@ class Fish:
                 end_x = self.x + math.cos(angle) * end_radius
                 end_y = self.y + math.sin(angle) * end_radius
 
-                # ジグザグの雷を描画
+                # Draw a jagged lightning bolt
                 try:
                     points = [(start_x, start_y)]
                     segments = 4
@@ -654,7 +631,7 @@ class Fish:
                     pass
 
     def get_thread_satellites(self, zoom_adjusted_size: float = None) -> list:
-        """スレッド数に応じた衛星の位置を計算"""
+        """Compute satellite positions representing thread count."""
         satellites = []
         if self.thread_count > 1:
             capped_threads = min(self.thread_count - 1, MAX_THREAD_SATELLITES)
@@ -665,7 +642,7 @@ class Fish:
 
             effective_threads = min(self.thread_count, MAX_THREAD_SATELLITES + 1)
 
-            # ズーム調整されたサイズを使用
+            # Use zoom-adjusted size if provided
             effective_size = zoom_adjusted_size if zoom_adjusted_size is not None else self.current_size
 
             for i in range(satellite_count):
@@ -683,11 +660,11 @@ class Fish:
 
     def _draw_fish_shape(self, screen: pygame.Surface, color: Tuple[int, int, int],
                         alpha: int, size: float):
-        """魚の形状に応じた描画"""
+        """Draw fish shape according to selected type."""
         if size < 3:
             return
 
-        # 魚の向きを計算（より滑らかに）
+    # Compute fish orientation smoothly
         if abs(self.vx) > 0.1 or abs(self.vy) > 0.1:
             target_angle = math.atan2(self.vy, self.vx)
             # 角度を滑らかに変化させる
@@ -698,10 +675,10 @@ class Fish:
                 angle_diff += 2 * math.pi
             self.angle += angle_diff * 0.1
 
-        # 泳ぎのアニメーション（速度に応じて変化）
+    # Swimming animation (varies with speed)
         speed = math.sqrt(self.vx**2 + self.vy**2)
 
-        # CPU使用率に応じて泳ぎの激しさを指数関数的に調整
+    # Exponentially adjust swim intensity based on CPU usage
         cpu_factor = 1.0
         if hasattr(self, 'cpu_percent'):
             cpu_normalized = self.cpu_percent / 100.0
@@ -711,11 +688,11 @@ class Fish:
         swim_speed = (0.1 + speed * 0.1) * cpu_factor * self.personality_factor
         self.swim_cycle += swim_speed
 
-        # 尻尾の振りもCPU使用率に応じて激しく（個体ごとの位相オフセット適用）
+    # Tail swing intensity also amplifies with CPU usage (per-individual phase offset)
         tail_intensity = (0.2 + speed * 0.1) * cpu_factor
         self.tail_swing = math.sin(self.swim_cycle + self.swim_phase_offset) * min(tail_intensity, 1.0)  # 最大1.0で制限
 
-        # 魚の基本サイズ（形状によって調整）
+    # Base fish dimensions (adjusted per shape)
         body_length = size * 1.8
         body_width = size * 0.9
 

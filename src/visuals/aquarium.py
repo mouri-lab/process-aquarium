@@ -1,6 +1,6 @@
 """
 Digital Life Aquarium - Main Aquarium Visualization
-メインの水族館描画とインタラクション管理
+Main aquarium rendering and interaction management.
 """
 
 import pygame
@@ -12,13 +12,13 @@ import os
 from typing import Dict, List, Optional, Tuple
 from ..core.process_manager import ProcessManager
 try:
-    # eBPF ソースが実装された際に差し替え可能な拡張ポイント
+    # Extension point to swap in an eBPF source implementation when available
     from ..core.sources import EbpfProcessSource
 except Exception:  # pragma: no cover - 安全なフォールバック
     EbpfProcessSource = None  # type: ignore
 from .fish import Fish
 
-# 文字エンコーディングの設定
+# Text/locale encoding configuration
 import locale
 try:
     locale.setlocale(locale.LC_ALL, 'ja_JP.UTF-8')
@@ -36,11 +36,11 @@ class Aquarium:
 
     def __init__(self, width: int = 1200, height: int = 800, headless: bool = False,
                  headless_interval: float = 1.0, use_gpu: Optional[bool] = None):
-        # Pygameの初期化
+    # Initialize pygame
         self.headless = headless
         self.headless_interval = headless_interval
         if self.headless:
-            # ダミードライバでウィンドウ生成を抑制
+            # Use dummy video driver to suppress window creation in headless mode
             os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
         self._gpu_texture_type = None
         self.gpu_renderer = None
@@ -73,14 +73,14 @@ class Aquarium:
         try:
             pygame.mixer.init()
         except pygame.error:
-            # オーディオデバイスが利用できない場合は無視
+        # Ignore if audio device is not available
             print("⚠️  オーディオデバイスが利用できません。音声なしで継続します。")
             pass
 
-        # macOS Retina対応の環境変数設定
+    # macOS Retina-related environment variable settings
         os.environ['SDL_VIDEO_HIGHDPI_DISABLED'] = '0'  # 高DPI有効化
 
-        # 環境変数から設定を読み取り（制限を大幅に緩和）
+    # Read settings from environment variables (significantly relaxed limits)
         max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '2000'))  # 500から2000に増加
         target_fps = int(os.environ.get('AQUARIUM_FPS', '30'))
 
@@ -92,10 +92,10 @@ class Aquarium:
         self.fullscreen = False
         self.scale_factor = 1.0  # Retina scaling factor
 
-        # 利用可能な解像度情報を表示（デバッグ用）
+    # Print available resolution info (debug)
         self._print_display_info()
 
-        # Retinaスケール情報を取得
+    # Detect Retina scaling information
         self.retina_info = self.detect_retina_scaling()
 
         if not self.headless:
@@ -105,18 +105,18 @@ class Aquarium:
                 self.screen = pygame.display.set_mode((width, height))
                 pygame.display.set_caption("Digital Life Aquarium - デジタル生命の水族館")
         else:
-            # ヘッドレス時は描画用のダミーサーフェスを用意
+            # Provide a dummy surface for rendering in headless mode
             self.screen = pygame.Surface((width, height))
 
-        # 時計とFPS
+    # Clock and FPS configuration
         self.clock = pygame.time.Clock()
         self.fps = target_fps if not self.headless else int(1.0 / max(headless_interval, 0.001))
         self._configure_quality_thresholds()
 
-        # プロセス管理
-        # 将来的に eBPF を有効化する場合は、起動パラメータや環境変数で
-        # EbpfProcessSource を注入できるようにする予定。
-        # 例: if os.environ.get("AQUARIUM_SOURCE") == "ebpf": source = EbpfProcessSource()
+    # Process management
+    # When eBPF is enabled in the future, we plan to allow injecting an
+    # `EbpfProcessSource` via command line or environment variables.
+    # Example: if os.environ.get("AQUARIUM_SOURCE") == "ebpf": source = EbpfProcessSource()
         source = None
         chosen = os.environ.get("AQUARIUM_SOURCE", "psutil").lower()
         if chosen == "ebpf":
@@ -155,11 +155,11 @@ class Aquarium:
             self.process_manager.set_process_limit(self.process_limit)
         self.process_manager.set_sort_config(self.sort_by, self.sort_order)
 
-        # 動的ワールドサイズ（プロセス制限数に基づく）
+    # Dynamic world size calculation based on process limit
         self.world_size = self._calculate_world_size(self.process_limit)
         print(f"🌍 ワールドサイズ: {self.world_size} (プロセス制限: {self.process_limit})")
 
-        # パフォーマンス最適化（制限緩和）
+    # Performance optimizations (relaxed limits)
         self.surface_cache = {}  # 描画キャッシュ
         self.background_cache = None  # 背景キャッシュ
         self.last_process_update = 0
@@ -167,7 +167,7 @@ class Aquarium:
         self.last_cache_cleanup = time.time()
         self.cache_cleanup_interval = 60.0  # キャッシュクリーンアップを1分間隔に延長
 
-        # 動的パフォーマンス調整
+    # Dynamic performance adjustments
         self.performance_monitor = {
             'fps_history': [],
             'fish_count_history': [],
@@ -175,67 +175,67 @@ class Aquarium:
             'adaptive_particle_count': 50,
             'adaptive_fish_update_interval': 1
         }
-        self._neighbor_cell_size = 120  # 近傍検索用のグリッドサイズ（ピクセル）
+        self._neighbor_cell_size = 120  # grid cell size for neighbor searches (pixels)
 
-        # UI状態
+        # UI state
         self.selected_fish: Optional[Fish] = None
 
-        # カメラシステム（自由なスクロール・ズーム機能）
-        self.camera_x = 0.0  # カメラのX座標（ワールド座標）
-        self.camera_y = 0.0  # カメラのY座標（ワールド座標）
-        self.zoom_level = 1.0  # ズームレベル（1.0 = 等倍）
-        self.min_zoom = 0.1   # 最小ズーム
-        self.max_zoom = 5.0   # 最大ズーム
+        # Camera system (free scroll & zoom)
+        self.camera_x = 0.0  # camera X in world coordinates
+        self.camera_y = 0.0  # camera Y in world coordinates
+        self.zoom_level = 1.0  # zoom level (1.0 = 1x)
+        self.min_zoom = 0.1   # minimum zoom
+        self.max_zoom = 5.0   # maximum zoom
 
-        # マウス操作
+        # Mouse interaction
         self.is_dragging = False
         self.drag_start_x = 0
         self.drag_start_y = 0
         self.last_mouse_x = 0
         self.last_mouse_y = 0
 
-        # 追従機能
+        # Follow/targeting features
         self.follow_target: Optional[Fish] = None
-        # カメラモード: 0=自動センタリング, 1=選択魚追従, 2=なし
+        # Camera mode: 0=auto-center, 1=follow selected fish, 2=manual
         self.camera_mode = 0
 
-        # 日本語フォント管理と動的スケーリング
+        # Japanese font handling and dynamic scaling
         self._preferred_font_name: Optional[str] = None
         self._preferred_font_path: Optional[str] = None
         self._font_cache: Dict[int, pygame.font.Font] = {}
         self.font_scale = 1.0
         self._update_font_scale()
-        self.font = self._get_japanese_font(int(20 * self.font_scale))  # より小さく：24→20
-        self.small_font = self._get_japanese_font(int(14 * self.font_scale))  # より小さく：18→14
-        self.bubble_font = self._get_japanese_font(self._determine_bubble_font_size())  # IPC会話吹き出し用フォント
+        self.font = self._get_japanese_font(int(20 * self.font_scale))  # smaller: 24->20
+        self.small_font = self._get_japanese_font(int(14 * self.font_scale))  # smaller: 18->14
+        self.bubble_font = self._get_japanese_font(self._determine_bubble_font_size())  # font for IPC speech bubbles
 
-        # 背景とエフェクト（動的パーティクル数）
+        # Background and effects (adaptive particle count)
         self.background_particles = []
         self.particle_count = self.performance_monitor['adaptive_particle_count']
         if not self.headless:
             self.init_background_particles()
 
-        # プロセス関連統計
+        # Process-related statistics
         self.total_processes = 0
         self.total_memory = 0.0
         self.avg_cpu = 0.0
         self.total_threads = 0
 
-        # IPC接続情報
+        # IPC connection information
         self.ipc_connections = []
         self.ipc_update_timer = 0
-        self.ipc_update_interval = 30  # 0.5秒間隔でIPC更新（高頻度化）
+        self.ipc_update_interval = 30  # more frequent IPC updates (seconds)
 
-        # 通信履歴ベースの群れ形成
+        # Flocking formation based on communication history
         self.communication_history = {}  # {(pid1, pid2): [timestamps]}
         self.history_cleanup_timer = 0
-        self.history_cleanup_interval = 300  # 5秒間隔で履歴クリーンアップ
-        self.communication_window = 60.0  # 60秒間の通信履歴を保持
+        self.history_cleanup_interval = 300  # cleanup interval in seconds
+        self.communication_window = 60.0  # keep 60 seconds of communication history
 
-        # デバッグ情報表示
-        self.show_debug = False  # デフォルトでデバッグ表示をオフ
-        self.show_ipc = False   # IPC可視化をデフォルトでオフ
-        self.highlight_schools = False  # 群れ強調表示（孤立プロセス半透明化）
+        # Debug display flags
+        self.show_debug = False  # debug display off by default
+        self.show_ipc = False   # IPC visualization off by default
+        self.highlight_schools = False  # highlight schools (dim isolated processes)
         self.debug_text_lines = []
 
         # 通信相手のハイライト
