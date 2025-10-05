@@ -788,6 +788,23 @@ class Aquarium:
         else:  # camera_mode == 2
             stats_lines.append("カメラモード: 手動制御")
 
+        # 描画最適化情報
+        dynamic_quality = self.render_quality
+        if self.zoom_level < 0.3:
+            dynamic_quality = "minimal"
+        elif self.zoom_level < 0.6:
+            dynamic_quality = "reduced"
+        stats_lines.append(f"描画品質: {dynamic_quality}")
+
+        # 最適化状態
+        optimization_status = []
+        if self.zoom_level < 0.5:
+            optimization_status.append("重なり判定")
+        if self.zoom_level < 0.3:
+            optimization_status.append("衛星スキップ")
+        if optimization_status:
+            stats_lines.append(f"最適化: {', '.join(optimization_status)}")
+
         # 背景パネル
         panel_padding_x = 10
         panel_padding_y = 10
@@ -1661,7 +1678,7 @@ class Aquarium:
                 original_x, original_y = fish.x, fish.y
                 fish.x, fish.y = screen_x, screen_y
 
-                # 魚を描画（ズームレベルと群れ強調表示を渡す）
+                # 魚を描画（最適化パラメータを渡す）
                 fish.draw(self.screen, self.bubble_font, quality=self.render_quality,
                           text_renderer=self._render_text, zoom_level=self.zoom_level,
                           highlight_schools=self.highlight_schools)
