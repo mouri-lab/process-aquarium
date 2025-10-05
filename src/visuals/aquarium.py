@@ -252,23 +252,40 @@ class Aquarium:
 
     def _calculate_world_size(self, process_limit: int = None) -> int:
         """プロセス制限数に基づいてワールドサイズを動的に計算"""
+        # 最小サイズ：ディスプレイサイズに基づく
+        min_size = max(self.width, self.height)
+
         if process_limit is None:
-            # 制限なしの場合はデフォルトサイズ
-            return 4096
+            # 制限なしの場合は実際のプロセス数を参照して201以上と同じ計算式を使用
+            current_process_count = 0
+            if hasattr(self, 'fishes') and self.fishes:
+                current_process_count = len(self.fishes)
+            elif hasattr(self, 'total_processes') and self.total_processes > 0:
+                current_process_count = self.total_processes
+
+            if current_process_count == 0:
+                # 初期化時や魚がいない場合は3072を返す
+                return max(min_size, 3072)
+            else:
+                # 201以上と同じ計算式を適用（実際のプロセス数を基準に）
+                effective_limit = max(201, current_process_count)
+                return max(min_size, int(3072 + (effective_limit - 200) * 6))
 
         # プロセス数に応じたワールドサイズの計算
-        # 少ないプロセス数: コンパクトなワールド
+        # 少ないプロセス数: よりコンパクトなワールド
         # 多いプロセス数: 広いワールド
-        if process_limit <= 20:
-            return 1024  # 小さなワールド
-        elif process_limit <= 50:
-            return 2048  # 中サイズワールド
+        if process_limit <= 10:
+            return min_size                              # ディスプレイサイズ
+        elif process_limit <= 30:
+            return max(min_size, 1024)                   # 小さなワールド
+        elif process_limit <= 60:
+            return max(min_size, 1536)                   # 中小サイズワールド
         elif process_limit <= 100:
-            return 3072  # 大サイズワールド
+            return max(min_size, 2048)                   # 中サイズワールド
         elif process_limit <= 200:
-            return 4096  # 標準サイズワールド
+            return max(min_size, 3072)                   # 大サイズワールド
         else:
-            return int(4096 + (process_limit - 200) * 8)  # さらに大きなワールド
+            return max(min_size, int(3072 + (process_limit - 200) * 6))  # さらに大きなワールド
 
     def _update_world_size(self, new_limit: int = None):
         """ワールドサイズを更新し、既存の魚の設定も更新"""
@@ -426,6 +443,10 @@ class Aquarium:
         self.total_memory = sum(proc.memory_percent for proc in process_data.values())
         self.avg_cpu = sum(proc.cpu_percent for proc in process_data.values()) / max(1, len(process_data))
         self.total_threads = sum(proc.num_threads for proc in process_data.values())
+
+        # unlimited時のワールドサイズ動的更新
+        if self.process_limit is None:
+            self._update_world_size(None)
 
         # 新規プロセス用のFish作成（制限解除）
         for pid, proc in process_data.items():
