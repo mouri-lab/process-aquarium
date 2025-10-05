@@ -1,233 +1,200 @@
-# Process Aquarium
+# 🐠 Process Aquarium - プロセス水族館
 
-Process Aquarium is an application visualizing processes as fish in an aquarium. Each fish represents a running process on your system.
+![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
+![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)
 
-## Requirements
+**システムプロセスを美しい魚として可視化する、インタラクティブな水族館アプリケーション**
 
-- Python 3.10+
-- `pygame-ce` (installed automatically via `pip install -e .` or `pip install pygame-ce`)
+Process Aquariumは、コンピューター上で動作するプロセス（プログラム）を水族館の魚として表現し、リアルタイムでモニタリングできる革新的なシステム監視ツールです。従来の味気ないプロセス監視とは一線を画す、視覚的で楽しい体験を提供します。
 
-If you previously used the legacy `pygame` package, uninstall it before installing `pygame-ce` to avoid binary conflicts.
+## 特徴
 
-## eBPF Integration (Design Draft)
+**美しいビジュアライゼーション**
+- 各プロセスが個性豊かな魚として表現される
+- CPU使用率やメモリ使用量に応じて魚の動きや色が変化
+- リアルタイムで更新される美しい水族館環境
 
-This branch introduces an abstraction layer to allow future event–driven
-monitoring using eBPF instead of (or combined with) psutil polling.
+**高性能な監視**
+- eBPFベースの高速なプロセス監視
+- リアルタイムでのプロセス状態追跡
+- 低オーバーヘッドなシステム監視
 
-### Current Layers
+**柔軟な設定オプション**
+- ソート順序の変更（CPU、メモリ、プロセス名、PID）
+- 表示プロセス数の制限
+- ヘッドレスモードでのコマンドライン実行
 
-| Layer | Responsibility |
-|-------|----------------|
-| `src/core/types.py` | Shared dataclasses (`ProcessInfo`, lifecycle / IPC events) |
-| `src/core/sources.py` | `IProcessSource` interface + `PsutilProcessSource` implementation |
-| `src/core/process_manager.py` | Backwards compatible wrapper exposing legacy API |
-| `src/visuals/*` | Visualization & interaction (unchanged public contract) |
+## クイックスタート
 
-### Lifecycle Events
-`ProcessLifecycleEvent` normalizes: `spawn`, `fork` (derived), `exec`, `exit`.
-The psutil source synthesizes `spawn` & `exec`; `fork` is inferred when a
-`spawn` has a known parent already present. An eBPF source will map directly to
-`sched_process_fork`, `sched_process_exec`, `sched_process_exit` for near-zero
-loss.
+### 1. 必要な環境
 
-### IPC Abstraction
-`IPCConnection(kind= ...)` allows heterogeneous comms (tcp, unix, pipe,
-parent-child) to be rendered uniformly. The psutil implementation keeps the
-existing simplified heuristic; eBPF can add richer socket / pipe attribution.
+- **Python 3.10以上**
+- **Linux**（eBPF機能を最大限活用するため）
 
-### Why eBPF?
-
-| Aspect | Polling (psutil) | eBPF (planned) |
-|--------|------------------|---------------|
-| Fork/Exec latency | Up to poll interval | Near real-time (sub-ms) |
-| Short-lived process capture | Often missed | Captured reliably |
-| IPC visibility | Limited (loopback & unix aggregate) | Fine grained sockets / pipes / future shared mem |
-| Overhead pattern | Periodic full scan O(N) | Event-driven incremental |
-| Complexity | Low | Higher (toolchain, kernel features) |
-
-### Hybrid Strategy
-1. eBPF emits high fidelity lifecycle + socket events.
-2. Lightweight periodic psutil snapshot fills in CPU%, memory%, thread counts.
-3. Merge by PID into unified `ProcessInfo` map.
-
-### Next Steps
-1. Implement `EbpfProcessSource` skeleton: load BPF programs (fork/exec/exit).
-2. Add ring buffer consumer & translation to `ProcessLifecycleEvent`.
-3. Hybrid merger (enrich eBPF-only processes with periodic psutil metrics).
-4. Extended IPC kinds (pipe, unix, tcp, udp) color-coding in visualization.
-5. Optional config toggle: `AQUARIUM_SOURCE=ebpf`.
-
-If you are interested in contributing the eBPF backend, start from
-`src/core/sources.py::EbpfProcessSource`.
-
-## Headless Mode
-
-The aquarium can run on servers / CI without a display:
-
-```
-python main.py --headless --headless-interval 2.0
-```
-
-Environment fallback: when `--headless` is used we set `SDL_VIDEODRIVER=dummy`
-and only print periodic aggregate stats (process count, memory %, avg CPU, etc.).
-Use cases:
-* Remote monitoring via `tmux` / `ssh`
-* Data capture pipeline (redirect stdout to log)
-* CI regression check for lifecycle event tracking
-
-Optional flags:
-* `--width / --height` still accepted (affects internal surfaces only)
-* `--headless-interval <seconds>` controls stats print frequency (default 1.0)
-
-## GPU Acceleration (SDL2 Renderer)
-
-`pygame-ce` exposes the SDL2 GPU renderer. You can opt-in to it for smoother animation on capable hardware:
+### 2. インストール
 
 ```bash
-python main.py --gpu
+# システム依存関係をインストール（Ubuntu/Debian）
+sudo apt install -y python3-bpfcc linux-headers-$(uname -r) \
+    libbpf-dev clang llvm make gcc python3-venv
+
+# uvをインストール
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# リポジトリをクローン
+git clone https://github.com/mouri-lab/process-aquarium.git
+cd process-aquarium
+git switch main
+
+# 仮想環境を作成（システムサイトパッケージへのアクセスを有効化）
+uv venv -p /usr/bin/python3 --system-site-packages
+
+# 依存関係をインストール
+uv sync
 ```
 
-Environment-based toggle:
+### 3. 実行
 
 ```bash
-export AQUARIUM_GPU=1
-python main.py
+# eBPFを使用して実行（推奨、root権限が必要）
+sudo ./.venv/bin/python3 main.py --source ebpf
+
+# またはpsutilを使用して実行（root権限不要）
+./.venv/bin/python3 main.py --source psutil
 ```
 
-Additional knobs:
+⚠️ **重要な注意事項**
+- **eBPFモード**: カーネルレベルのアクセスが必要なため、`sudo`での実行が必須です
+- **システムサイトパッケージ**: `python3-bpfcc`などのシステムパッケージにアクセスするため、仮想環境で`--system-site-packages`オプションを使用しています
+- **venvとシステムの整合性**: システム側のPythonパッケージと仮想環境を併用するため、Pythonバージョンの一致が重要です
 
-* `--gpu-driver <name>` or `AQUARIUM_GPU_DRIVER=<metal|opengl|direct3d|vulkan>` to hint SDL which backend to prefer.
-* `AQUARIUM_VSYNC=0` to disable vsync (defaults to `1`).
-* Resizing the GPU window now resizes the renderer and UI automatically.
+水族館のウィンドウが開き、システム上で動作しているプロセスが魚として表示されます。
 
-If the accelerated renderer fails to initialize (driver mismatch, unsupported GPU, etc.) the application automatically falls back to the classic software surface path.
+## 使い方
 
-## Japanese Font Hints (macOS / Linux / Windows)
+### 基本操作
 
-SDL_ttf relies on system fonts to render the on-screen statistics and IPC speech bubbles. もし日本語が豆腐（□）になってしまう場合は、環境変数で利用するフォントを明示してください。
+- **マウス**: 水族館内を自由に観察
+- **Esc**: アプリケーションを終了
+- **魚をクリック**: プロセス詳細情報を表示
+
+### コマンドラインオプション
 
 ```bash
-# 例: macOS でヒラギノ角ゴシックを使う場合
-export AQUARIUM_FONT_PATH="/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"
+# ウィンドウサイズを指定
+sudo ./.venv/bin/python3 main.py --source ebpf --width 1600 --height 1000
 
-# 例: 環境変数でフォント名を指定（pygame の SysFont 経由）
-export AQUARIUM_FONT_NAME="Hiragino Sans"
+# 表示するプロセス数を制限
+sudo ./.venv/bin/python3 main.py --source ebpf --limit 50
 
-python main.py --gpu
+# CPU使用率でソート（昇順）
+sudo ./.venv/bin/python3 main.py --source ebpf --sort-by cpu --sort-order asc
+
+# メモリ使用率でソート
+sudo ./.venv/bin/python3 main.py --source ebpf --sort-by memory
+
+# ヘッドレスモード（GUIなし、統計情報のみ）
+sudo ./.venv/bin/python3 main.py --source ebpf --headless --headless-interval 2.0
+
+# psutilモードで実行（root権限不要）
+./.venv/bin/python3 main.py --source psutil --limit 50
 ```
 
-優先順位は `AQUARIUM_FONT_PATH` → `AQUARIUM_FONT_NAME` → 既に検出済みのフォント → システム探索の順です。指定したパス／フォント名が見つからなかった場合は、自動的に他の候補を探し、最終的には pygame のデフォルトフォントにフォールバックしますが、この場合は日本語が表示されません。
+### 利用可能なオプション一覧
 
-## Adaptive Quality Modes (optional)
+| オプション | 説明 | デフォルト値 |
+|-----------|------|------------|
+| `--width` | ウィンドウの幅 | 1200 |
+| `--height` | ウィンドウの高さ | 800 |
+| `--limit` | 表示プロセス数の上限 | 制限なし |
+| `--sort-by` | ソート基準 (`cpu`, `memory`, `name`, `pid`) | `cpu` |
+| `--sort-order` | ソート順序 (`asc`, `desc`) | `desc` |
+| `--source` | データソース (`psutil`, `ebpf`) | `ebpf` |
+| `--headless` | ヘッドレスモード | false |
+| `--headless-interval` | ヘッドレス時の更新間隔（秒） | 1.0 |
 
-By default the aquarium now keeps the full visual experience and relies on faster neighbour searches plus CPU-side optimisations to stay responsive. If you prefer adaptive quality that reacts to FPS drops, enable it via environment variable or CLI:
+## 開発者向け情報
+
+### プロジェクト構造
+
+```
+process-aquarium/
+├── main.py                    # メインエントリーポイント
+├── pyproject.toml            # プロジェクト設定
+├── src/
+│   ├── core/                 # コア機能
+│   │   ├── process_manager.py # プロセス管理
+│   │   ├── sources.py        # データソース抽象化
+│   │   └── types.py          # 型定義
+│   └── visuals/              # 視覚化機能
+│       ├── aquarium.py       # メイン水族館クラス
+│       └── fish.py           # 魚の描画とアニメーション
+├── fork_bomb.py              # テスト用大量プロセス生成スクリプト
+└── README.md                 # このファイル
+```
+
+### テスト用ツール
+
+プロジェクトには大量のプロセスを生成してProcess Aquariumをテストするための `fork_bomb.py` が含まれています：
 
 ```bash
-export AQUARIUM_ENABLE_ADAPTIVE_QUALITY=1
-python main.py
-# or
-python main.py --adaptive-quality
+# 30個の子プロセスを生成（安全な範囲）
+python fork_bomb.py --max-children 30
+
+# 再帰的なプロセス生成（各子プロセスがさらに子を作る）
+python fork_bomb.py --recursive --max-children 20
+
+# 指定時間後に自動終了
+python fork_bomb.py --duration 60
 ```
 
-When enabled, the aquarium automatically downshifts visual complexity based on the rolling average FPS:
+⚠️ **注意**: `fork_bomb.py`は大量のシステムリソースを消費する可能性があります。テスト環境でのみ使用してください。
 
-| Render quality | Trigger (average FPS) | Changes |
-|----------------|-----------------------|---------|
-| `full`         | Above reduced threshold | All effects enabled (ripples, lightning, satellites, flocking). |
-| `reduced`      | ≤ reduced threshold     | Disables ripple/lightning effects and throttles neighbour searches. |
-| `minimal`      | ≤ minimal threshold     | Draws simple circles, skips flocking, and minimizes background particles. |
+### 依存関係
 
-Defaults assume a 30 FPS target: `reduced` engages at ~22.5 FPS (75% of target) and `minimal` at ~15 FPS (50%).
+- **numpy** (≥2.2.6): 数値計算
+- **psutil** (≥7.1.0): システム・プロセス情報取得
+- **pygame-ce** (≥2.5.2): グラフィック描画エンジン
+- **pytest** (≥8.4.2): テストフレームワーク
 
-You can override the thresholds via environment variables (interpreted as FPS; values between 0 and 1 are treated as a ratio of the target FPS):
+### 環境変数
+
+以下の環境変数で動作をカスタマイズできます：
 
 ```bash
-export AQUARIUM_QUALITY_REDUCED_FPS=22.5   # switch to reduced quality when FPS ≤ 22.5
-export AQUARIUM_QUALITY_MINIMAL_FPS=0.5    # drop to minimal when FPS ≤ 50% of target FPS
-export AQUARIUM_QUALITY_RECOVERY_MARGIN=3  # hysteresis in FPS before restoring higher quality
-python main.py --gpu
+export AQUARIUM_SOURCE="ebpf"              # データソース
+export AQUARIUM_LIMIT="100"                # プロセス表示数制限
+export AQUARIUM_SORT_BY="memory"           # ソート基準
+export AQUARIUM_SORT_ORDER="desc"          # ソート順序
 ```
 
-To force the classic full-quality rendering even when the environment enables the feature, run `python main.py --no-adaptive-quality`.
+## コントリビューション
 
-The active quality level (or “full (固定)” when the feature is disabled) is shown in the on-screen statistics panel (`描画品質`).
+Process Aquariumの改善にご協力いただける方を歓迎します！
 
-## Process Limiting and Sorting
+1. このリポジトリをフォーク
+2. 新しいブランチを作成 (`git checkout -b feature/amazing-feature`)
+3. 変更をコミット (`git commit -m 'Add some amazing feature'`)
+4. ブランチにプッシュ (`git push origin feature/amazing-feature`)
+5. プルリクエストを作成 (`dev`ブランチに対して)
 
-You can limit the number of processes displayed and sort them by various criteria:
+## ライセンス
 
-### Command-line Options
+このプロジェクトはMITライセンスの下で公開されています。詳細は[LICENSE](LICENSE)ファイルをご覧ください。
 
-```bash
-# Display top 20 processes by CPU usage
-python main.py --limit 20 --sort-by cpu --sort-order desc
+## 謝辞
 
-# Display top 10 processes by memory usage
-python main.py --limit 10 --sort-by memory --sort-order desc
+- **numpy**: 高性能な数値計算ライブラリ
+- **psutil**: システム情報取得ライブラリ
+- **pygame-ce**: グラフィック描画ライブラリ
 
-# Display processes sorted by name in ascending order
-python main.py --sort-by name --sort-order asc
+## サポート
 
-# Display top 50 processes by PID
-python main.py --limit 50 --sort-by pid
-```
+- **バグレポート**: [GitHub Issues](https://github.com/mouri-lab/process-aquarium/issues)
+- **機能リクエスト**: [GitHub Discussions](https://github.com/mouri-lab/process-aquarium/discussions)
+- **質問**: Issue またはDiscussionでお気軽にお尋ねください
 
-**Available options:**
-* `--limit N` - Limit the number of processes displayed (default: no limit)
-* `--sort-by {cpu,memory,name,pid}` - Sort processes by field (default: cpu)
-* `--sort-order {asc,desc}` - Sort order ascending or descending (default: desc)
+---
 
-### Runtime Keyboard Controls
-
-When running in GUI mode, you can dynamically change the display settings:
-
-* **L** - Cycle through process limits (None → 10 → 20 → 50 → 100 → 200 → None)
-* **S** - Cycle through sort fields (CPU → Memory → Name → PID → CPU)
-* **O** - Toggle sort order (ascending ↔ descending)
-
-The current limit and sort settings are displayed in the statistics panel in the upper left corner.
-
-### Use Cases
-
-* **Performance monitoring**: Display only the top N CPU or memory consumers
-* **Debugging**: Focus on specific processes by limiting the display
-* **Large systems**: Reduce visual clutter by showing only relevant processes
-
-## eBPF Source (Experimental)
-
-You can switch the backend from psutil polling to an experimental eBPF based
-event stream (Linux only):
-
-```
-pip install bcc   # if not installed; requires kernel headers & privileges
-sudo python main.py --source ebpf
-```
-
-Or via environment variable:
-
-```
-export AQUARIUM_SOURCE=ebpf
-python main.py
-```
-
-If eBPF initialization fails (missing bcc, insufficient privileges, unsupported
-kernel) the application automatically falls back to the psutil source and logs
-a warning.
-
-Currently captured via eBPF (MVP):
-* fork (as spawn + inferred fork relation)
-* exec
-* exit
-
-Planned additions:
-* Socket connect / accept
-* Unix / pipe IPC mapping
-* Hybrid enrichment: psutil metrics fused with eBPF lifecycle precision
-
-Security / Permissions:
-* Running under root or with CAP_BPF/CAP_SYS_ADMIN may be required depending on distro
-* For production, consider a minimal privileged sidecar emitting events over a UNIX socket
-
-Fallback Behavior:
-* Any failure during BPF load → logged lifecycle event (pid=0) + revert to psutil
-* Headless mode works the same: `--headless --source ebpf`
+**コンピューターの中で泳ぐプロセスたちを、美しい水族館で観察してみませんか？** 🐠✨
