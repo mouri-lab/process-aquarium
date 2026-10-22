@@ -985,3 +985,13 @@ button.setting-row:hover {
     opacity: 0.45;
   }
 }
+
+@media (max-width: 650px) {
+  label.setting-row > span:first-child {
+    flex-basis: 100%;
+  }
+  label.setting-row select {
+    width: 100%;
+    max-width: 100%;
+  }
+}

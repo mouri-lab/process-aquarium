@@ -118,7 +118,8 @@ export function drawUnderlay(ctx, world, camera, width, height, view) {
 }
 export function drawOverlay(ctx, world, camera, width, height, view) {
   view.bubbles = [];
-  const selected = world.selected();
+  const selected = world.selected(),
+    conversations = [];
   for (const f of world.fish.values()) {
     if (!visibleFish(f, camera, width, height)) continue;
     const p = projectedFish(f, camera, width, height),
@@ -138,24 +139,117 @@ export function drawOverlay(ctx, world, camera, width, height, view) {
       ctx.fillStyle = "#c8d8f2";
       ctx.fillText(`${f.p.name} · ${f.p.pid}`, p.x, p.y + size + 16);
     }
-    if (world.quality !== "minimal" && f.talk > 0 && f.message) {
-      ctx.font = "12px system-ui,sans-serif";
-      const w = ctx.measureText(f.message).width + 14,
-        h = 26;
-      const x = clamp(p.x - w / 2, 5, width - w - 5),
-        y = Math.max(5, p.y - h - 20);
-      ctx.fillStyle = "rgba(0,0,0,.7)";
-      ctx.beginPath();
-      ctx.roundRect(x, y, w, h, 8);
-      ctx.fill();
-      ctx.fillStyle = "rgba(255,255,255,.9)";
-      ctx.beginPath();
-      ctx.roundRect(x + 2, y + 2, w - 4, h - 4, 6);
-      ctx.fill();
-      ctx.fillStyle = "#000";
-      ctx.textAlign = "left";
-      ctx.fillText(f.message, x + 7, y + 17);
-      view.bubbles.push({ x, y, w, h, fish: f });
-    }
+    if (world.quality !== "minimal" && f.talk > 0 && f.message)
+      conversations.push({
+        fish: f,
+        x: p.x,
+        y: p.y,
+        size,
+        selected: f === selected,
+      });
   }
+  ctx.font = "11px system-ui,sans-serif";
+  view.bubbles = layoutConversations(
+    conversations,
+    width,
+    height,
+    (text) => ctx.measureText(text).width,
+  );
+  for (const b of view.bubbles) {
+    ctx.strokeStyle = "rgba(159,206,224,.2)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(b.x + b.w / 2, b.y + b.h);
+    ctx.lineTo(b.anchorX, b.anchorY);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(10,29,48,.9)";
+    ctx.beginPath();
+    ctx.roundRect(b.x, b.y, b.w, b.h, 4);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(149,193,214,.3)";
+    ctx.stroke();
+    ctx.fillStyle = "#93c9d5";
+    circle(ctx, b.x + 10, b.y + b.h / 2, 1.5);
+    ctx.fill();
+    ctx.fillStyle = "#b6cbd9";
+    ctx.textAlign = "left";
+    ctx.fillText(b.message, b.x + 18, b.y + 16);
+  }
+}
+export function layoutConversations(
+  candidates,
+  width,
+  height,
+  measure = (text) => text.length * 7,
+) {
+  const groups = new Map();
+  candidates.sort((a, b) => Number(b.selected) - Number(a.selected));
+  for (const candidate of candidates) {
+    const key = `${Math.floor(candidate.x / 90)},${Math.floor(candidate.y / 65)}`;
+    const group = groups.get(key) || {
+      ...candidate,
+      members: [],
+      partners: new Set(),
+    };
+    group.members.push(candidate.fish);
+    for (const pid of candidate.fish.partners) group.partners.add(pid);
+    groups.set(key, group);
+  }
+  const result = [];
+  const overlaps = (a, b) =>
+    a.x < b.x + b.w + 4 &&
+    a.x + a.w + 4 > b.x &&
+    a.y < b.y + b.h + 4 &&
+    a.y + a.h + 4 > b.y;
+  for (const group of groups.values()) {
+    const message =
+      group.members.length > 1
+        ? `通信中 · ${group.members.length}`
+        : group.fish.message;
+    const w = Math.max(74, measure(message) + 28),
+      h = 25;
+    let box = null;
+    for (const [ox, oy] of [
+      [0, 0],
+      [0, -32],
+      [w / 2 + 12, 0],
+      [-w / 2 - 12, 0],
+      [0, -64],
+    ]) {
+      const candidate = {
+        x: clamp(group.x - w / 2 + ox, 5, width - w - 5),
+        y: clamp(group.y - group.size - h - 12 + oy, 5, height - h - 5),
+        w,
+        h,
+      };
+      if (!result.some((b) => overlaps(candidate, b))) {
+        box = candidate;
+        break;
+      }
+    }
+    if (!box) {
+      // Dense schools share a single clickable conversation marker. Every
+      // partner remains discoverable through that marker and fish inspection.
+      const nearest = result.reduce((a, b) =>
+        Math.hypot(a.anchorX - group.x, a.anchorY - group.y) <
+        Math.hypot(b.anchorX - group.x, b.anchorY - group.y)
+          ? a
+          : b,
+      );
+      nearest.members.push(...group.members);
+      nearest.partners = [...new Set([...nearest.partners, ...group.partners])];
+      nearest.message = `通信中 · ${nearest.members.length}`;
+      continue;
+    }
+    result.push({
+      ...box,
+      message,
+      fish: group.fish,
+      members: group.members,
+      partners: [...group.partners],
+      anchorX: group.x,
+      anchorY: group.y - group.size * 0.5,
+    });
+  }
+  return result;
 }

@@ -12,6 +12,7 @@ const $ = (id) => document.getElementById(id);
 const world = new AquariumWorld();
 const menu = new AquariumMenu();
 let feedbackTimer;
+const processRows = new Map();
 function feedback(message) {
   clearTimeout(feedbackTimer);
   setText("feedback", message);
@@ -206,15 +207,15 @@ function updateEmpty() {
     setText(
       "empty-message",
       world.snapshot.processes.length
-        ? "No processes match this view. Try a different filter."
-        : "This host currently reports no processes.",
+        ? "表示するプロセスがありません。メニューから表示設定を確認できます。"
+        : "このホストから報告されているプロセスはありません。",
     );
   } else {
     setText(
       "empty-message",
       freshness.mode === "auth"
-        ? "Use Access to connect with your server token."
-        : "Connect an agent to bring this aquarium to life.",
+        ? "メニューの「接続」からアクセストークンを設定してください。"
+        : "エージェントが接続すると、プロセスが泳ぎ始めます。",
     );
   }
   setText(
@@ -233,11 +234,12 @@ function updateMetrics() {
       "metric-threads",
     ])
       setText(id, "—");
-    setText("visible-count", "waiting for telemetry");
+    setText("visible-count", "プロセスの到着を待っています");
+    processRows.clear();
     $("process-list").replaceChildren(
       Object.assign(document.createElement("p"), {
         className: "muted",
-        textContent: "Processes will appear here.",
+        textContent: "接続すると、ここから魚を探せます。",
       }),
     );
     updateDetails();
@@ -257,53 +259,78 @@ function updateMetrics() {
     "metric-threads",
     number.format(processes.reduce((sum, p) => sum + p.num_threads, 0)),
   );
-  const visible = selectedProcesses(snapshot, world.filters);
-  setText("visible-count", `${number.format(visible.length)} fish in view`);
-  stage.dataset.fishCount = String(visible.length);
+  const visible = selectedProcesses(snapshot, {
+    ...world.filters,
+    limit: 50,
+    search: $("search").value,
+  });
+  setText(
+    "visible-count",
+    `${number.format(visible.length)} 件${visible.length === 50 ? "まで表示" : ""}`,
+  );
+  stage.dataset.fishCount = String(
+    [...world.fish.values()].filter((f) => !f.dying).length,
+  );
   setText("source-label", `${snapshot.source} / ${snapshot.hostname}`);
   const labels = { cpu: "CPU", memory: "MEMORY", name: "NAME", pid: "PID" };
   setText(
     "list-label",
     `${labels[world.filters.sort]} · ${world.filters.order.toUpperCase()}`,
   );
-  const rows = visible.slice(0, 10).map((process) => {
-    const key = keyOf(snapshot, process),
-      button = document.createElement("button");
-    button.className = `process-row${key === world.selection ? " active" : ""}`;
-    const dot = Object.assign(document.createElement("span"), {
-      className: "color-dot",
-    });
-    dot.style.background = rgb(colorOf(process.name));
-    const name = Object.assign(document.createElement("span"), {
-      className: "process-name",
-      textContent: process.name,
-    });
-    const pid = Object.assign(document.createElement("span"), {
-      className: "process-pid",
-      textContent: process.pid,
-    });
-    const metric =
-      world.filters.sort === "memory"
-        ? percent(process.memory_percent)
-        : percent(process.cpu_percent);
-    const value = Object.assign(document.createElement("span"), {
-      className: "process-value",
-      textContent: metric,
-    });
-    button.append(dot, name, pid, value);
-    button.addEventListener("click", () => {
-      world.selection = key;
-      const fish = world.selected();
-      if (fish) {
+  const wanted = new Set();
+  const rows = visible.map((process) => {
+    const key = keyOf(snapshot, process);
+    wanted.add(key);
+    let row = processRows.get(key);
+    if (!row) {
+      const button = document.createElement("button");
+      const dot = Object.assign(document.createElement("span"), {
+        className: "color-dot",
+      });
+      const name = Object.assign(document.createElement("span"), {
+        className: "process-name",
+      });
+      const pid = Object.assign(document.createElement("span"), {
+        className: "process-pid",
+      });
+      const value = Object.assign(document.createElement("span"), {
+        className: "process-value",
+      });
+      button.append(dot, name, pid, value);
+      button.addEventListener("click", () => {
+        if (!world.focus(key)) return;
+        const fish = world.selected();
         camera.x = fish.x;
         camera.y = fish.y;
-      }
-      menu.close();
-      updateMetrics();
-    });
-    return button;
+        menu.close();
+        updateMetrics();
+      });
+      row = { button, dot, name, pid, value };
+      processRows.set(key, row);
+    }
+    row.button.className = `process-row${key === world.selection ? " active" : ""}`;
+    row.dot.style.background = rgb(colorOf(process.name));
+    row.name.textContent = process.name;
+    row.pid.textContent = process.pid;
+    row.value.textContent = percent(
+      world.filters.sort === "memory"
+        ? process.memory_percent
+        : process.cpu_percent,
+    );
+    return row.button;
   });
-  $("process-list").replaceChildren(...rows);
+  const container = $("process-list");
+  for (const [key, row] of processRows)
+    if (!wanted.has(key)) {
+      row.button.remove();
+      processRows.delete(key);
+    }
+  for (const child of [...container.children])
+    if (!rows.includes(child)) child.remove();
+  rows.forEach((row, i) => {
+    if (container.children[i] !== row)
+      container.insertBefore(row, container.children[i] || null);
+  });
   updateDetails();
   updateNotice();
 }
@@ -356,7 +383,6 @@ function updateDetails() {
 }
 function applyFilters() {
   world.setFilters({
-    search: $("search").value,
     sort: $("sort").value,
     limit: Number($("limit").value),
   });
@@ -402,6 +428,9 @@ $("forget-token").addEventListener("click", () => {
   $("auth-dialog").close();
   reconnect({ clear: true });
 });
+$("auth-dialog").addEventListener("close", () => {
+  if (!pending && !stopped) poll();
+});
 function togglePause() {
   paused = !paused;
   setText("pause-label", paused ? "泳ぎを再開" : "泳ぎを一時停止");
@@ -427,7 +456,7 @@ async function perform(action) {
     menu.close();
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
-      else await document.querySelector(".workspace").requestFullscreen();
+      else await document.documentElement.requestFullscreen();
     } catch (error) {
       setText("notice", `フルスクリーンを開始できません: ${error.message}`);
       $("notice").hidden = false;
@@ -541,7 +570,7 @@ stage.addEventListener("pointerup", (event) => {
         (b) => sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h,
       );
     if (bubble && drag.button === 0) {
-      world.highlighted = new Set(bubble.fish.partners);
+      world.highlighted = new Set(bubble.partners);
       world.selection = bubble.fish.key;
     } else {
       const old = world.selection;
@@ -687,6 +716,7 @@ window.addEventListener("pagehide", () => {
 window.addEventListener("pageshow", (event) => {
   if (event.persisted) location.reload();
 });
+setTimeout(() => ($("first-hint").hidden = true), 8000);
 syncControls();
 updateEmpty();
 poll();
