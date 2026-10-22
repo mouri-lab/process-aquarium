@@ -1059,3 +1059,119 @@ button.setting-row:hover {
   padding-top: 6px;
   padding-bottom: 6px;
 }
+
+/* The map is the scene itself: soft galaxies with quiet, keyboard-accessible names. */
+.galaxy-trigger {
+  left: auto;
+  right: 20px;
+}
+.galaxy-trigger > span:first-child {
+  font-size: 24px;
+  line-height: 1;
+}
+.galaxies {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.galaxy {
+  position: absolute;
+  pointer-events: auto;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: none;
+  padding: 0;
+  box-shadow: none;
+  color: #dee4da;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  outline-offset: 8px;
+  touch-action: manipulation;
+}
+.galaxy strong {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-shadow: 0 2px 12px #080d20;
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.galaxy strong::before {
+  content: "✧";
+  display: block;
+  font-size: 16px;
+  color: var(--galaxy-color);
+  margin-bottom: 5px;
+}
+.galaxy small {
+  font-size: 10px;
+  min-height: 18px;
+  color: #b0b9c7;
+  margin-top: 5px;
+}
+.galaxy:hover,
+.galaxy:focus-visible {
+  background: radial-gradient(ellipse, #c3d3e609, transparent 70%);
+  border-color: #c3d3e620;
+  color: #fff7da;
+}
+.map-hint {
+  position: absolute;
+  top: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #ccd0d9;
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-align: center;
+  pointer-events: none;
+  margin: 0;
+  white-space: nowrap;
+}
+.map-hint small {
+  display: block;
+  font-size: 10px;
+  color: #8d9eb2;
+  margin-top: 8px;
+  letter-spacing: 0.09em;
+}
+.galaxy-pages {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  color: #bcc7ce;
+  font-size: 12px;
+}
+.galaxy-pages button {
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  font-size: 20px;
+}
+[data-ui="2"] .galaxy-trigger {
+  opacity: 0;
+}
+[data-ui="2"] .galaxy-trigger:hover,
+[data-ui="2"] .galaxy-trigger:focus-visible {
+  opacity: 1;
+}
+@media (max-width: 620px) {
+  .map-hint {
+    top: 80px;
+    font-size: 11px;
+  }
+  .map-hint small {
+    display: none;
+  }
+  .galaxy-trigger {
+    right: 12px;
+  }
+}
