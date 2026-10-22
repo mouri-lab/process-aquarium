@@ -145,7 +145,6 @@ function activate(tank) {
   freshness = tank.freshness;
   $("search").value = tank.search;
   $("background").value = tank.background.kind;
-  $("day-cycle").checked = tank.background.clock === "local";
   $("host").value = hostId;
   processRows.clear();
   inspectedKey = null;
@@ -168,7 +167,6 @@ function populateHosts(hosts) {
       );
       if (saved && Object.hasOwn(BACKGROUNDS, saved.kind)) {
         tank.background.kind = saved.kind;
-        tank.background.clock = saved.clock === "local" ? "local" : "fixed";
       }
     } catch {}
   }
@@ -622,11 +620,6 @@ $("background").addEventListener("change", () => {
   if (activeTank) activeTank.background.kind = $("background").value;
   saveBackground();
 });
-$("day-cycle").addEventListener("change", () => {
-  if (activeTank)
-    activeTank.background.clock = $("day-cycle").checked ? "local" : "fixed";
-  saveBackground();
-});
 $("auth-button").addEventListener("click", () => showAuth());
 $("auth-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -939,7 +932,9 @@ function frame(now) {
   const dt = Math.min(elapsed, 0.1);
   if (moving) skyTime += dt * view.speed;
   const wasMoving = journey.moving;
-  journey.step(Math.min(elapsed, 0.1));
+  // Navigation uses elapsed wall time; a background tab must not resume a
+  // half-finished trip one simulation tick at a time.
+  journey.step(elapsed);
   if (wasMoving && !journey.moving) {
     updateEmpty();
     updateDetails();

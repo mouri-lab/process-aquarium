@@ -1,14 +1,15 @@
-import {test} from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
-import {backgroundFrame} from "../../web/backgrounds.mjs";
-test("background time is supplied explicitly and is independent of simulation time", () => {
+import { backgroundFrame } from "../../web/backgrounds.mjs";
+test("background providers receive separate simulation and wall clocks without changing the chosen background", () => {
   const tank = {
     sky: { seed: 1 },
     world: { quality: "full" },
-    background: { clock: "local", phase: 0.5 },
+    background: { kind: "dusk" },
   };
-  const wall = new Date(2026, 0, 1, 6, 0);
-  assert.equal(backgroundFrame(tank, {}, 100, 100, 0, wall).dayPhase, 0.25);
-  tank.background.clock = "fixed";
-  assert.equal(backgroundFrame(tank, {}, 100, 100, 200, wall).dayPhase, 0.5);
+  const wall = new Date(2026, 0, 1, 6, 0),
+    frame = backgroundFrame(tank, {}, 100, 100, 0, wall);
+  assert.equal(frame.time, 0);
+  assert.equal(frame.wallTime, wall.getTime());
+  assert.deepEqual(tank.background, { kind: "dusk" });
 });

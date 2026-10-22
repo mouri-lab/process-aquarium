@@ -35,16 +35,13 @@ export function backgroundFrame(tank, camera, width, height, time, wallTime) {
     height,
     time,
     quality: tank.world.quality,
-    // Explicit wall time allows #13 to evolve independently of swim/pause time.
-    dayPhase:
-      tank.background.clock === "local"
-        ? (wallTime.getHours() + wallTime.getMinutes() / 60) / 24
-        : tank.background.phase,
+    // Reserved for future time-dependent providers (#13/#14); current
+    // backgrounds keep their chosen palette regardless of wall time.
+    wallTime: wallTime.getTime(),
   };
 }
 function ocean(ctx, frame, palette) {
-  const { width: w, height: h, time, camera, quality, dayPhase } = frame;
-  const light = 0.72 + 0.28 * Math.cos((dayPhase - 0.5) * TAU);
+  const { width: w, height: h, time, camera, quality } = frame;
   const gradient = ctx.createLinearGradient(0, 0, 0, h);
   gradient.addColorStop(0, palette.top);
   gradient.addColorStop(1, palette.bottom);
@@ -65,8 +62,6 @@ function ocean(ctx, frame, palette) {
     ctx.fillRect(0, 0, w, h);
   }
   habitat(ctx, w, h, time, camera, quality);
-  ctx.fillStyle = `rgba(2,7,25,${1 - light})`;
-  ctx.fillRect(0, 0, w, h);
 }
 const providers = new Map(
   Object.entries(BACKGROUNDS).map(([id, p]) => [

@@ -39,8 +39,6 @@ export class Tank {
     this.sky = skyFor(this.id);
     this.background = {
       kind: ["kelp", "lagoon", "dusk"][this.sky.seed % 3],
-      clock: "fixed",
-      phase: 0.5,
     };
     this.freshness = { mode: "waiting", error: "", last: 0 };
     this.listed = false;
