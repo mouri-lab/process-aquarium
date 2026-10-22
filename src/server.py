@@ -24,6 +24,8 @@ STATIC_FILES = {
     "/menu.mjs": ("menu.mjs", "text/javascript; charset=utf-8"),
     "/fish.mjs": ("fish.mjs", "text/javascript; charset=utf-8"),
     "/geometry.mjs": ("geometry.mjs", "text/javascript; charset=utf-8"),
+    "/multiverse.mjs": ("multiverse.mjs", "text/javascript; charset=utf-8"),
+    "/backgrounds.mjs": ("backgrounds.mjs", "text/javascript; charset=utf-8"),
     "/effects.mjs": ("effects.mjs", "text/javascript; charset=utf-8"),
 }
 
