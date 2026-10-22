@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .telemetry import MAX_BODY_BYTES, ProtocolError, decode_json
+from .telemetry import MAX_BODY_BYTES, MAX_RESPONSE_BYTES, ProtocolError, decode_json
 
 
 class RemoteError(RuntimeError):
@@ -48,7 +48,7 @@ class APIClient:
         request = Request(self.server + path, data=body, headers=headers, method=method)
         try:
             with self._opener.open(request, timeout=self.timeout) as response:
-                return decode_json(response.read(MAX_BODY_BYTES + 1))
+                return decode_json(response.read(MAX_RESPONSE_BYTES + 1), limit=MAX_RESPONSE_BYTES)
         except HTTPError as exc:
             try:
                 error = decode_json(exc.read(8192)).get("error", exc.reason)

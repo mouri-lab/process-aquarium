@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 SCHEMA_VERSION = 1
 MAX_BODY_BYTES = 16 * 1024 * 1024
+MAX_RESPONSE_BYTES = MAX_BODY_BYTES + 1024 * 1024
 MAX_EVENTS = 2048
 MAX_PROCESSES = 50000
 
@@ -220,9 +221,9 @@ def snapshot_from_dict(value: Any) -> Snapshot:
     )
 
 
-def decode_json(payload: bytes) -> Any:
-    if len(payload) > MAX_BODY_BYTES:
-        raise ProtocolError("Request body exceeds 16 MiB")
+def decode_json(payload: bytes, *, limit: int = MAX_BODY_BYTES) -> Any:
+    if len(payload) > limit:
+        raise ProtocolError("JSON body exceeds the size limit")
     try:
         def reject_constant(value):
             raise ProtocolError(f"Non-finite JSON value: {value}")

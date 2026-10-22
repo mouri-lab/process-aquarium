@@ -1,5 +1,6 @@
 from dataclasses import replace
 import threading
+import json
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
@@ -7,6 +8,7 @@ import pytest
 
 from src.server import CapacityError, ConflictError, SnapshotStore, TelemetryHTTPServer
 from src.transport import APIClient, RemoteError
+from src.telemetry import MAX_BODY_BYTES
 from test_telemetry import process, sample
 
 
@@ -97,3 +99,17 @@ def test_non_utf8_process_names_survive_http_roundtrip(service):
     record = replace(process(), name="process-\udcff")
     client.request("POST", "/api/v1/snapshots", sample(processes=[record]).to_dict())
     assert client.request("GET", "/api/v1/snapshot?host=host-a")["snapshot"]["processes"][0]["name"] == record.name
+
+
+def test_near_limit_upload_can_be_downloaded_with_its_status_envelope(service):
+    _, client = service
+    args = ("x" * 16000,) * 1048
+    snapshot = sample(processes=[replace(process(), cmdline=args)])
+    current_size = len(json.dumps(snapshot.to_dict(), ensure_ascii=True, separators=(",", ":")).encode())
+    # Leave only 128 bytes in the upload budget. The GET status envelope adds
+    # more than that, but must not make an accepted snapshot unreadable.
+    args += ("x" * (MAX_BODY_BYTES - 128 - current_size - 3),)
+    payload = sample(processes=[replace(process(), cmdline=args)]).to_dict()
+    assert client.request("POST", "/api/v1/snapshots", payload)["accepted"]
+    result = client.request("GET", "/api/v1/snapshot?host=host-a")
+    assert tuple(result["snapshot"]["processes"][0]["cmdline"]) == args

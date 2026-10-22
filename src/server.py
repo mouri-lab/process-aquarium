@@ -138,7 +138,7 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         pass
 
     def _json(self, status, payload):
-        body = json.dumps(payload, ensure_ascii=True, allow_nan=False).encode("utf-8")
+        body = json.dumps(payload, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
