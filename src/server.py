@@ -20,6 +20,9 @@ STATIC_FILES = {
     "/app.mjs": ("app.mjs", "text/javascript; charset=utf-8"),
     "/world.mjs": ("world.mjs", "text/javascript; charset=utf-8"),
     "/renderer.mjs": ("renderer.mjs", "text/javascript; charset=utf-8"),
+    "/fish.mjs": ("fish.mjs", "text/javascript; charset=utf-8"),
+    "/geometry.mjs": ("geometry.mjs", "text/javascript; charset=utf-8"),
+    "/effects.mjs": ("effects.mjs", "text/javascript; charset=utf-8"),
 }
 
 

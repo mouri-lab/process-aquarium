@@ -96,3 +96,54 @@ fish.updateFish(fs[0],fs.slice(1));console.log(JSON.stringify({force,energy,moti
     assert actual["force"] == pytest.approx(native_force)
     assert actual["energy"] == pytest.approx(native_energy)
     assert actual["motion"] == pytest.approx([fishes[0].x, fishes[0].y, fishes[0].vx, fishes[0].vy])
+
+
+def test_all_seven_shape_primitives_match_pygame(monkeypatch):
+    import pygame
+    data, expected = [], []
+    surface = pygame.Surface((1200, 800), pygame.SRCALPHA)
+    calls = []
+
+    def ellipse(_, color, rect):
+        x, y, w, h = rect
+        calls.append(dict(type=0, points=[x+w/2, y+h/2, w/2, h/2, 0, 0]))
+
+    def polygon(_, color, points):
+        calls.append(dict(type=1, points=[v for point in points for v in point]))
+
+    def circle(_, color, center, radius):
+        calls.append(dict(type=0, points=[*center, radius, radius, 0, 0]))
+
+    monkeypatch.setattr(pygame.draw, "ellipse", ellipse)
+    monkeypatch.setattr(pygame.draw, "polygon", polygon)
+    monkeypatch.setattr(pygame.draw, "circle", circle)
+    for shape in ["fish", "shark", "tropical", "ray", "dolphin", "whale", "eel"]:
+        for angle in [0, .7, -2]:
+            calls.clear()
+            f = Fish(1, "test", 300, 400)
+            f.angle, f.tail_swing = angle, .4
+            length, width = 36, 18
+            if shape == "ray":
+                length, width = length*1.2, width*1.5
+            elif shape == "whale":
+                length, width = length*1.3, width*1.2
+            elif shape == "eel":
+                length, width = length*2, width*.4
+            method = "generic_fish" if shape == "fish" else "tropical_fish" if shape == "tropical" else shape
+            getattr(f, "_draw_"+method)(surface, (100, 150, 200), 255, length, width)
+            expected.append(list(calls))
+            data.append(dict(shape=shape, angle=angle))
+    actual = browser("""
+const {fishPrimitives}=await import('./web/geometry.mjs');
+console.log(JSON.stringify(data.map(c=>{
+const f=fish.makeFish('x',{name:'test',cpu_percent:0,memory_percent:0,num_threads:1},300,400,3072);
+Object.assign(f,{shape:c.shape,angle:c.angle,tail:.4,size:20,spawn:1});
+return fishPrimitives(f).map(({type,points})=>({type,points}));
+})));
+""", data)
+    for native, web in zip(expected, actual):
+        assert len(native) == len(web)
+        for a, b in zip(native, web):
+            assert a["type"] == b["type"]
+            # pygame Rect/circle raster coordinates truncate to integer pixels.
+            assert a["points"] == pytest.approx(b["points"], abs=1.1)
