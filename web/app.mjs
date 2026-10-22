@@ -1,12 +1,30 @@
+import { AquariumMenu } from "./menu.mjs";
 import { AquariumWorld, colorOf, keyOf, selectedProcesses } from "./world.mjs";
 import { CanvasRenderer, createRenderer, freshCanvas } from "./renderer.mjs";
-import {Camera,View,SHORTCUTS} from './controls.mjs';
-import {prepareCanvas,drawUnderlay,drawOverlay as paintOverlay} from './effects.mjs';
+import { Camera, View, SHORTCUTS } from "./controls.mjs";
+import {
+  prepareCanvas,
+  drawUnderlay,
+  drawOverlay as paintOverlay,
+} from "./effects.mjs";
 
 const $ = (id) => document.getElementById(id);
 const world = new AquariumWorld();
-const stage = $("stage"), overlay = $("overlay");
-const camera = new Camera(), view = new View();
+const menu = new AquariumMenu();
+let feedbackTimer;
+function feedback(message) {
+  clearTimeout(feedbackTimer);
+  setText("feedback", message);
+  $("feedback").classList.add("visible");
+  feedbackTimer = setTimeout(
+    () => $("feedback").classList.remove("visible"),
+    1800,
+  );
+}
+const stage = $("stage"),
+  overlay = $("overlay");
+const camera = new Camera(),
+  view = new View();
 const parameters = new URLSearchParams(location.search);
 let token = "",
   hostId = parameters.get("host") || "",
@@ -280,6 +298,7 @@ function updateMetrics() {
         camera.x = fish.x;
         camera.y = fish.y;
       }
+      menu.close();
       updateMetrics();
     });
     return button;
@@ -290,11 +309,12 @@ function updateMetrics() {
 }
 function updateDetails() {
   const fish = world.selected();
+  $("inspection").hidden = !fish;
   $("details").hidden = !fish;
   $("inspect-empty").hidden = Boolean(fish);
   $("clear-selection").hidden = !fish;
   $("follow").disabled = !fish;
-  following = camera.mode===1;
+  following = camera.mode === 1;
   $("follow").setAttribute("aria-pressed", String(following));
   if (!fish) return;
   const p = fish.p;
@@ -305,11 +325,24 @@ function updateDetails() {
   setText("detail-ppid", p.ppid);
   setText("detail-cpu", percent(p.cpu_percent));
   setText("detail-memory", percent(p.memory_percent));
+  $("cpu-fill").style.width = `${Math.max(0, Math.min(100, p.cpu_percent))}%`;
+  $("memory-fill").style.width =
+    `${Math.max(0, Math.min(100, p.memory_percent))}%`;
   setText("detail-threads", p.num_threads);
-  setText('detail-age',`${fish.age} フレーム (${(fish.age/30).toFixed(1)} 秒)`);
-  setText('detail-school',fish.isolatedSchool?'孤立プロセス群':fish.school.length>1?`${fish.school.length} 匹 · リーダー PID ${Math.min(...fish.school)}`:'単独');
-  setText('detail-shape',fish.shape);
-  setText('detail-partners',fish.partners.join(', ')||'—');
+  setText(
+    "detail-age",
+    `${fish.age} フレーム (${(fish.age / 30).toFixed(1)} 秒)`,
+  );
+  setText(
+    "detail-school",
+    fish.isolatedSchool
+      ? "孤立プロセス群"
+      : fish.school.length > 1
+        ? `${fish.school.length} 匹 · リーダー PID ${Math.min(...fish.school)}`
+        : "単独",
+  );
+  setText("detail-shape", fish.shape);
+  setText("detail-partners", fish.partners.join(", ") || "—");
   setText(
     "detail-started",
     p.create_time
@@ -371,7 +404,8 @@ $("forget-token").addEventListener("click", () => {
 });
 function togglePause() {
   paused = !paused;
-  setText("pause", paused ? "▶" : "Ⅱ");
+  setText("pause-label", paused ? "泳ぎを再開" : "泳ぎを一時停止");
+  $("paused-indicator").hidden = !paused;
   $("pause").setAttribute(
     "aria-label",
     paused ? "Resume movement" : "Pause movement",
@@ -383,29 +417,89 @@ if (paused) {
   paused = false;
   togglePause();
 }
-function resetCamera(){camera.reset();syncControls();}
-async function perform(action){
-  if(action==='pause')togglePause();
-  else if(action==='fullscreen'){
-    try{if(document.fullscreenElement)await document.exitFullscreen();else await document.querySelector('.workspace').requestFullscreen();}
-    catch(error){setText('notice',`フルスクリーンを開始できません: ${error.message}`);$('notice').hidden=false;}
-  }else view.action(action,world,camera);
-  syncControls();updateMetrics();updateEmpty();
+function resetCamera() {
+  camera.reset();
+  syncControls();
 }
-function syncControls(){
-  document.documentElement.dataset.ui=String(view.ui);
-  $('sort').value=world.filters.sort;$('limit').value=String(world.filters.limit);
-  setText('order',world.filters.order==='desc'?'↓':'↑');
-  for(const [id,value] of [['debug',view.debug],['ipc',view.ipc],['schools',world.highlightSchools],['labels',view.labels]])$(id).setAttribute('aria-pressed',String(value));
-  $('camera-mode').value=String(camera.mode);following=camera.mode===1;
-  $('follow').setAttribute('aria-pressed',String(following));
+async function perform(action) {
+  if (action === "pause") togglePause();
+  else if (action === "fullscreen") {
+    menu.close();
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.querySelector(".workspace").requestFullscreen();
+    } catch (error) {
+      setText("notice", `フルスクリーンを開始できません: ${error.message}`);
+      $("notice").hidden = false;
+    }
+  } else view.action(action, world, camera);
+  syncControls();
+  updateMetrics();
+  updateEmpty();
+  const messages = {
+    debug: `親子のつながり ${view.debug ? "ON" : "OFF"}`,
+    ipc: `通信の流れ ${view.ipc ? "ON" : "OFF"}`,
+    schools: `群れの強調 ${world.highlightSchools ? "ON" : "OFF"}`,
+    reset: "視点をリセット",
+    camera: ["自動センタリング", "選択した魚を追従", "自由に移動"][camera.mode],
+    limit: `表示 ${world.filters.limit || "無制限"}`,
+    sort: `ソート ${world.filters.sort}`,
+    order: world.filters.order === "desc" ? "降順" : "昇順",
+    ui: ["通常", "静かな水槽", "没入モード"][view.ui],
+    labels: `名前 ${view.labels ? "ON" : "OFF"}`,
+    preset: "表示プリセットを切替",
+  };
+  if (messages[action]) feedback(messages[action]);
 }
-for(const action of ['debug','ipc','schools','ui','fullscreen','labels'])$(action).addEventListener('click',()=>perform(action));
-$('reset').addEventListener('click',resetCamera);
-$('camera-mode').addEventListener('change',()=>{camera.mode=Number($('camera-mode').value);camera.followKey=null;syncControls();});
-$('quality').addEventListener('change',()=>{view.quality=$('quality').value;});
-$('follow').addEventListener('click',()=>{if(camera.mode===1)camera.manual();else camera.follow(world.selection);syncControls();});
-$('clear-selection').addEventListener('click',()=>perform('escape'));
+function syncControls() {
+  document.documentElement.dataset.ui = String(view.ui);
+  setText(
+    "ui-mode-label",
+    [
+      "通常 · 選択時だけ詳細を表示",
+      "静かな水槽 · 詳細とヒントを隠す",
+      "没入モード · 水槽だけを表示",
+    ][view.ui],
+  );
+  $("sort").value = world.filters.sort;
+  $("limit").value = String(world.filters.limit);
+  setText("order", world.filters.order === "desc" ? "↓" : "↑");
+  for (const [id, value] of [
+    ["debug", view.debug],
+    ["ipc", view.ipc],
+    ["schools", world.highlightSchools],
+    ["labels", view.labels],
+  ])
+    $(id).setAttribute("aria-pressed", String(value));
+  $("camera-mode").value = String(camera.mode);
+  following = camera.mode === 1;
+  $("follow").setAttribute("aria-pressed", String(following));
+}
+for (const action of ["debug", "ipc", "schools", "ui", "fullscreen", "labels"])
+  $(action).addEventListener("click", () => perform(action));
+$("reset").addEventListener("click", resetCamera);
+$("camera-mode").addEventListener("change", () => {
+  camera.mode = Number($("camera-mode").value);
+  camera.followKey = null;
+  syncControls();
+});
+$("quality").addEventListener("change", () => {
+  view.quality = $("quality").value;
+});
+$("follow").addEventListener("click", () => {
+  if (camera.mode === 1) camera.manual();
+  else camera.follow(world.selection);
+  syncControls();
+});
+$("clear-selection").addEventListener("click", () => perform("escape"));
+document.addEventListener("fullscreenchange", () => {
+  const active = Boolean(document.fullscreenElement);
+  $("fullscreen").setAttribute("aria-pressed", String(active));
+  setText(
+    "fullscreen-label",
+    active ? "フルスクリーンを終了" : "フルスクリーン",
+  );
+});
 let drag = null;
 stage.addEventListener("pointerdown", (event) => {
   if (event.button !== 0 && event.button !== 2) return;
@@ -415,7 +509,7 @@ stage.addEventListener("pointerdown", (event) => {
     cx: camera.x,
     cy: camera.y,
     moved: false,
-    button:event.button,
+    button: event.button,
   };
   stage.setPointerCapture(event.pointerId);
 });
@@ -425,7 +519,9 @@ stage.addEventListener("pointermove", (event) => {
     dy = event.clientY - drag.y;
   if (Math.hypot(dx, dy) > 4) {
     drag.moved = true;
-    following = false;camera.manual();syncControls();
+    following = false;
+    camera.manual();
+    syncControls();
   }
   if (drag.moved) {
     camera.x = drag.cx - dx / camera.zoom;
@@ -435,21 +531,38 @@ stage.addEventListener("pointermove", (event) => {
 stage.addEventListener("pointerup", (event) => {
   if (!drag) return;
   if (!drag.moved) {
-    const rect=stage.getBoundingClientRect(),sx=event.clientX-rect.left,sy=event.clientY-rect.top;
-    const bubble=view.bubbles.slice().reverse().find(b=>sx>=b.x&&sx<=b.x+b.w&&sy>=b.y&&sy<=b.y+b.h);
-    if(bubble&&drag.button===0){world.highlighted=new Set(bubble.fish.partners);world.selection=bubble.fish.key;}
-    else{
-      const old=world.selection;
-      const key=world.pick((sx-rect.width/2)/camera.zoom+camera.x,(sy-rect.height/2)/camera.zoom+camera.y,24/camera.zoom);
+    const rect = stage.getBoundingClientRect(),
+      sx = event.clientX - rect.left,
+      sy = event.clientY - rect.top;
+    const bubble = view.bubbles
+      .slice()
+      .reverse()
+      .find(
+        (b) => sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h,
+      );
+    if (bubble && drag.button === 0) {
+      world.highlighted = new Set(bubble.fish.partners);
+      world.selection = bubble.fish.key;
+    } else {
+      const old = world.selection;
+      const key = world.pick(
+        (sx - rect.width / 2) / camera.zoom + camera.x,
+        (sy - rect.height / 2) / camera.zoom + camera.y,
+        24 / camera.zoom,
+      );
       world.highlighted.clear();
-      if(drag.button===2){camera.follow(key);world.selection=old;}
+      if (drag.button === 2) {
+        camera.follow(key);
+        world.selection = old;
+      }
     }
-    syncControls();updateMetrics();
+    syncControls();
+    updateMetrics();
   }
   drag = null;
   updateDetails();
 });
-stage.addEventListener('contextmenu',event=>event.preventDefault());
+stage.addEventListener("contextmenu", (event) => event.preventDefault());
 stage.addEventListener("pointercancel", () => {
   drag = null;
 });
@@ -461,26 +574,49 @@ stage.addEventListener(
     const rect = stage.getBoundingClientRect(),
       x = event.clientX - rect.left - rect.width / 2,
       y = event.clientY - rect.top - rect.height / 2;
-    camera.zoomAt(x,y,Math.exp(-event.deltaY*.001));
+    camera.zoomAt(x, y, Math.exp(-event.deltaY * 0.001));
   },
   { passive: false },
 );
-window.addEventListener('keydown',event=>{
-  if(event.ctrlKey||event.metaKey||event.altKey||event.repeat)return;
-  if(event.target.closest('input,select,textarea,dialog'))return;
-  const action=SHORTCUTS[event.key]||SHORTCUTS[event.key.toLowerCase()];
-  if(action){event.preventDefault();perform(action);}
+window.addEventListener("keydown", (event) => {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+  if (event.target.closest("input,select,textarea,dialog")) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    if (world.selection) perform("escape");
+    else menu.open();
+    return;
+  }
+  if (event.key === "/" || event.key === "?") {
+    event.preventDefault();
+    menu.open(event.key === "/" ? "processes" : "help");
+    return;
+  }
+  if (event.target.closest("button") && event.key === " ") return;
+  const action = SHORTCUTS[event.key] || SHORTCUTS[event.key.toLowerCase()];
+  if (action) {
+    event.preventDefault();
+    perform(action);
+  }
 });
-function drawOverlay(width,height){
-  const under=prepareCanvas($('underlay'),width,height);
-  drawUnderlay(under,world,camera,width,height,view);
-  const ctx=prepareCanvas(overlay,width,height);
-  paintOverlay(ctx,world,camera,width,height,view);
-  if(view.ui!==2&&world.snapshot){
-    const visible=[...world.fish.values()].filter(f=>!f.dying);
-    const mean=visible.reduce((n,f)=>n+f.p.cpu_percent,0)/Math.max(1,visible.length);
-    setText('compact-stats',`プロセス ${world.processes.size} / 魚 ${visible.length} · 平均CPU ${mean.toFixed(2)}% · ${Math.round(fps)} fps · ${world.quality}`);
-    setText('camera-info',`${['自動センタリング','追従','手動'][camera.mode]} · (${camera.x.toFixed(0)}, ${camera.y.toFixed(0)}) · ${camera.zoom.toFixed(2)}×`);
+function drawOverlay(width, height) {
+  const under = prepareCanvas($("underlay"), width, height);
+  drawUnderlay(under, world, camera, width, height, view);
+  const ctx = prepareCanvas(overlay, width, height);
+  paintOverlay(ctx, world, camera, width, height, view);
+  if (view.ui !== 2 && world.snapshot) {
+    const visible = [...world.fish.values()].filter((f) => !f.dying);
+    const mean =
+      visible.reduce((n, f) => n + f.p.cpu_percent, 0) /
+      Math.max(1, visible.length);
+    setText(
+      "compact-stats",
+      `プロセス ${world.processes.size} / 魚 ${visible.length} · 平均CPU ${mean.toFixed(2)}% · ${Math.round(fps)} fps · ${world.quality}`,
+    );
+    setText(
+      "camera-info",
+      `${["自動センタリング", "追従", "手動"][camera.mode]} · (${camera.x.toFixed(0)}, ${camera.y.toFixed(0)}) · ${camera.zoom.toFixed(2)}×`,
+    );
   }
 }
 function rendererLabel() {
@@ -504,11 +640,15 @@ function frame(now) {
   const elapsed = (now - lastFrame) / 1000;
   lastFrame = now;
   if (elapsed > 0) fps = fps * 0.95 + Math.min(120, 1 / elapsed) * 0.05;
-  if (!paused) world.step(elapsed);
-  camera.update(world,elapsed);
-  view.adapt(fps,elapsed,world);
-  const width=stage.clientWidth,height=stage.clientHeight;
-  if(world.width!==width||world.height!==height)world.resize(width,height);
+  if (!paused && !menu.visible && !$("auth-dialog").open) world.step(elapsed);
+  const oldMode = camera.mode;
+  if (!menu.visible) camera.update(world, elapsed);
+  if (camera.mode !== oldMode) syncControls();
+  view.adapt(fps, elapsed, world);
+  const width = stage.clientWidth,
+    height = stage.clientHeight;
+  if (world.width !== width || world.height !== height)
+    world.resize(width, height);
   if (renderer && width && height) {
     try {
       renderer.render(world, camera, width, height);
@@ -526,8 +666,13 @@ function frame(now) {
         ? `${Math.floor((now - freshness.last) / 1000)}s since update`
         : "No samples",
     );
-    const counters=world.snapshot?.event_stats||{};
-    setText('event-stats',Object.entries(counters).map(([k,v])=>`${k}: ${v}`).join(' · ')||'—');
+    const counters = world.snapshot?.event_stats || {};
+    setText(
+      "event-stats",
+      Object.entries(counters)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(" · ") || "—",
+    );
     updateDetails();
     lastMetrics = now;
   }
