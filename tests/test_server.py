@@ -7,7 +7,7 @@ import pytest
 
 from src.server import CapacityError, ConflictError, SnapshotStore, TelemetryHTTPServer
 from src.transport import APIClient, RemoteError
-from test_telemetry import sample
+from test_telemetry import process, sample
 
 
 @pytest.fixture
@@ -90,3 +90,10 @@ def test_duplicate_and_conflicting_http_revisions(service):
     with pytest.raises(RemoteError) as exc:
         client.request("POST", "/api/v1/snapshots", sample(sequence=1).to_dict())
     assert exc.value.status == 409
+
+
+def test_non_utf8_process_names_survive_http_roundtrip(service):
+    _, client = service
+    record = replace(process(), name="process-\udcff")
+    client.request("POST", "/api/v1/snapshots", sample(processes=[record]).to_dict())
+    assert client.request("GET", "/api/v1/snapshot?host=host-a")["snapshot"]["processes"][0]["name"] == record.name

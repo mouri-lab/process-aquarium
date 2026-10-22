@@ -38,7 +38,7 @@ class APIClient:
         headers = {"Accept": "application/json"}
         body = None
         if payload is not None:
-            body = json.dumps(payload, ensure_ascii=False, allow_nan=False,
+            body = json.dumps(payload, ensure_ascii=True, allow_nan=False,
                               separators=(",", ":")).encode("utf-8")
             if len(body) > MAX_BODY_BYTES:
                 raise ProtocolError("Request body exceeds 16 MiB")

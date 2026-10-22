@@ -77,7 +77,8 @@ class Snapshot:
         return {"schema_version": SCHEMA_VERSION, **asdict(self)}
 
     def to_bytes(self) -> bytes:
-        return json.dumps(self.to_dict(), ensure_ascii=False, allow_nan=False,
+        # psutil can return surrogate-escaped OS strings for non-UTF-8 argv.
+        return json.dumps(self.to_dict(), ensure_ascii=True, allow_nan=False,
                           separators=(",", ":")).encode("utf-8")
 
 
@@ -115,7 +116,7 @@ def _number(value: Any, name: str) -> float:
 
 def _identifier(value: Any, name: str) -> str:
     value = _text(value, name, nonempty=True)
-    if len(value) > 128:
+    if len(value) > 128 or any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in value):
         raise ProtocolError(f"{name} must be at most 128 characters")
     return value
 

@@ -125,7 +125,7 @@ def _run_agent(args, parser):
         parser.error(str(exc))
     try:
         Agent(source, client, interval=min(args.interval, 1.0)).run()
-    except RuntimeError as exc:
+    except (ValueError, RuntimeError) as exc:
         parser.exit(1, f"{exc}\n")
     finally:
         source.shutdown()

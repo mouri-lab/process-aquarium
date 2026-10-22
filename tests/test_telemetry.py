@@ -70,3 +70,9 @@ def test_numeric_overflow_and_deep_metadata_are_rejected():
     snapshot = sample(events=(LifecycleEvent("exec", 42, 1, 100, details, 1),))
     with pytest.raises(ProtocolError, match="deeply"):
         snapshot_from_bytes(snapshot.to_bytes())
+
+
+def test_non_utf8_os_strings_survive_telemetry_encoding():
+    record = replace(process(), name="worker-\udcff", cmdline=("worker", "argument-\udcff"))
+    snapshot = sample(processes=[record])
+    assert snapshot_from_bytes(snapshot.to_bytes()) == snapshot
