@@ -5,9 +5,7 @@ import {prepareCanvas,drawUnderlay,drawOverlay as paintOverlay} from './effects.
 
 const $ = (id) => document.getElementById(id);
 const world = new AquariumWorld();
-const stage = $("stage"),
-  overlay = $("overlay"),
-  overlayContext = overlay.getContext("2d");
+const stage = $("stage"), overlay = $("overlay");
 const camera = new Camera(), view = new View();
 const parameters = new URLSearchParams(location.search);
 let token = "",
@@ -28,7 +26,6 @@ let timer,
   lastFrame = performance.now(),
   fps = 60,
   lastMetrics = 0;
-let labelKeys = [];
 const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const percent = (value) => `${number.format(value)}%`;
 const rgb = (color) =>
@@ -64,12 +61,6 @@ function updateNotice() {
       "Telemetry is stale. Showing the last known state; no process exits are inferred.";
   else if (world.eventsLost)
     message = `${number.format(world.eventsLost)} lifecycle events fell outside the replay window. Current process state is synchronized.`;
-  else if (
-    world.snapshot?.processes.length > 10000 &&
-    world.filters.limit === 0
-  )
-    message =
-      "Showing up to 10,000 fish. All process metrics remain available in the API.";
   $("notice").hidden = !message;
   setText("notice", message);
 }
@@ -216,7 +207,6 @@ function updateEmpty() {
 function updateMetrics() {
   const snapshot = world.snapshot;
   if (!snapshot) {
-    labelKeys = [];
     setText("source-label", "PROCESS AQUARIUM");
     for (const id of [
       "metric-processes",
@@ -250,11 +240,6 @@ function updateMetrics() {
     number.format(processes.reduce((sum, p) => sum + p.num_threads, 0)),
   );
   const visible = selectedProcesses(snapshot, world.filters);
-  labelKeys = visible
-    .slice()
-    .sort((a, b) => b.cpu_percent - a.cpu_percent)
-    .slice(0, 6)
-    .map((p) => keyOf(snapshot, p));
   setText("visible-count", `${number.format(visible.length)} fish in view`);
   stage.dataset.fishCount = String(visible.length);
   setText("source-label", `${snapshot.source} / ${snapshot.hostname}`);
@@ -520,7 +505,6 @@ function frame(now) {
   lastFrame = now;
   if (elapsed > 0) fps = fps * 0.95 + Math.min(120, 1 / elapsed) * 0.05;
   if (!paused) world.step(elapsed);
-  const selected = world.selected();
   camera.update(world,elapsed);
   view.adapt(fps,elapsed,world);
   const width=stage.clientWidth,height=stage.clientHeight;

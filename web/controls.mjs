@@ -4,13 +4,17 @@ export const SORTS=['cpu','memory','name','pid'];
 export const SHORTCUTS={d:'debug',i:'ipc',t:'ui',q:'schools',f:'fullscreen',F11:'fullscreen',l:'limit',s:'sort',o:'order',c:'camera',r:'reset',m:'preset',' ':'pause',Escape:'escape'};
 export class Camera {
   constructor(){this.reset();}
-  reset(){this.x=0;this.y=0;this.zoom=1;this.mode=0;this.followKey=null;}
-  manual(){this.mode=2;this.followKey=null;}
+  reset(){this.x=0;this.y=0;this.zoom=1;this.mode=0;this.followKey=null;this.lastFollowKey=null;}
+  manual(){this.mode=2;this.followKey=null;this.lastFollowKey=null;}
   follow(key){this.followKey=key;this.mode=key?1:2;}
   update(world,dt){
     let target=null,factor=.01;
     if(this.mode===0&&world.fish.size){const fs=[...world.fish.values()];target={x:fs.reduce((s,f)=>s+f.x,0)/fs.length,y:fs.reduce((s,f)=>s+f.y,0)/fs.length};}
-    else if(this.mode===1){target=this.followKey?world.fish.get(this.followKey):world.selected();factor=.08;if(this.followKey&&!target)this.followKey=null;}
+    else if(this.mode===1){
+      target=this.followKey?world.fish.get(this.followKey):world.selected();factor=.08;
+      if(target)this.lastFollowKey=target.key;
+      else if(this.lastFollowKey){this.mode=0;this.followKey=null;this.lastFollowKey=null;}
+    }
     if(target){const lerp=1-(1-factor)**(Math.max(0,Math.min(dt,.25))*30);this.x+=(target.x-this.x)*lerp;this.y+=(target.y-this.y)*lerp;}
   }
   zoomAt(x,y,factor){const next=clamp(this.zoom*factor,.1,5);this.x+=x/this.zoom-x/next;this.y+=y/this.zoom-y/next;this.zoom=next;}

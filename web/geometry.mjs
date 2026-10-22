@@ -48,3 +48,14 @@ export function visibleFish(f,camera,width,height) {
   const margin=appearance(f).size*camera.zoom*7+30;
   return x>-margin&&x<width+margin&&y>-margin&&y<height+margin;
 }
+// pygame rasterizes degenerate polygons as hairlines. GPU triangles with
+// zero area disappear, so preserve those native tail/fin strokes explicitly.
+export function rasterPrimitive(shape) {
+  if(shape.type!==1)return shape;
+  const p=shape.points;
+  if(Math.abs((p[2]-p[0])*(p[5]-p[1])-(p[3]-p[1])*(p[4]-p[0]))>1e-6)return shape;
+  const pairs=[[0,2],[0,4],[2,4]].sort(([a,b],[c,d])=>
+    Math.hypot(p[d]-p[c],p[d+1]-p[c+1])-Math.hypot(p[b]-p[a],p[b+1]-p[a+1]));
+  const [a,b]=pairs[0];
+  return {type:2,points:[p[a],p[a+1],p[b],p[b+1],1,0],color:shape.color};
+}

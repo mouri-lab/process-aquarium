@@ -1,6 +1,6 @@
 // Pure client model: no DOM or GPU dependency. Complete host state precedes
 // display selection; network failures never enter the reconciliation path.
-export const MAX_VISIBLE = 10000;
+export const MAX_VISIBLE = 50000;
 export const keyOf = (snapshot, p) =>
   JSON.stringify([snapshot.host_id, snapshot.boot_id, p.pid, p.create_time]);
 import { hash, colorOf, makeFish, updateMetrics, updateFish, worldSize, TAU } from './fish.mjs';
@@ -193,17 +193,19 @@ export class AquariumWorld {
     let dying = [...this.fish.values()].filter((f) => f.dying);
     for (const fish of dying.slice(0, Math.max(0, dying.length - 1000)))
       this.fish.delete(fish.key);
+    const parents=this.byPid();
     for (const [key, p] of visible) {
       let fish = this.fish.get(key);
       if (!fish) {
         const seed=hash(key), angle=seed/2**32*TAU;
         const radius=100+(hash(key+'r')%1000)/1000*Math.max(0,Math.min(this.extent*.6,600)-100);
-        const parent=[...this.fish.values()].find(f=>!f.dying&&f.p.pid===p.ppid);
+        const parent=parents.get(p.ppid);
         const x=parent?parent.x+(hash(key+'x')%101)-50:Math.cos(angle)*radius;
         const y=parent?parent.y+(hash(key+'y')%101)-50:Math.sin(angle)*radius;
         fish=makeFish(key,p,x,y,this.extent);
         if(parent&&!previous.has(key))parent.fork=60;
         this.fish.set(key,fish);
+        parents.set(p.pid,fish);
       }
       updateMetrics(fish,p);
       fish.dying=false;

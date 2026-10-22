@@ -1,4 +1,4 @@
-import {fishPrimitives, projectedFish, visibleFish} from './geometry.mjs';
+import {fishPrimitives, projectedFish, visibleFish,rasterPrimitive} from './geometry.mjs';
 const shader = /* wgsl */ `
 struct Globals { viewport: vec2f, camera: vec2f, zoom: f32, time: f32, padding: vec2f }
 struct Primitive { a: vec4f, b: vec4f, color: vec4f }
@@ -10,7 +10,8 @@ struct Output { @builtin(position) position: vec4f, @location(0) uv: vec2f,
   let p=instances[index];
   let corners=array<vec2f,6>(vec2f(-1,-1),vec2f(1,-1),vec2f(1,1),vec2f(-1,-1),vec2f(1,1),vec2f(-1,1));
   var pixel=p.a.xy+corners[vertex]*p.a.zw;
-  if(p.b.z>0.5){let indices=array<u32,6>(0,1,2,2,2,2);let points=array<vec2f,3>(p.a.xy,p.a.zw,p.b.xy);pixel=points[indices[vertex]];}
+  if(p.b.z>1.5){let delta=p.a.zw-p.a.xy;let len=max(length(delta),.001);let direction=delta/len;pixel=(p.a.xy+p.a.zw)*.5+direction*corners[vertex].x*(len*.5)+vec2f(-direction.y,direction.x)*corners[vertex].y*.75;}
+  else if(p.b.z>0.5){let indices=array<u32,6>(0,1,2,2,2,2);let points=array<vec2f,3>(p.a.xy,p.a.zw,p.b.xy);pixel=points[indices[vertex]];}
   var output:Output;
   output.position=vec4f(pixel/globals.viewport*vec2f(2,-2)+vec2f(-1,1),0,1);
   output.uv=corners[vertex];output.color=p.color;output.kind=p.b.z;
@@ -18,14 +19,17 @@ struct Output { @builtin(position) position: vec4f, @location(0) uv: vec2f,
 }
 @fragment fn fragmentMain(input:Output)->@location(0) vec4f {
   var alpha=input.color.a;
-  if(input.kind<.5){let d=length(input.uv);let edge=max(fwidth(d),.001);alpha*=1-smoothstep(1-edge,1+edge,d);}
+  let d=length(input.uv);let edge=max(fwidth(d),.001);
+  let lineEdge=max(fwidth(input.uv.y),.001);
+  if(input.kind<.5){alpha*=1-smoothstep(1-edge,1+edge,d);}
+  if(input.kind>1.5){alpha*=1-smoothstep(.5-lineEdge,.5+lineEdge,abs(input.uv.y));}
   return vec4f(input.color.rgb,alpha);
 }
 `;
 function primitives(world,camera,width,height){
   const result=[];
   for(const fish of world.fish.values())if(visibleFish(fish,camera,width,height))
-    result.push(...fishPrimitives(projectedFish(fish,camera,width,height),camera.zoom,world.highlightSchools,world.quality));
+    result.push(...fishPrimitives(projectedFish(fish,camera,width,height),camera.zoom,world.highlightSchools,world.quality).map(rasterPrimitive));
   return result;
 }
 
@@ -205,6 +209,7 @@ export class CanvasRenderer {
       ctx.beginPath();
       const p=shape.points;
       if(shape.type===0)ctx.ellipse(p[0],p[1],p[2],p[3],0,0,Math.PI*2);
+      else if(shape.type===2){ctx.moveTo(p[0],p[1]);ctx.lineTo(p[2],p[3]);ctx.strokeStyle=ctx.fillStyle;ctx.lineWidth=1;ctx.stroke();continue;}
       else{ctx.moveTo(p[0],p[1]);ctx.lineTo(p[2],p[3]);ctx.lineTo(p[4],p[5]);ctx.closePath();}
       ctx.fill();
     }
