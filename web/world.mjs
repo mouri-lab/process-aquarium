@@ -5,6 +5,11 @@ export const keyOf = (snapshot, p) =>
   JSON.stringify([snapshot.host_id, snapshot.boot_id, p.pid, p.create_time]);
 import { hash, colorOf, makeFish, updateMetrics, updateFish, worldSize, TAU } from './fish.mjs';
 export { hash, colorOf } from './fish.mjs';
+function compareNames(a,b){
+  const aa=Array.from(a),bb=Array.from(b);
+  for(let i=0;i<Math.min(aa.length,bb.length);i++){const d=aa[i].codePointAt(0)-bb[i].codePointAt(0);if(d)return d;}
+  return aa.length-bb.length;
+}
 export function selectedProcesses(
   snapshot,
   { sort = "cpu", order = "desc", limit = 0, search = "" } = {},
@@ -25,9 +30,9 @@ export function selectedProcesses(
       right = b[field];
     const comparison =
       typeof left === "string"
-        ? left.toLowerCase().localeCompare(right.toLowerCase())
+        ? compareNames(left.toLowerCase(),right.toLowerCase())
         : left - right;
-    return (comparison || a.pid - b.pid) * (order === "asc" ? 1 : -1);
+    return comparison * (order === "asc" ? 1 : -1);
   });
   return processes.slice(
     0,

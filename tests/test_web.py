@@ -10,6 +10,8 @@ from test_server import service
     ("/", "text/html"), ("/aquarium.css", "text/css"),
     ("/app.mjs", "text/javascript"), ("/world.mjs", "text/javascript"),
     ("/renderer.mjs", "text/javascript"),
+    ("/fish.mjs", "text/javascript"), ("/geometry.mjs", "text/javascript"),
+    ("/effects.mjs", "text/javascript"), ("/controls.mjs", "text/javascript"),
 ])
 def test_static_client_is_available_without_exposing_telemetry(service, path, content_type):
     _, client = service

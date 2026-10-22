@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -21,7 +21,7 @@
         </svg>
         <span
           >process<span class="brand-light">aquarium</span
-          ><small>A LITTLE LIFE IN YOUR MACHINE</small></span
+          ><small>プロセスが泳ぐ水族館</small></span
         >
       </a>
       <div class="connection">
@@ -49,7 +49,7 @@
             <input
               id="search"
               type="search"
-              placeholder="Find a process…"
+              placeholder="名前・PID で検索…"
               aria-label="Filter processes by name or PID"
             />
             <select id="sort" aria-label="Sort processes">
@@ -67,10 +67,11 @@
               ↓
             </button>
             <select id="limit" aria-label="Display limit">
-              <option value="100">100 fish</option>
-              <option value="300" selected>300 fish</option>
-              <option value="1000">1,000 fish</option>
-              <option value="0">All · up to 10,000</option>
+              <option value="0" selected>無制限</option>
+              <option value="10">10 匹</option><option value="20">20 匹</option>
+              <option value="50">50 匹</option><option value="100">100 匹</option>
+              <option value="200">200 匹</option><option value="400">400 匹</option>
+              <option value="1000">1,000 匹</option>
             </select>
           </div>
         </div>
@@ -80,11 +81,13 @@
           tabindex="0"
           aria-label="Aquarium. Drag to pan, scroll to zoom, click a fish to inspect. Space pauses; R resets the view."
         >
+          <canvas id="underlay" aria-hidden="true"></canvas>
           <canvas
             id="aquarium"
             aria-label="Animated fish representing monitored processes"
           ></canvas>
           <canvas id="overlay" aria-hidden="true"></canvas>
+          <div class="stage-hud"><span id="compact-stats"></span><span id="camera-info"></span></div>
           <div id="empty" class="empty-state">
             <div class="empty-fish">◌</div>
             <p class="eyebrow">THE WATER IS READY</p>
@@ -98,6 +101,16 @@
           </div>
           <div id="notice" class="notice" hidden role="status"></div>
         </div>
+        <div class="feature-controls" aria-label="表示と描画の設定">
+          <button id="debug" aria-pressed="false" title="親子関係 (D)">親子線 D</button>
+          <button id="ipc" aria-pressed="true" title="通信接続 (I)">通信線 I</button>
+          <button id="schools" aria-pressed="false" title="群れ強調 (Q)">群れ Q</button>
+          <button id="labels" aria-pressed="false">名前</button>
+          <label>カメラ C <select id="camera-mode" aria-label="カメラモード"><option value="0">自動</option><option value="1">追従</option><option value="2">手動</option></select></label>
+          <label>品質 <select id="quality" aria-label="描画品質"><option value="full">フル</option><option value="reduced">簡易</option><option value="minimal">最小</option><option value="auto">FPS で自動調整</option></select></label>
+          <button id="ui" title="フル → 簡素 → 非表示 (T)">UI T</button>
+          <button id="fullscreen" title="フルスクリーン (F / F11)">全画面 F</button>
+        </div>
         <footer class="ocean-footer">
           <div class="camera-controls">
             <button
@@ -106,9 +119,9 @@
               aria-label="Pause movement"
             >
               Ⅱ</button
-            ><button id="reset" title="Reset camera (R)">Recenter</button
+            ><button id="reset" title="Reset camera (R)">中央へ戻す</button
             ><button id="follow" aria-pressed="false" disabled>
-              Follow fish</button
+              選択魚を追従</button
             ><span id="zoom">100%</span>
           </div>
           <div class="render-info">
@@ -120,7 +133,7 @@
       <aside class="sidebar" aria-label="Host metrics and process inspection">
         <section class="overview">
           <div class="section-title">
-            <h2>Under the surface</h2>
+            <h2>ホストの状態</h2>
             <span id="sample-age">No samples</span>
           </div>
           <div class="metric-grid">
@@ -144,13 +157,13 @@
         </section>
         <section class="inspection">
           <div class="section-title">
-            <h2>Field notes</h2>
+            <h2>プロセスの詳細</h2>
             <button id="clear-selection" class="quiet" hidden>Clear</button>
           </div>
           <div id="inspect-empty" class="inspect-empty">
             <span class="crosshair">⊕</span>
-            <p>Every fish has a story.</p>
-            <small>Select one to see the process behind it.</small>
+            <p>魚をクリックして選択</p>
+            <small>プロセスの詳細と群れを表示します。</small>
           </div>
           <div id="details" hidden>
             <div class="process-heading">
@@ -183,6 +196,10 @@
                 <dt>Started</dt>
                 <dd id="detail-started"></dd>
               </div>
+              <div><dt>年齢</dt><dd id="detail-age"></dd></div>
+              <div><dt>群れ</dt><dd id="detail-school"></dd></div>
+              <div><dt>形状</dt><dd id="detail-shape"></dd></div>
+              <div><dt>通信相手 PID</dt><dd id="detail-partners"></dd></div>
             </dl>
             <div class="command-label">COMMAND</div>
             <code id="detail-command" class="command"></code>
@@ -190,7 +207,7 @@
         </section>
         <section class="activity">
           <div class="section-title">
-            <h2>In the current</h2>
+            <h2>プロセス一覧</h2>
             <span id="list-label">TOP CPU</span>
           </div>
           <div id="process-list" class="process-list">
@@ -198,25 +215,30 @@
           </div>
         </section>
         <section class="legend">
+          <span class="eyebrow">ライフサイクル / コレクタ</span><p id="event-stats" class="muted">—</p>
+          <details class="help"><summary>操作と魚の読み方</summary>
+          <p>左クリック: 選択 / 吹き出し: 通信相手を緑で強調<br>左右ドラッグ: パン / 右クリック: 追従<br>ホイール: ズーム (0.1–5倍)<br>C: カメラ / R: リセット<br>D: 親子線 / I: 通信線 / Q: 群れ<br>L: 表示数 / S: ソート / O: 順序<br>T: UI / F・F11: 全画面 / Space: 一時停止<br>Esc: 選択解除 / M: 表示プリセット</p>
+          <p>生成: 拡大 / 終了: 縮小 / fork: 白く発光 / exec: 虹色<br>メモリ 5%以上: 波紋 / 20%以上: 雷<br>ブラウザ: サメ / 開発: 熱帯魚 / システム: エイ<br>通信: イルカ / 重量級: クジラ / 端末: ウナギ</p>
+          </details>
           <span class="eyebrow">READING THE AQUARIUM</span>
           <div>
-            <i class="legend-size"></i><span>Memory gives a fish its size</span>
+            <i class="legend-size"></i><span>大きさ・波紋はメモリ使用率</span>
           </div>
           <div>
             <i class="legend-glow"></i
-            ><span>CPU makes it glow and swim faster</span>
+            ><span>CPU が高い魚は明るく速く泳ぎます</span>
           </div>
           <div>
             <i class="legend-threads">· · ·</i
-            ><span>Orbiting dots are threads · up to 12</span>
+            ><span>周囲の小魚はスレッド（最大14匹）</span>
           </div>
           <div>
             <i class="legend-school">≈</i
-            ><span>Related processes swim together</span>
+            ><span>親子・同名プロセスは群れで泳ぎます</span>
           </div>
         </section>
         <div class="sidebar-footer">
-          Real processes. A different perspective.<span id="source-label"
+          動いているプロセスを、魚として眺める。<span id="source-label"
             >PROCESS AQUARIUM</span
           >
         </div>

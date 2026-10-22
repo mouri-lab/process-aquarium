@@ -1,12 +1,14 @@
 import { AquariumWorld, colorOf, keyOf, selectedProcesses } from "./world.mjs";
 import { CanvasRenderer, createRenderer, freshCanvas } from "./renderer.mjs";
+import {Camera,View,SHORTCUTS} from './controls.mjs';
+import {prepareCanvas,drawUnderlay,drawOverlay as paintOverlay} from './effects.mjs';
 
 const $ = (id) => document.getElementById(id);
 const world = new AquariumWorld();
 const stage = $("stage"),
   overlay = $("overlay"),
   overlayContext = overlay.getContext("2d");
-const camera = { x: 0, y: 0, zoom: 0.9 };
+const camera = new Camera(), view = new View();
 const parameters = new URLSearchParams(location.search);
 let token = "",
   hostId = parameters.get("host") || "",
@@ -174,6 +176,7 @@ function reconnect({ clear = false } = {}) {
   if (clear) {
     world.clear();
     following = false;
+    camera.reset();
     freshness.last = 0;
     camera.x = camera.y = 0;
   }
@@ -306,7 +309,7 @@ function updateDetails() {
   $("inspect-empty").hidden = Boolean(fish);
   $("clear-selection").hidden = !fish;
   $("follow").disabled = !fish;
-  if (!fish) following = false;
+  following = camera.mode===1;
   $("follow").setAttribute("aria-pressed", String(following));
   if (!fish) return;
   const p = fish.p;
@@ -318,6 +321,10 @@ function updateDetails() {
   setText("detail-cpu", percent(p.cpu_percent));
   setText("detail-memory", percent(p.memory_percent));
   setText("detail-threads", p.num_threads);
+  setText('detail-age',`${fish.age} フレーム (${(fish.age/30).toFixed(1)} 秒)`);
+  setText('detail-school',fish.isolatedSchool?'孤立プロセス群':fish.school.length>1?`${fish.school.length} 匹 · リーダー PID ${Math.min(...fish.school)}`:'単独');
+  setText('detail-shape',fish.shape);
+  setText('detail-partners',fish.partners.join(', ')||'—');
   setText(
     "detail-started",
     p.create_time
@@ -391,30 +398,39 @@ if (paused) {
   paused = false;
   togglePause();
 }
-function resetCamera() {
-  camera.x = camera.y = 0;
-  camera.zoom = 0.9;
-  following = false;
-  updateDetails();
+function resetCamera(){camera.reset();syncControls();}
+async function perform(action){
+  if(action==='pause')togglePause();
+  else if(action==='fullscreen'){
+    try{if(document.fullscreenElement)await document.exitFullscreen();else await document.querySelector('.workspace').requestFullscreen();}
+    catch(error){setText('notice',`フルスクリーンを開始できません: ${error.message}`);$('notice').hidden=false;}
+  }else view.action(action,world,camera);
+  syncControls();updateMetrics();updateEmpty();
 }
-$("reset").addEventListener("click", resetCamera);
-$("follow").addEventListener("click", () => {
-  following = !following;
-  updateDetails();
-});
-$("clear-selection").addEventListener("click", () => {
-  world.selection = null;
-  updateMetrics();
-});
+function syncControls(){
+  document.documentElement.dataset.ui=String(view.ui);
+  $('sort').value=world.filters.sort;$('limit').value=String(world.filters.limit);
+  setText('order',world.filters.order==='desc'?'↓':'↑');
+  for(const [id,value] of [['debug',view.debug],['ipc',view.ipc],['schools',world.highlightSchools],['labels',view.labels]])$(id).setAttribute('aria-pressed',String(value));
+  $('camera-mode').value=String(camera.mode);following=camera.mode===1;
+  $('follow').setAttribute('aria-pressed',String(following));
+}
+for(const action of ['debug','ipc','schools','ui','fullscreen','labels'])$(action).addEventListener('click',()=>perform(action));
+$('reset').addEventListener('click',resetCamera);
+$('camera-mode').addEventListener('change',()=>{camera.mode=Number($('camera-mode').value);camera.followKey=null;syncControls();});
+$('quality').addEventListener('change',()=>{view.quality=$('quality').value;});
+$('follow').addEventListener('click',()=>{if(camera.mode===1)camera.manual();else camera.follow(world.selection);syncControls();});
+$('clear-selection').addEventListener('click',()=>perform('escape'));
 let drag = null;
 stage.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0) return;
+  if (event.button !== 0 && event.button !== 2) return;
   drag = {
     x: event.clientX,
     y: event.clientY,
     cx: camera.x,
     cy: camera.y,
     moved: false,
+    button:event.button,
   };
   stage.setPointerCapture(event.pointerId);
 });
@@ -424,7 +440,7 @@ stage.addEventListener("pointermove", (event) => {
     dy = event.clientY - drag.y;
   if (Math.hypot(dx, dy) > 4) {
     drag.moved = true;
-    following = false;
+    following = false;camera.manual();syncControls();
   }
   if (drag.moved) {
     camera.x = drag.cx - dx / camera.zoom;
@@ -434,17 +450,21 @@ stage.addEventListener("pointermove", (event) => {
 stage.addEventListener("pointerup", (event) => {
   if (!drag) return;
   if (!drag.moved) {
-    const rect = stage.getBoundingClientRect();
-    world.pick(
-      (event.clientX - rect.left - rect.width / 2) / camera.zoom + camera.x,
-      (event.clientY - rect.top - rect.height / 2) / camera.zoom + camera.y,
-      24 / camera.zoom,
-    );
-    updateMetrics();
+    const rect=stage.getBoundingClientRect(),sx=event.clientX-rect.left,sy=event.clientY-rect.top;
+    const bubble=view.bubbles.slice().reverse().find(b=>sx>=b.x&&sx<=b.x+b.w&&sy>=b.y&&sy<=b.y+b.h);
+    if(bubble&&drag.button===0){world.highlighted=new Set(bubble.fish.partners);world.selection=bubble.fish.key;}
+    else{
+      const old=world.selection;
+      const key=world.pick((sx-rect.width/2)/camera.zoom+camera.x,(sy-rect.height/2)/camera.zoom+camera.y,24/camera.zoom);
+      world.highlighted.clear();
+      if(drag.button===2){camera.follow(key);world.selection=old;}
+    }
+    syncControls();updateMetrics();
   }
   drag = null;
   updateDetails();
 });
+stage.addEventListener('contextmenu',event=>event.preventDefault());
 stage.addEventListener("pointercancel", () => {
   drag = null;
 });
@@ -456,98 +476,26 @@ stage.addEventListener(
     const rect = stage.getBoundingClientRect(),
       x = event.clientX - rect.left - rect.width / 2,
       y = event.clientY - rect.top - rect.height / 2;
-    const next = Math.max(
-      0.08,
-      Math.min(6, camera.zoom * Math.exp(-event.deltaY * 0.001)),
-    );
-    camera.x += x / camera.zoom - x / next;
-    camera.y += y / camera.zoom - y / next;
-    camera.zoom = next;
+    camera.zoomAt(x,y,Math.exp(-event.deltaY*.001));
   },
   { passive: false },
 );
-window.addEventListener("keydown", (event) => {
-  if (event.target.closest("input,select,button,dialog")) return;
-  if (event.code === "Space") {
-    event.preventDefault();
-    togglePause();
-  }
-  if (event.key.toLowerCase() === "r") resetCamera();
-  if (event.key === "Escape") {
-    world.selection = null;
-    updateMetrics();
-  }
+window.addEventListener('keydown',event=>{
+  if(event.ctrlKey||event.metaKey||event.altKey||event.repeat)return;
+  if(event.target.closest('input,select,textarea,dialog'))return;
+  const action=SHORTCUTS[event.key]||SHORTCUTS[event.key.toLowerCase()];
+  if(action){event.preventDefault();perform(action);}
 });
-function drawOverlay(width, height) {
-  const ratio = Math.min(devicePixelRatio || 1, 2),
-    ctx = overlayContext;
-  if (overlay.width !== Math.round(width * ratio))
-    overlay.width = Math.round(width * ratio);
-  if (overlay.height !== Math.round(height * ratio))
-    overlay.height = Math.round(height * ratio);
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-  ctx.strokeStyle = "#9bd9da14";
-  ctx.lineWidth = 0.7;
-  for (let i = 0; i < 35; i++) {
-    const x = (i * 179.3 + Math.sin(world.time * 0.1 + i) * 12) % width;
-    const y =
-      (((i * 137.2 - world.time * (3 + (i % 4))) % height) + height) % height;
-    ctx.beginPath();
-    ctx.arc(x, y, 1 + (i % 3) * 0.5, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  const selected = world.selected();
-  const point = (f) => [
-    (f.x - camera.x) * camera.zoom + width / 2,
-    (f.y - camera.y) * camera.zoom + height / 2,
-  ];
-  if (selected) {
-    const byPid = new Map(
-      [...world.fish.values()].filter((f) => !f.dying).map((f) => [f.p.pid, f]),
-    );
-    const partners = new Set([selected.p.ppid]);
-    for (const p of world.snapshot.processes)
-      if (p.ppid === selected.p.pid) partners.add(p.pid);
-    for (const c of world.snapshot.connections || []) {
-      if (c.pid_a === selected.p.pid) partners.add(c.pid_b);
-      if (c.pid_b === selected.p.pid) partners.add(c.pid_a);
-    }
-    ctx.strokeStyle = "#7de9c13d";
-    ctx.setLineDash([3, 6]);
-    ctx.lineWidth = 1;
-    for (const pid of partners) {
-      const other = byPid.get(pid);
-      if (!other) continue;
-      ctx.beginPath();
-      ctx.moveTo(...point(selected));
-      ctx.lineTo(...point(other));
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
-  }
-  const labels = labelKeys.map((key) => world.fish.get(key)).filter(Boolean);
-  if (selected && !labels.includes(selected)) labels.push(selected);
-  ctx.font = "10px ui-monospace,monospace";
-  ctx.textAlign = "center";
-  for (const fish of labels) {
-    if (camera.zoom < 0.4 && fish !== selected) continue;
-    const [x, y] = point(fish);
-    if (x < 0 || x > width || y < 0 || y > height) continue;
-    ctx.fillStyle = fish === selected ? "#c8f2e5" : "#8bb4bf99";
-    const name =
-      fish.p.name.length > 23 ? fish.p.name.slice(0, 22) + "…" : fish.p.name;
-    ctx.fillText(name, x, y + fish.size * camera.zoom * 1.65 + 12);
-  }
-  if (world.snapshot) {
-    ctx.textAlign = "left";
-    ctx.font = "9px sans-serif";
-    ctx.fillStyle = "#61858f99";
-    ctx.fillText(
-      "DRAG TO EXPLORE  ·  SCROLL TO ZOOM  ·  SELECT A FISH",
-      20,
-      height - 18,
-    );
+function drawOverlay(width,height){
+  const under=prepareCanvas($('underlay'),width,height);
+  drawUnderlay(under,world,camera,width,height,view);
+  const ctx=prepareCanvas(overlay,width,height);
+  paintOverlay(ctx,world,camera,width,height,view);
+  if(view.ui!==2&&world.snapshot){
+    const visible=[...world.fish.values()].filter(f=>!f.dying);
+    const mean=visible.reduce((n,f)=>n+f.p.cpu_percent,0)/Math.max(1,visible.length);
+    setText('compact-stats',`プロセス ${world.processes.size} / 魚 ${visible.length} · 平均CPU ${mean.toFixed(2)}% · ${Math.round(fps)} fps · ${world.quality}`);
+    setText('camera-info',`${['自動センタリング','追従','手動'][camera.mode]} · (${camera.x.toFixed(0)}, ${camera.y.toFixed(0)}) · ${camera.zoom.toFixed(2)}×`);
   }
 }
 function rendererLabel() {
@@ -573,12 +521,10 @@ function frame(now) {
   if (elapsed > 0) fps = fps * 0.95 + Math.min(120, 1 / elapsed) * 0.05;
   if (!paused) world.step(elapsed);
   const selected = world.selected();
-  if (following && selected) {
-    camera.x += (selected.x - camera.x) * 0.08;
-    camera.y += (selected.y - camera.y) * 0.08;
-  }
-  const width = stage.clientWidth,
-    height = stage.clientHeight;
+  camera.update(world,elapsed);
+  view.adapt(fps,elapsed,world);
+  const width=stage.clientWidth,height=stage.clientHeight;
+  if(world.width!==width||world.height!==height)world.resize(width,height);
   if (renderer && width && height) {
     try {
       renderer.render(world, camera, width, height);
@@ -596,6 +542,9 @@ function frame(now) {
         ? `${Math.floor((now - freshness.last) / 1000)}s since update`
         : "No samples",
     );
+    const counters=world.snapshot?.event_stats||{};
+    setText('event-stats',Object.entries(counters).map(([k,v])=>`${k}: ${v}`).join(' · ')||'—');
+    updateDetails();
     lastMetrics = now;
   }
   requestAnimationFrame(frame);
@@ -609,6 +558,7 @@ window.addEventListener("pagehide", () => {
 window.addEventListener("pageshow", (event) => {
   if (event.persisted) location.reload();
 });
+syncControls();
 updateEmpty();
 poll();
 renderer = await createRenderer($("aquarium"), fallback, {
