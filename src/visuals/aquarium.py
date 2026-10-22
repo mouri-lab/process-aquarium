@@ -11,11 +11,6 @@ import math
 import os
 from typing import Dict, List, Optional, Tuple
 from ..core.process_manager import ProcessManager
-try:
-    # Extension point to swap in an eBPF source implementation when available
-    from ..core.sources import EbpfProcessSource
-except Exception:  # pragma: no cover - safe fallback
-    EbpfProcessSource = None  # type: ignore
 from .fish import Fish
 
 # Text/locale encoding configuration
@@ -31,26 +26,17 @@ except:
 class Aquarium:
     """
     Main class for the Process Aquarium.
-    Integrates process monitoring with visualization and interaction management.
+    Visualizes an externally supplied process manager and handles interaction.
     """
 
-    def __init__(self, width: int = 1200, height: int = 800, headless: bool = False,
-                 headless_interval: float = 1.0, use_gpu: Optional[bool] = None):
+    def __init__(self, width: int = 1200, height: int = 800,
+                 use_gpu: Optional[bool] = None, *, process_manager: ProcessManager):
     # Initialize pygame
-        self.headless = headless
-        self.headless_interval = headless_interval
-        if self.headless:
-            # Use dummy video driver to suppress window creation in headless mode
-            os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
         self._gpu_texture_type = None
         self.gpu_renderer = None
         self.gpu_window = None
         self.gpu_texture = None
         self.requested_gpu = use_gpu if use_gpu is not None else self._env_flag("AQUARIUM_GPU", False)
-        if self.headless and self.requested_gpu:
-            # Developer log: GPU renderer disabled when running in headless mode
-            print("[GPU] GPU renderer disabled because headless mode is active.")
-            self.requested_gpu = False
         self.gpu_driver_hint = os.environ.get("AQUARIUM_GPU_DRIVER")
         if self.requested_gpu and self.gpu_driver_hint:
             os.environ.setdefault("SDL_HINT_RENDER_DRIVER", self.gpu_driver_hint)
@@ -82,7 +68,6 @@ class Aquarium:
         os.environ['SDL_VIDEO_HIGHDPI_DISABLED'] = '0'  # Enable high DPI support
 
     # Read settings from environment variables (significantly relaxed limits)
-        max_processes = int(os.environ.get('AQUARIUM_MAX_PROCESSES', '2000'))  # Increased default from 500 to 2000
         target_fps = int(os.environ.get('AQUARIUM_FPS', '30'))
 
     # Screen settings
@@ -99,65 +84,25 @@ class Aquarium:
     # Detect Retina scaling information
         self.retina_info = self.detect_retina_scaling()
 
-        if not self.headless:
-            if self.requested_gpu:
-                self._init_gpu_renderer(width, height)
-            if not self.use_gpu:
-                self.screen = pygame.display.set_mode((width, height))
-                pygame.display.set_caption("Process Aquarium - プロセス水族館")
-        else:
-            # Provide a dummy surface for rendering in headless mode
-            self.screen = pygame.Surface((width, height))
+        if self.requested_gpu:
+            self._init_gpu_renderer(width, height)
+        if not self.use_gpu:
+            self.screen = pygame.display.set_mode((width, height))
+            pygame.display.set_caption("Process Aquarium - プロセス水族館")
 
     # Clock and FPS configuration
         self.clock = pygame.time.Clock()
-        self.fps = target_fps if not self.headless else int(1.0 / max(headless_interval, 0.001))
+        self.fps = target_fps
         self._configure_quality_thresholds()
 
-    # Process management
-    # When eBPF is enabled in the future, we plan to allow injecting an
-    # `EbpfProcessSource` via command line or environment variables.
-    # Example: if os.environ.get("AQUARIUM_SOURCE") == "ebpf": source = EbpfProcessSource()
-        source = None
-        chosen = os.environ.get("AQUARIUM_SOURCE", "psutil").lower()
-        if chosen == "ebpf":
-            try:
-                from ..core.sources import EbpfProcessSource
-                eb = EbpfProcessSource(enable=True, hybrid_mode=True)
-                if getattr(eb, 'available', False):
-                    source = eb
-                    # Developer log: eBPF hybrid source enabled
-                    print("[eBPF] EbpfProcessSource 有効化（ハイブリッドモード）")
-                else:
-                    # Attempt to extract error details from lifecycle events
-                    error_details = ""
-                    try:
-                        events = eb.drain_lifecycle_events()
-                        for event in events:
-                            if event.details and ('error' in event.details or 'warning' in event.details):
-                                error_msg = event.details.get('error') or event.details.get('warning')
-                                error_details = f" - reason: {error_msg}"
-                                break
-                    except:
-                        pass
-                    # Developer log: fallback to psutil when eBPF unavailable
-                    print(f"[eBPF] 利用不可のため psutil にフォールバック{error_details}")
-            except Exception as e:
-                # Developer log: eBPF initialization failed; fall back to psutil
-                print(f"[eBPF] 初期化失敗: {e} -> psutil フォールバック")
-        self.process_manager = ProcessManager(max_processes=max_processes, source=source)
+    # Collection is configured and owned by the entry point.
+        self.process_manager = process_manager
         self.fishes: Dict[int, Fish] = {}  # PID -> Fish
 
     # Process limit and sort configuration
-        limit_str = os.environ.get("AQUARIUM_LIMIT")
-        self.process_limit = int(limit_str) if limit_str else None
-        self.sort_by = os.environ.get("AQUARIUM_SORT_BY", "cpu")
-        self.sort_order = os.environ.get("AQUARIUM_SORT_ORDER", "desc")
-
-    # Apply settings to ProcessManager
-        if self.process_limit is not None:
-            self.process_manager.set_process_limit(self.process_limit)
-        self.process_manager.set_sort_config(self.sort_by, self.sort_order)
+        self.process_limit = process_manager.process_limit
+        self.sort_by = process_manager.sort_by
+        self.sort_order = process_manager.sort_order
 
     # Dynamic world size calculation based on process limit
         self.world_size = self._calculate_world_size(self.process_limit)
@@ -217,8 +162,7 @@ class Aquarium:
         # Background and effects (adaptive particle count)
         self.background_particles = []
         self.particle_count = self.performance_monitor['adaptive_particle_count']
-        if not self.headless:
-            self.init_background_particles()
+        self.init_background_particles()
 
         # Process-related statistics
         self.total_processes = 0
@@ -252,9 +196,6 @@ class Aquarium:
 
         # Runtime state
         self.running = True
-        if self.headless:
-            # Developer log: running in headless mode — only statistics will be printed
-            print("[Headless] Running in headless mode. Only statistics will be printed. Press Ctrl+C to exit.")
 
     def _calculate_world_size(self, process_limit: int = None) -> int:
         """Dynamically calculate the world size based on the process limit."""
@@ -737,8 +678,6 @@ class Aquarium:
 
     def draw_ui(self):
         """UI情報の描画"""
-        if self.headless:
-            return  # ヘッドレスではUI描画をスキップ
 
         # UI表示モードの確認
         if not hasattr(self, 'ui_mode'):
@@ -1037,7 +976,7 @@ class Aquarium:
 
     def draw_ipc_connections(self):
         """Draw IPC connections as pulsing network-like lines."""
-        if self.headless or not self.show_ipc:
+        if not self.show_ipc:
             return
 
         connection_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
@@ -1095,8 +1034,6 @@ class Aquarium:
 
     def handle_events(self):
         """Process input and window events."""
-        if self.headless:
-            return
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
@@ -1558,10 +1495,6 @@ class Aquarium:
 
     def update(self):
         """フレーム更新"""
-        if self.headless:
-            # 描画を行わないので最小限の更新のみ
-            self.update_process_data()
-            return
         current_time = time.time()
 
         # カメラシステムの更新
@@ -1654,8 +1587,6 @@ class Aquarium:
 
     def draw(self):
         """描画処理"""
-        if self.headless:
-            return  # 完全スキップ
         # 背景
         self.draw_background()
 
@@ -1721,46 +1652,18 @@ class Aquarium:
 
     def run(self):
         """メインループ"""
-        if not self.headless:
-            print("=== Process Aquariumを開始します ===")
-            print("🐠 プロセスがプロセスとして水族館に現れるまでお待ちください...")
-            print("💡 ヒント: プロセス名によって色が決まり、CPU使用時に光ります")
+        print("=== Process Aquariumを開始します ===")
+        print("🐠 プロセスがプロセスとして水族館に現れるまでお待ちください...")
+        print("💡 ヒント: プロセス名によって色が決まり、CPU使用時に光ります")
+        try:
             while self.running:
                 self.handle_events()
                 self.update()
                 self.draw()
                 self.clock.tick(self.fps)
-            pygame.quit()
-            print("🌙 水族館を閉館しました。お疲れさまでした！")
-            return
-
-        # ヘッドレスループ
-        last_print = 0.0
-        try:
-            while self.running:
-                start = time.time()
-                self.process_manager.update()
-                stats = self.process_manager.get_process_statistics()
-                now = time.time()
-                if now - last_print >= self.headless_interval:
-                    last_print = now
-                    data_source = stats.get('data_source', 'unknown')
-                    base_stats = f"procs={stats['total_processes']} new={stats['new_processes']} dying={stats['dying_processes']} mem={stats['total_memory_percent']:.2f}% cpu_avg={stats['average_cpu_percent']:.2f}% threads={stats['total_threads']}"
-
-                    # eBPFの場合はイベント統計も表示
-                    if 'ebpf_events' in stats:
-                        print(f"[stats|{data_source}] {base_stats} events=[{stats['ebpf_events']}]")
-                    else:
-                        print(f"[stats|{data_source}] {base_stats}")
-                # シンプルスリープ（イベント駆動化は今後 eBPF 実装時に検討）
-                elapsed = time.time() - start
-                remaining = self.headless_interval - elapsed
-                if remaining > 0:
-                    time.sleep(remaining)
-        except KeyboardInterrupt:
-            print("[Headless] 中断されました。終了します。")
         finally:
             pygame.quit()
+        print("🌙 水族館を閉館しました。お疲れさまでした！")
 
     def _print_display_info(self):
         """ディスプレイ情報をデバッグ表示"""
@@ -2184,9 +2087,10 @@ class Aquarium:
         self.bubble_font = self._get_japanese_font(self._determine_bubble_font_size())
 
 def main():
-    """メイン関数"""
-    aquarium = Aquarium()
-    aquarium.run()
+    """Use the shared entry point when invoked as a module."""
+    from main import main_cli
+
+    main_cli()
 
 if __name__ == "__main__":
     main()

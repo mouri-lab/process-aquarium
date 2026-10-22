@@ -54,8 +54,8 @@ git switch main
 # 仮想環境を作成（システムサイトパッケージへのアクセスを有効化）
 uv venv -p /usr/bin/python3 --system-site-packages
 
-# 依存関係をインストール
-uv sync
+# GUI 用の依存関係を含めてインストール
+uv sync --extra gui
 ```
 
 ### 3. 実行
@@ -74,6 +74,18 @@ sudo ./.venv/bin/python3 main.py --source ebpf
 - Pythonバージョン整合性: 不一致は eBPF 読み込み失敗要因
 
 水族館のウィンドウが開き、システム上で動作しているプロセスが魚として表示されます。
+
+### GUI のない環境で実行
+
+収集と統計ログ出力には pygame / SDL は不要です。サーバなどでは GUI 用の追加依存を省いてインストールできます。
+
+```bash
+uv sync --no-dev
+./.venv/bin/python3 main.py --source psutil --headless --headless-interval 2.0
+```
+
+eBPF を使う場合は、上記のシステム依存関係と root 権限が別途必要です。
+この段階では収集対象は実行ホストのみです。ネットワーク転送・集約・映像配信は未実装です。
 
 ## 使い方
 
@@ -182,7 +194,9 @@ process-aquarium/
 ├── main.py                    # メインエントリーポイント
 ├── pyproject.toml            # プロジェクト設定
 ├── src/
+│   ├── headless.py           # GUI に依存しない統計ログ出力
 │   ├── core/                 # コア機能
+│   │   ├── runtime.py         # 収集バックエンドの構築・フォールバック
 │   │   ├── process_manager.py # プロセス管理
 │   │   ├── sources.py        # データソース抽象化（開発者向け内部構造）
 │   │   └── types.py          # 型定義
@@ -191,6 +205,16 @@ process-aquarium/
 │       └── fish.py           # 魚の描画とアニメーション
 ├── fork_bomb.py              # テスト用大量プロセス生成スクリプト
 └── README.md                 # このファイル
+```
+
+`main.py` が収集バックエンドを構築し、GUI の `Aquarium` または `HeadlessMonitor` に同じ `ProcessManager` を渡します。
+`Aquarium` はデータソースの選択・初期化を行いません。起動処理がバックエンドの所有者となり、正常終了・中断・実行エラー時に停止します。
+プロセス型や表示対象の選択は従来の構造を維持しており、次の段階で分離する対象です。
+
+```bash
+# GUI を省いた開発環境で回帰テストを実行
+uv sync
+uv run python -m pytest -q
 ```
 
 ### テスト用ツール
@@ -214,8 +238,8 @@ python fork_bomb.py --duration 60
 
 - **numpy** (≥2.2.6): 数値計算
 - **psutil** (≥7.1.0): システム・プロセス情報取得
-- **pygame-ce** (≥2.5.2): グラフィック描画エンジン
-- **pytest** (≥8.4.2): テストフレームワーク
+- **pygame-ce** (≥2.5.2): GUI 用追加依存 (`--extra gui`)
+- **pytest** (≥8.4.2): 開発用依存（`--no-dev` で省略可能）
 
 ### 環境変数
 

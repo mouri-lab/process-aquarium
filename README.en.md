@@ -50,8 +50,8 @@ git switch main
 # Create virtualenv (reuse system bpf packages)
 uv venv -p /usr/bin/python3 --system-site-packages
 
-# Install dependencies
-uv sync
+# Install dependencies including the GUI extra
+uv sync --extra gui
 ```
 
 ### 3. Run
@@ -62,6 +62,18 @@ sudo ./.venv/bin/python3 main.py --source ebpf
 # psutil (no root required)
 ./.venv/bin/python3 main.py --source psutil
 ```
+
+### Run without GUI dependencies
+
+Collection and statistics logging do not require pygame or SDL. For a server installation:
+
+```bash
+uv sync --no-dev
+./.venv/bin/python3 main.py --source psutil --headless --headless-interval 2.0
+```
+
+eBPF still requires the system dependencies above and root privileges.
+Monitoring currently targets the local host only; network transport, aggregation, and video streaming are not implemented yet.
 
 ⚠️ Notes
 - eBPF mode: root (`sudo`) required for kernel‑level access
@@ -172,7 +184,9 @@ process-aquarium/
 ├── main.py                # Entry point
 ├── pyproject.toml         # Project config
 ├── src/
+│   ├── headless.py             # Statistics logging without GUI imports
 │   ├── core/
+│   │   ├── runtime.py          # Backend construction and fallback
 │   │   ├── process_manager.py  # Process management
 │   │   ├── sources.py          # Data source abstraction
 │   │   └── types.py            # Type definitions
@@ -181,6 +195,16 @@ process-aquarium/
 │       └── fish.py             # Fish rendering & animation
 ├── fork_bomb.py          # Stress test process spawner
 └── README.md             # Japanese README
+```
+
+`main.py` constructs the collection backend and passes the same `ProcessManager` interface to either `Aquarium` or `HeadlessMonitor`.
+`Aquarium` does not select or initialize data sources. The entry point owns the backend and shuts it down on normal exit, interruption, or failure.
+Process types and display selection retain their existing structure for a subsequent separation step.
+
+```bash
+# Run regression tests without installing the GUI extra
+uv sync
+uv run python -m pytest -q
 ```
 
 ### Stress Tool
@@ -200,8 +224,8 @@ python fork_bomb.py --duration 60
 ### Dependencies
 - numpy (≥2.2.6)
 - psutil (≥7.1.0)
-- pygame-ce (≥2.5.2)
-- pytest (≥8.4.2)
+- pygame-ce (≥2.5.2), optional GUI dependency (`--extra gui`)
+- pytest (≥8.4.2), development dependency (omit with `--no-dev`)
 
 ### Environment Variables
 ```bash
