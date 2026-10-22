@@ -124,7 +124,11 @@ class Fish:
     def _generate_color(self) -> Tuple[int, int, int]:
         """Generate a deterministic color based on the process name."""
     # Use a hash of the process name to pick a color
-        hash_value = hash(self.name) % 360
+        # Stable across interpreter restarts and the browser client (FNV-1a).
+        name_hash = 2166136261
+        for char in self.name:
+            name_hash = ((name_hash ^ ord(char)) * 16777619) & 0xffffffff
+        hash_value = name_hash % 360
 
     # Convert from HSV to RGB (fixed saturation/value)
         saturation = 0.7
@@ -419,11 +423,18 @@ class Fish:
         # School speed system: recompute final speed cap using school's average CPU
         if nearby_fish and self.school_members:
             school_average_cpu = self.get_school_average_cpu(nearby_fish)
-            cpu_normalized = school_average_cpu / 100.0
+            cpu_normalized = max(0.0, min(school_average_cpu, 100.0)) / 100.0
             speed_factor = 1.0 + (math.exp(4 * cpu_normalized) - 1) / (math.exp(4) - 1) * 6.0
             max_speed = 2.5 * min(speed_factor, 8.0)
             self.vx = max(min(self.vx, max_speed), -max_speed)
             self.vy = max(min(self.vy, max_speed), -max_speed)
+
+        else:
+            # Apply the same per-process cap between telemetry refreshes too.
+            cpu_normalized = max(0.0, min(self.cpu_percent, 100.0)) / 100.0
+            max_speed = 2.0 * (1.0 + math.expm1(4 * cpu_normalized) / math.expm1(4) * 6.0)
+            self.vx = max(-max_speed, min(max_speed, self.vx))
+            self.vy = max(-max_speed, min(max_speed, self.vy))
 
         # Position update
         self.x += self.vx
@@ -681,7 +692,7 @@ class Fish:
     # Exponentially adjust swim intensity based on CPU usage
         cpu_factor = 1.0
         if hasattr(self, 'cpu_percent'):
-            cpu_normalized = self.cpu_percent / 100.0
+            cpu_normalized = max(0.0, min(self.cpu_percent, 100.0)) / 100.0
             # 指数関数でCPU使用率による激しさを計算
             cpu_factor = 1.0 + (math.exp(2 * cpu_normalized) - 1) / (math.exp(2) - 1) * 4.0
 
