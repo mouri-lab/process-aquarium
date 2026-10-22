@@ -148,40 +148,51 @@ export function drawOverlay(ctx, world, camera, width, height, view) {
         selected: f === selected,
       });
   }
-  ctx.font = "11px system-ui,sans-serif";
-  view.bubbles = layoutConversations(
-    conversations,
-    width,
-    height,
-    (text) => ctx.measureText(text).width,
-  );
+  view.bubbles = layoutConversations(conversations, width, height);
   for (const b of view.bubbles) {
-    ctx.strokeStyle = "rgba(159,206,224,.2)";
-    ctx.lineWidth = 1;
+    // A little chat puff, with its tail pointing toward the speaker. The
+    // message/partner data stays on the hit region; no status label covers it.
+    const bodyHeight = b.h - 6;
+    const tail = clamp(b.anchorX - b.x, 12, b.w - 12);
+    ctx.fillStyle = "#071c2955";
     ctx.beginPath();
-    ctx.moveTo(b.x + b.w / 2, b.y + b.h);
-    ctx.lineTo(b.anchorX, b.anchorY);
-    ctx.stroke();
-    ctx.fillStyle = "rgba(10,29,48,.9)";
+    ctx.roundRect(b.x, b.y + 2, b.w, bodyHeight, 11);
+    ctx.fill();
+    ctx.fillStyle = b.fish === selected ? "#fff6d9" : "#ece8d0";
+    ctx.strokeStyle = b.fish === selected ? "#adb98a" : "#969c7e";
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.roundRect(b.x, b.y, b.w, b.h, 4);
+    ctx.roundRect(b.x, b.y, b.w, bodyHeight, 11);
     ctx.fill();
-    ctx.strokeStyle = "rgba(149,193,214,.3)";
     ctx.stroke();
-    ctx.fillStyle = "#93c9d5";
-    circle(ctx, b.x + 10, b.y + b.h / 2, 1.5);
+    ctx.beginPath();
+    ctx.moveTo(b.x + tail - 4, b.y + bodyHeight - 1);
+    ctx.lineTo(b.x + tail - 2, b.y + b.h - 1);
+    ctx.quadraticCurveTo(
+      b.x + tail + 3,
+      b.y + b.h - 2,
+      b.x + tail + 5,
+      b.y + bodyHeight - 1,
+    );
     ctx.fill();
-    ctx.fillStyle = "#b6cbd9";
-    ctx.textAlign = "left";
-    ctx.fillText(b.message, b.x + 18, b.y + 16);
+    ctx.stroke();
+    for (let i = 0; i < 3; i++) {
+      const bounce = Math.max(
+        0,
+        Math.sin(world.time * 5 - i * 0.8 + b.fish.p.pid),
+      );
+      ctx.fillStyle = ["#ac9474", "#87a17d", "#bb967e"][i];
+      circle(
+        ctx,
+        b.x + b.w / 2 + (i - 1) * 9,
+        b.y + bodyHeight / 2 - bounce * 2,
+        2.5,
+      );
+      ctx.fill();
+    }
   }
 }
-export function layoutConversations(
-  candidates,
-  width,
-  height,
-  measure = (text) => text.length * 7,
-) {
+export function layoutConversations(candidates, width, height) {
   const groups = new Map();
   candidates.sort((a, b) => Number(b.selected) - Number(a.selected));
   for (const candidate of candidates) {
@@ -206,8 +217,8 @@ export function layoutConversations(
       group.members.length > 1
         ? `通信中 · ${group.members.length}`
         : group.fish.message;
-    const w = Math.max(74, measure(message) + 28),
-      h = 25;
+    const w = 46,
+      h = 30;
     let box = null;
     for (const [ox, oy] of [
       [0, 0],
