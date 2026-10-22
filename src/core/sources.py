@@ -12,6 +12,7 @@ import uuid
 import psutil
 
 from .source import IProcessSource, SourceStatus
+from .ipc import IPCDetector
 from ..telemetry import MAX_EVENTS, Connection, LifecycleEvent, ProcessRecord, Snapshot
 
 
@@ -50,6 +51,7 @@ class PsutilProcessSource(IProcessSource):
         self._error = None
         self._last_success = 0.0
         self._recent_ipc = ()
+        self._ipc_detector = IPCDetector()
         self._last_ipc_refresh = float("-inf")
 
     def update(self):
@@ -165,31 +167,7 @@ class PsutilProcessSource(IProcessSource):
             self._shutdown.wait(max(0, self.update_interval - (time.monotonic() - started)))
 
     def _detect_ipc(self, processes):
-        connections = []
-        endpoints = {}
-        try:
-            for connection in psutil.net_connections(kind="inet"):
-                if (connection.pid not in processes or not connection.laddr or not connection.raddr or
-                        connection.laddr.ip not in ("127.0.0.1", "::1") or
-                        connection.raddr.ip not in ("127.0.0.1", "::1")):
-                    continue
-                key = tuple(sorted((connection.laddr.port, connection.raddr.port)))
-                endpoints.setdefault(key, set()).add(connection.pid)
-            for pids in endpoints.values():
-                ordered = sorted(pids)
-                for index, pid in enumerate(ordered):
-                    for other in ordered[index + 1:]:
-                        connections.append(Connection(pid, other, "tcp-loop"))
-                        if len(connections) >= 100:
-                            return connections
-        except (psutil.Error, OSError):
-            pass
-        for process in processes.values():
-            if process.ppid in processes:
-                connections.append(Connection(process.ppid, process.pid, "parent-child"))
-                if len(connections) >= 100:
-                    break
-        return connections
+        return self._ipc_detector.detect(processes)
 
     def shutdown(self):
         self._shutdown.set()
