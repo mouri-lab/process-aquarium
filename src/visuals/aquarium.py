@@ -10,7 +10,7 @@ import random
 import math
 import os
 from typing import Dict, List, Optional, Tuple
-from ..core.process_manager import ProcessManager
+from ..presentation import ProcessManager
 from .fish import Fish
 
 # Text/locale encoding configuration
@@ -390,6 +390,14 @@ class Aquarium:
         # Obtain current process snapshot
         process_data = self.process_manager.processes
 
+        # Display filtering and PID reuse must not masquerade as process exit.
+        all_processes = self.process_manager.get_all_processes()
+        for pid, fish in list(self.fishes.items()):
+            current_identity = self.process_manager.process_identity(pid)
+            if ((pid not in process_data and pid in all_processes) or
+                    (current_identity is not None and current_identity != fish.process_identity)):
+                self._forget_fish(pid)
+
         # Update aggregate statistics
         self.total_processes = len(process_data)
         self.total_memory = sum(proc.memory_percent for proc in process_data.values())
@@ -415,6 +423,7 @@ class Aquarium:
                 y = distance * math.sin(angle)
 
                 fish = Fish(pid, proc.name, x, y, self.world_size)
+                fish.process_identity = self.process_manager.process_identity(pid)
                 self.fishes[pid] = fish
 
                 # Spawn logging (may be suppressed at low quality)
@@ -439,7 +448,10 @@ class Aquarium:
         exec_processes = self.process_manager.detect_exec()
         for proc in exec_processes:
             if proc.pid in self.fishes:
-                self.fishes[proc.pid].set_exec_event()
+                fish = self.fishes[proc.pid]
+                fish.name = fish.process_name = proc.name
+                fish.fish_shape = fish._determine_fish_shape(proc.name)
+                fish.set_exec_event()
 
     # Configure schooling behavior
         self._update_schooling_behavior()
@@ -505,6 +517,14 @@ class Aquarium:
 
         # if dead_pids:
         #     print(f"📊 削除後の魚数: {len(self.fishes)}")
+
+    def _forget_fish(self, pid):
+        fish = self.fishes.pop(pid)
+        if self.selected_fish is fish:
+            self.selected_fish = None
+        if self.follow_target is fish:
+            self.follow_target = None
+        self.communication_history = {key: value for key, value in self.communication_history.items() if pid not in key}
 
     def _remove_oldest_fish(self):
         """Remove the oldest fish to maintain performance"""
@@ -723,6 +743,11 @@ class Aquarium:
         field_names = {"cpu": "CPU", "memory": "メモリ", "name": "名前", "pid": "PID"}
         order_symbol = "↓" if self.sort_order == "desc" else "↑"
         stats_lines.append(f"ソート: {field_names.get(self.sort_by, self.sort_by)} {order_symbol}")
+        snapshot = self.process_manager.snapshot
+        if snapshot:
+            stats_lines.append(f"ホスト: {snapshot.hostname} ({snapshot.host_id})")
+        if self.process_manager.status.stale:
+            stats_lines.append("STALE: 最後に取得した状態を表示中")
 
         # # Retinaディスプレイ情報
         # if hasattr(self, 'retina_info') and self.retina_info['is_retina']:

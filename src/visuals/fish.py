@@ -219,7 +219,7 @@ class Fish:
         self.is_memory_giant = memory_percent >= 2.0 or memory_factor >= 5.5
 
         # Glow intensity based on CPU usage (exponential emphasis)
-        cpu_normalized = cpu_percent / 100.0
+        cpu_normalized = min(max(cpu_percent, 0.0), 100.0) / 100.0
         # Compute glow intensity using an exponential curve
         glow_factor = (math.exp(3 * cpu_normalized) - 1) / (math.exp(3) - 1)
         self.glow_intensity = min(glow_factor * 255, 255)

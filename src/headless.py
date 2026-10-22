@@ -3,7 +3,7 @@
 import math
 import time
 
-from .core.process_manager import ProcessManager
+from .presentation import ProcessManager
 
 
 class HeadlessMonitor:
@@ -33,6 +33,12 @@ class HeadlessMonitor:
                 )
                 if "ebpf_events" in stats:
                     message += f" events=[{stats['ebpf_events']}]"
+                if stats.get("host_id"):
+                    message += f" host={stats['host_id']}"
+                if stats.get("stale"):
+                    message += " [STALE]"
+                if stats.get("error"):
+                    message += f" error={stats['error']}"
                 print(message, flush=True)
                 remaining = self.interval - (time.monotonic() - start)
                 if self.running and remaining > 0:

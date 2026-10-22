@@ -1,49 +1,51 @@
-"""Construct the local monitoring backend independently of any presentation."""
+"""Composition helpers. Importing them never loads OS or GUI dependencies."""
 
 from typing import Optional
 
-from .process_manager import ProcessManager
-from .sources import EbpfProcessSource, PsutilProcessSource
+from ..presentation import ProcessManager
+
+
+def create_local_source(source: str, *, max_processes=2000, host_id=None, interval=1.0):
+    if source not in ("psutil", "ebpf"):
+        raise ValueError(f"Unknown process source: {source}")
+    try:
+        from .sources import EbpfProcessSource, PsutilProcessSource
+    except ModuleNotFoundError as exc:
+        if exc.name == "psutil":
+            raise RuntimeError("Local collection requires 'uv sync --extra agent'") from None
+        raise
+    options = dict(max_processes=max_processes, host_id=host_id, interval=interval)
+    if source == "ebpf":
+        try:
+            candidate = EbpfProcessSource(enable=True, hybrid_mode=True, **options)
+        except Exception as exc:
+            print(f"[eBPF] 初期化失敗: {exc} -> psutil フォールバック", flush=True)
+        else:
+            if candidate.available:
+                print("[eBPF] EbpfProcessSource 有効化（ハイブリッドモード）", flush=True)
+                return candidate
+            reason = candidate.error
+            candidate.shutdown()
+            print(f"[eBPF] 利用不可のため psutil にフォールバック - reason: {reason}", flush=True)
+    return PsutilProcessSource(**options)
 
 
 def create_process_manager(
-    source: str,
-    *,
-    max_processes: int = 2000,
-    process_limit: Optional[int] = None,
-    sort_by: str = "cpu",
-    sort_order: str = "desc",
+    source: str, *, max_processes: int = 2000, process_limit: Optional[int] = None,
+    sort_by: str = "cpu", sort_order: str = "desc",
 ) -> ProcessManager:
-    """Select a local source, preserving the eBPF-to-psutil fallback."""
-    if source not in ("psutil", "ebpf"):
-        raise ValueError(f"Unknown process source: {source}")
+    backend = create_local_source(source, max_processes=max_processes)
+    return configure_manager(backend, max_processes=max_processes, process_limit=process_limit,
+                             sort_by=sort_by, sort_order=sort_order)
 
-    backend = None
-    if source == "ebpf":
-        try:
-            candidate = EbpfProcessSource(enable=True, hybrid_mode=True)
-        except Exception as exc:
-            print(f"[eBPF] 初期化失敗: {exc} -> psutil フォールバック")
-        else:
-            if candidate.available:
-                backend = candidate
-                print("[eBPF] EbpfProcessSource 有効化（ハイブリッドモード）")
-            else:
-                try:
-                    errors = []
-                    for event in candidate.drain_lifecycle_events():
-                        details = event.details or {}
-                        message = details.get("error") or details.get("warning")
-                        if message:
-                            errors.append(str(message))
-                    reason = f" - reason: {'; '.join(errors)}" if errors else ""
-                    print(f"[eBPF] 利用不可のため psutil にフォールバック{reason}")
-                finally:
-                    candidate.shutdown()
 
-    if backend is None:
-        backend = PsutilProcessSource(max_processes=max_processes)
-    manager = ProcessManager(max_processes=max_processes, source=backend)
-    manager.set_process_limit(process_limit)
-    manager.set_sort_config(sort_by, sort_order)
-    return manager
+def configure_manager(backend, *, max_processes=2000, process_limit=None,
+                      sort_by="cpu", sort_order="desc"):
+    try:
+        manager = ProcessManager(max_processes=max_processes, source=backend)
+        manager.set_process_limit(process_limit)
+        manager.set_sort_config(sort_by, sort_order)
+        return manager
+    except BaseException:
+        backend.shutdown()
+        raise

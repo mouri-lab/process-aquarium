@@ -3,16 +3,17 @@ from unittest.mock import Mock
 import pytest
 
 from src.core import runtime
+from src.core import sources
 from src.core.types import ProcessLifecycleEvent
 
 
 @pytest.mark.parametrize("available", [True, False])
 def test_ebpf_selection_and_fallback(monkeypatch, capsys, available):
-    ebpf = Mock(available=available)
+    ebpf = Mock(available=available, error="bcc unavailable")
     ebpf.drain_lifecycle_events.return_value = [
         ProcessLifecycleEvent("exec", 0, None, 0, {"warning": "bcc unavailable"})
     ]
-    monkeypatch.setattr(runtime, "EbpfProcessSource", Mock(return_value=ebpf))
+    monkeypatch.setattr(sources, "EbpfProcessSource", Mock(return_value=ebpf))
 
     manager = runtime.create_process_manager(
         "ebpf", max_processes=50, process_limit=7, sort_by="memory", sort_order="asc"
@@ -33,7 +34,7 @@ def test_ebpf_selection_and_fallback(monkeypatch, capsys, available):
 
 
 def test_ebpf_initialization_failure_falls_back(monkeypatch, capsys):
-    monkeypatch.setattr(runtime, "EbpfProcessSource", Mock(side_effect=RuntimeError("permission denied")))
+    monkeypatch.setattr(sources, "EbpfProcessSource", Mock(side_effect=RuntimeError("permission denied")))
     manager = runtime.create_process_manager("ebpf")
     try:
         assert manager.get_data_source() == "psutil"
@@ -44,7 +45,7 @@ def test_ebpf_initialization_failure_falls_back(monkeypatch, capsys):
 
 def test_explicit_psutil_does_not_initialize_ebpf(monkeypatch):
     ebpf = Mock(side_effect=AssertionError("eBPF must not be initialized"))
-    monkeypatch.setattr(runtime, "EbpfProcessSource", ebpf)
+    monkeypatch.setattr(sources, "EbpfProcessSource", ebpf)
     manager = runtime.create_process_manager("psutil")
     try:
         assert manager.get_data_source() == "psutil"
