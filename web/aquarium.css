@@ -173,23 +173,32 @@ kbd {
 }
 .feedback {
   position: fixed;
-  bottom: 55px;
+  bottom: 38px;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate(-50%, 5px);
   z-index: 100000;
   font-size: 12px;
-  padding: 8px 15px;
-  color: #e6e8d8;
-  background: #162c40e8;
-  border: 1px solid #719085;
-  border-radius: 7px;
+  padding: 9px 15px;
+  color: #5a6049;
+  background: #f4efd8;
+  border: 2px solid #8c9678;
+  border-radius: 18px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.15s;
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
   max-width: 90vw;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  box-shadow:
+    inset 0 2px #fffbe8,
+    0 3px 0 #59695566;
 }
 .feedback.visible {
   opacity: 1;
+  transform: translate(-50%, 0);
 }
 .paused-indicator {
   position: fixed;
@@ -1006,4 +1015,47 @@ button.setting-row:hover {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* Quiet water and a small paper bubble for momentary feedback. */
+.stage {
+  background:
+    radial-gradient(ellipse at 38% -15%, #72a39640, transparent 65%),
+    linear-gradient(#204d59 0%, #183d4b 40%, #102c3d 100%);
+}
+
+.feedback:before {
+  content: "";
+  flex-shrink: 0;
+  width: 23px;
+  height: 18px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 24'%3E%3Cpath d='M9 12 3 6v12l6-6c4-10 17-10 21 0-4 10-17 10-21 0Z' fill='%23bdcda0' stroke='%23808c68' stroke-width='1.5' stroke-linejoin='round'/%3E%3Ccircle cx='24' cy='10' r='1.4' fill='%23586547'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.feedback:after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: 25px;
+  width: 9px;
+  height: 9px;
+  background: #f4efd8;
+  border: solid #8c9678;
+  border-width: 0 2px 2px 0;
+  border-radius: 0 0 3px 0;
+  transform: rotate(32deg);
+}
+/* Keep the extra swim-speed control within the compact aquarium panel. */
+[data-content="aquarium"] fieldset {
+  margin-bottom: 8px;
+  padding-top: 2px;
+  padding-bottom: 5px;
+}
+[data-content="aquarium"] .setting-row {
+  min-height: 33px;
+  padding: 4px;
+}
+[data-content="aquarium"] .pause-action {
+  padding-top: 6px;
+  padding-bottom: 6px;
 }

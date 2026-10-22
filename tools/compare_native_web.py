@@ -160,7 +160,7 @@ world.fish.set(i,f);}
 let canvas=document.querySelector('#fish'),renderer=await createRenderer(canvas,()=>{}),forceCanvas=false;
 const camera={x:data.width/2,y:data.height/2,zoom:1};
 function paint(){document.querySelector('#backend').textContent=renderer.name;renderer.render(world,camera,data.width,data.height);
-const under=prepareCanvas(document.querySelector('#under'),data.width,data.height);drawUnderlay(under,world,camera,data.width,data.height,{particles:0,debug:false,ipc:false});
+const under=prepareCanvas(document.querySelector('#under'),data.width,data.height);drawUnderlay(under,world,camera,data.width,data.height,{particles:0,debug:false,ipc:false,habitat:false});
 const over=prepareCanvas(document.querySelector('#over'),data.width,data.height);over.fillStyle='#c8d8f0';over.font='16px sans-serif';over.textAlign='center';for(const s of data.states)over.fillText(s.label,s.x,s.y+75);}
 paint();document.querySelector('#toggle').onclick=async()=>{forceCanvas=!forceCanvas;canvas=freshCanvas(renderer.canvas);renderer.destroy();renderer=await createRenderer(canvas,()=>{},{forceCanvas});paint();};
 </script></html>"""

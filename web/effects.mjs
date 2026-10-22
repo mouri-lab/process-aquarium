@@ -16,9 +16,105 @@ const circle = (ctx, x, y, r) => {
   ctx.beginPath();
   ctx.arc(x, y, Math.max(0, r), 0, TAU);
 };
+function habitat(ctx, width, height, time, camera, quality) {
+  if (quality !== "minimal") {
+    // Broad, quiet shafts of light; their drift follows the animation clock.
+    for (let i = 0; i < 3; i++) {
+      const x = width * (0.12 + i * 0.33) + Math.sin(time * 0.09 + i) * 16;
+      const light = ctx.createLinearGradient(
+        x,
+        0,
+        x + width * 0.13,
+        height * 0.9,
+      );
+      light.addColorStop(0, "rgba(211,237,205,.055)");
+      light.addColorStop(1, "rgba(211,237,205,0)");
+      ctx.fillStyle = light;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x + width * 0.06, 0);
+      ctx.lineTo(x + width * 0.27, height);
+      ctx.lineTo(x + width * 0.08, height);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  const floor = height - Math.min(30, height * 0.045);
+  ctx.fillStyle = "#294e50";
+  ctx.beginPath();
+  ctx.moveTo(0, floor - 10);
+  ctx.bezierCurveTo(
+    width * 0.3,
+    floor + 22,
+    width * 0.72,
+    floor - 7,
+    width,
+    floor,
+  );
+  ctx.lineTo(width, height);
+  ctx.lineTo(0, height);
+  ctx.closePath();
+  ctx.fill();
+  if (quality === "minimal") return;
+  const scale = Math.min(1, height / 650, width / 700);
+  const parallax = Math.sin(camera.x / 900) * 16;
+  const plants = [
+    [42, 76, 1],
+    [78, 115, -1],
+    [106, 55, 1],
+    [width - 74, 83, -1],
+    [width - 39, 55, 1],
+  ];
+  for (const [base, tall, direction] of plants) {
+    const x = base + parallax;
+    const h = tall * scale;
+    const sway = Math.sin(time * 0.36 + base) * 5 * scale;
+    ctx.strokeStyle = "#4b7770";
+    ctx.lineWidth = 3 * scale;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x, floor + 8);
+    ctx.quadraticCurveTo(
+      x - direction * 12 * scale,
+      floor - h * 0.6,
+      x + sway,
+      floor - h,
+    );
+    ctx.stroke();
+    for (let j = 1; j <= 4; j++) {
+      const side = j % 2 ? -1 : 1;
+      const y = floor - (h * j) / 5;
+      const stem = x + (sway * j) / 5 - direction * 4 * scale;
+      ctx.fillStyle = j % 2 ? "#426c64" : "#507e6c";
+      ctx.beginPath();
+      ctx.moveTo(stem, y);
+      ctx.quadraticCurveTo(
+        stem + side * 25 * scale,
+        y - 3 * scale,
+        stem + side * 17 * scale,
+        y - 20 * scale,
+      );
+      ctx.quadraticCurveTo(stem + side * 3 * scale, y - 16 * scale, stem, y);
+      ctx.fill();
+    }
+  }
+  // A few pebbles settle the corners without taking space away from the fish.
+  for (const [x, y, rx, ry] of [
+    [25, floor + 9, 19, 8],
+    [102, floor + 14, 14, 6],
+    [width - 50, floor + 9, 23, 9],
+  ]) {
+    ctx.fillStyle = "#52665a";
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx * scale, ry * scale, -0.1, 0, TAU);
+    ctx.fill();
+  }
+}
 export function drawUnderlay(ctx, world, camera, width, height, view) {
   const time = world.time,
     byPid = world.byPid();
+  if (view.habitat !== false)
+    habitat(ctx, width, height, time, camera, world.quality);
   ctx.lineWidth = 1;
   for (let i = 0; i < view.particles; i++) {
     const x = (i * 179.3 + Math.sin(time * 0.1 + i) * 12) % width;
