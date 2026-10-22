@@ -1,0 +1,203 @@
+"""Versioned, presentation-independent telemetry shared by every process.
+
+Snapshots are complete host states. Events are a bounded replay window, with
+monotonically increasing IDs within one agent session. Neither carries fish,
+animation, sorting, nor display-limit state.
+"""
+
+from dataclasses import asdict, dataclass, field
+import json
+import math
+from typing import Any, Optional
+
+
+SCHEMA_VERSION = 1
+MAX_BODY_BYTES = 16 * 1024 * 1024
+MAX_EVENTS = 2048
+MAX_PROCESSES = 50000
+
+
+@dataclass(frozen=True)
+class ProcessRecord:
+    pid: int
+    ppid: int
+    name: str
+    exe: str
+    memory_percent: float
+    cpu_percent: float
+    num_threads: int
+    create_time: float
+    status: str
+    cmdline: tuple[str, ...]
+
+    @property
+    def identity(self) -> tuple[int, float]:
+        return self.pid, self.create_time
+
+
+@dataclass(frozen=True)
+class LifecycleEvent:
+    event_type: str
+    pid: int
+    ppid: Optional[int]
+    timestamp: float
+    details: Optional[dict[str, Any]] = None
+    event_id: int = 0
+    create_time: float = 0.0
+
+
+@dataclass(frozen=True)
+class Connection:
+    pid_a: int
+    pid_b: int
+    kind: str
+    metadata: Optional[dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    host_id: str
+    hostname: str
+    boot_id: str
+    session_id: str
+    sequence: int
+    collected_at: float
+    source: str
+    processes: tuple[ProcessRecord, ...]
+    events: tuple[LifecycleEvent, ...] = ()
+    connections: tuple[Connection, ...] = ()
+    event_stats: dict[str, int] = field(default_factory=dict)
+    error: Optional[str] = None
+
+    @property
+    def revision(self) -> tuple[str, str, int]:
+        return self.host_id, self.session_id, self.sequence
+
+    def to_dict(self) -> dict:
+        return {"schema_version": SCHEMA_VERSION, **asdict(self)}
+
+    def to_bytes(self) -> bytes:
+        return json.dumps(self.to_dict(), ensure_ascii=False, allow_nan=False,
+                          separators=(",", ":")).encode("utf-8")
+
+
+class ProtocolError(ValueError):
+    """The peer supplied unsupported or malformed telemetry."""
+
+
+def _object(value: Any, name: str) -> dict:
+    if not isinstance(value, dict):
+        raise ProtocolError(f"{name} must be an object")
+    return value
+
+
+def _text(value: Any, name: str, *, nonempty: bool = False) -> str:
+    if not isinstance(value, str) or len(value) > 16384 or (nonempty and not value):
+        raise ProtocolError(f"{name} must be {'nonempty ' if nonempty else ''}text (at most 16384 characters)")
+    return value
+
+
+def _integer(value: Any, name: str, minimum: int = 0) -> int:
+    if type(value) is not int or value < minimum or value > 2**63 - 1:
+        raise ProtocolError(f"{name} must be an integer >= {minimum}")
+    return value
+
+
+def _number(value: Any, name: str) -> float:
+    if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+        raise ProtocolError(f"{name} must be a finite nonnegative number")
+    return float(value)
+
+
+def _array(value: Any, name: str, limit: int) -> list:
+    if not isinstance(value, (list, tuple)) or len(value) > limit:
+        raise ProtocolError(f"{name} must be an array of at most {limit} items")
+    return value
+
+
+def snapshot_from_dict(value: Any) -> Snapshot:
+    """Validate untrusted JSON before admitting it to the host state."""
+    data = _object(value, "snapshot")
+    if type(data.get("schema_version")) is not int or data["schema_version"] != SCHEMA_VERSION:
+        raise ProtocolError(f"Unsupported schema_version (expected {SCHEMA_VERSION})")
+    processes = []
+    pids = set()
+    for raw in _array(data.get("processes"), "processes", MAX_PROCESSES):
+        item = _object(raw, "process")
+        pid = _integer(item.get("pid"), "pid")
+        if pid in pids:
+            raise ProtocolError("Duplicate process PID")
+        pids.add(pid)
+        processes.append(ProcessRecord(
+            pid=pid, ppid=_integer(item.get("ppid"), "ppid"),
+            name=_text(item.get("name"), "name"), exe=_text(item.get("exe"), "exe"),
+            memory_percent=_number(item.get("memory_percent"), "memory_percent"),
+            cpu_percent=_number(item.get("cpu_percent"), "cpu_percent"),
+            num_threads=_integer(item.get("num_threads"), "num_threads"),
+            create_time=_number(item.get("create_time"), "create_time"),
+            status=_text(item.get("status"), "status"),
+            cmdline=tuple(_text(arg, "cmdline argument") for arg in
+                          _array(item.get("cmdline"), "cmdline", 4096)),
+        ))
+    events = []
+    last_id = 0
+    for raw in _array(data.get("events", []), "events", MAX_EVENTS):
+        item = _object(raw, "event")
+        kind = item.get("event_type")
+        if kind not in ("spawn", "fork", "exec", "exit"):
+            raise ProtocolError("Unsupported lifecycle event")
+        event_id = _integer(item.get("event_id"), "event_id", 1)
+        if event_id <= last_id:
+            raise ProtocolError("Event IDs must be strictly increasing")
+        last_id = event_id
+        details = item.get("details")
+        ppid = item.get("ppid")
+        events.append(LifecycleEvent(
+            event_type=kind, pid=_integer(item.get("pid"), "event pid"),
+            ppid=None if ppid is None else _integer(ppid, "event ppid"),
+            timestamp=_number(item.get("timestamp"), "event timestamp"),
+            details=None if details is None else _object(details, "event details"),
+            event_id=event_id, create_time=_number(item.get("create_time", 0), "event create_time"),
+        ))
+    connections = []
+    for raw in _array(data.get("connections", []), "connections", 10000):
+        item = _object(raw, "connection")
+        metadata = item.get("metadata")
+        connections.append(Connection(
+            pid_a=_integer(item.get("pid_a"), "pid_a"),
+            pid_b=_integer(item.get("pid_b"), "pid_b"),
+            kind=_text(item.get("kind"), "kind", nonempty=True),
+            metadata=None if metadata is None else _object(metadata, "connection metadata"),
+        ))
+    stats = _object(data.get("event_stats", {}), "event_stats")
+    if len(stats) > 32:
+        raise ProtocolError("Too many event statistics")
+    error = data.get("error")
+    return Snapshot(
+        host_id=_text(data.get("host_id"), "host_id", nonempty=True),
+        hostname=_text(data.get("hostname"), "hostname", nonempty=True),
+        boot_id=_text(data.get("boot_id"), "boot_id", nonempty=True),
+        session_id=_text(data.get("session_id"), "session_id", nonempty=True),
+        sequence=_integer(data.get("sequence"), "sequence", 1),
+        collected_at=_number(data.get("collected_at"), "collected_at"),
+        source=_text(data.get("source"), "source", nonempty=True),
+        processes=tuple(processes), events=tuple(events), connections=tuple(connections),
+        event_stats={_text(k, "statistic"): _integer(v, "statistic") for k, v in stats.items()},
+        error=None if error is None else _text(error, "error"),
+    )
+
+
+def decode_json(payload: bytes) -> Any:
+    if len(payload) > MAX_BODY_BYTES:
+        raise ProtocolError("Request body exceeds 16 MiB")
+    try:
+        def reject_constant(value):
+            raise ProtocolError(f"Non-finite JSON value: {value}")
+
+        return json.loads(payload, parse_constant=reject_constant)
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        raise ProtocolError(f"Invalid JSON: {exc}") from exc
+
+
+def snapshot_from_bytes(payload: bytes) -> Snapshot:
+    return snapshot_from_dict(decode_json(payload))
