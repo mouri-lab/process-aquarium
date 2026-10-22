@@ -121,3 +121,49 @@ test("large fish can be selected across their body", () => {
   const fish = [...world.fish.values()][0];
   assert.equal(world.pick(fish.x + 35, fish.y, 20), fish.key);
 });
+
+test("a lookup focus reveals a process outside the limit and survives refresh", () => {
+  const world = new AquariumWorld(),
+    data = snapshot(1, [process(1), process(2), process(3)]);
+  world.setFilters({ limit: 1 });
+  world.apply(data);
+  const key = keyOf(data, process(1));
+  assert.equal(world.fish.has(key), false);
+  assert.equal(world.focus(key), true);
+  assert.equal(world.selected().p.pid, 1);
+  world.apply(snapshot(2, data.processes));
+  assert.equal(world.selected().p.pid, 1);
+  assert.equal(world.focus("nonexistent"), false);
+  world.apply(snapshot(3, [process(1, 2)]));
+  assert.equal(world.selection, null);
+});
+
+test("reused PIDs cannot inherit communication history or partner highlights", () => {
+  const w = new AquariumWorld(),
+    data = snapshot(1, [process(1), process(2)]);
+  w.apply(data);
+  w.history.set("[1,2]", [1, 2, 3]);
+  w.highlighted.add(1);
+  const partner = [...w.fish.values()].find((f) => f.p.pid === 2);
+  partner.partners = [1];
+  partner.talk = 60;
+  w.apply(snapshot(2, [process(1, 2), process(2)], { collected_at: 4 }));
+  assert.equal(w.history.size, 0);
+  assert.equal(w.highlighted.has(1), false);
+  assert.deepEqual(partner.partners, []);
+  assert.equal(partner.talk, 0);
+});
+
+test("a visible parent flashes when a newly forked child is outside the limit", () => {
+  const w = new AquariumWorld();
+  w.setFilters({ limit: 1, sort: "pid", order: "asc" });
+  w.apply(
+    snapshot(1, [process(1), { ...process(2), ppid: 1 }], {
+      events: [
+        { event_id: 1, event_type: "fork", pid: 2, ppid: 1, create_time: 1 },
+      ],
+    }),
+  );
+  assert.equal(w.byPid().get(1).fork, 60);
+  assert.equal(w.byPid().has(2), false);
+});

@@ -157,9 +157,33 @@ export class AquariumWorld {
     this.processes = new Map(
       snapshot.processes.map((p) => [keyOf(snapshot, p), p]),
     );
+    const recordsByPid = new Map(snapshot.processes.map((p) => [p.pid, p]));
+    const currentKeys = new Map(
+      snapshot.processes.map((p) => [p.pid, keyOf(snapshot, p)]),
+    );
+    const replaced = new Set(
+      [...old]
+        .filter(([key, p]) => currentKeys.get(p.pid) !== key)
+        .map(([, p]) => p.pid),
+    );
+    for (const key of this.history.keys())
+      if (JSON.parse(key).some((pid) => replaced.has(pid)))
+        this.history.delete(key);
+    for (const pid of this.highlighted)
+      if (replaced.has(pid) || !currentKeys.has(pid))
+        this.highlighted.delete(pid);
     if (this.selection && !this.processes.has(this.selection))
       this.selection = null;
     this.reconcileView(old);
+    for (const f of this.fish.values()) {
+      f.partners = f.partners.filter(
+        (pid) => !replaced.has(pid) && currentKeys.has(pid),
+      );
+      if (!f.partners.length) {
+        f.talk = 0;
+        f.message = "";
+      }
+    }
     const session = JSON.stringify([snapshot.host_id, snapshot.session_id]);
     if (session !== this.eventSession) {
       this.eventSession = session;
@@ -176,12 +200,13 @@ export class AquariumWorld {
     );
     for (const event of snapshot.events) {
       if (event.event_id <= this.eventCursor) continue;
-      const fish = byPid.get(event.pid);
+      const fish = byPid.get(event.pid),
+        process = recordsByPid.get(event.pid);
       if (
-        fish &&
-        (!event.create_time || event.create_time === fish.p.create_time)
+        process &&
+        (!event.create_time || event.create_time === process.create_time)
       ) {
-        if (event.event_type === "exec") {
+        if (event.event_type === "exec" && fish) {
           fish.exec = 30;
           fish.flash = 1;
         }
@@ -199,6 +224,14 @@ export class AquariumWorld {
     Object.assign(this.filters, patch);
     if (this.snapshot) this.reconcileView(this.processes);
   }
+  focus(key) {
+    if (!this.processes.has(key)) return false;
+    const existed = this.fish.has(key);
+    this.selection = key;
+    this.reconcileView(this.processes);
+    if (!existed) this.fish.get(key).spawn = 1;
+    return true;
+  }
   reconcileView(previous) {
     const visible = new Map(
       selectedProcesses(this.snapshot, this.filters).map((p) => [
@@ -206,6 +239,10 @@ export class AquariumWorld {
         p,
       ]),
     );
+    // Searching is a navigation action. Keep the focused fish observable even
+    // when it lies outside the current display limit.
+    if (this.selection && this.processes.has(this.selection))
+      visible.set(this.selection, this.processes.get(this.selection));
     for (const [key, fish] of this.fish) {
       if (!this.processes.has(key)) fish.dying = true;
       else if (!visible.has(key)) this.fish.delete(key); // Hidden != dead.
