@@ -1,230 +1,162 @@
 # 🐠 Process Aquarium
 
-English | [日本語 README](./README.md)
+[日本語](./README.md) | English
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)
+Watch OS processes swim as fish. Run **collection agents**, a **headless aggregation server**, and a **WebGPU browser client** independently. The existing pygame aquarium and standalone local mode remain available.
 
-Visualize your running processes as a living aquarium of fish. Each fish represents one process; size, glow, satellites, and subtle effects encode runtime metrics so you can spot anomalies at a glance.
+```mermaid
+flowchart LR
+    A[Agent A: psutil / eBPF] -->|HTTP JSON| S[Aggregation server]
+    B[Agent B: psutil / eBPF] -->|HTTP JSON| S
+    S -->|Complete host snapshots| W[Browser: simulation + WebGPU]
+    S --> N[Native / text client]
+```
 
-## Features
+The server serves telemetry and static assets. Simulation and rendering run in the browser; the server needs no GPU, pygame, or display. Canvas 2D takes over when WebGPU is unavailable or its device is lost. No frontend build or Node.js runtime is required.
 
-**Visualization Overview**
-- Each process is rendered as a "fish" with deterministic color/shape derived from its name
-- Memory usage → fish size (log compression + relative share scaling)
-- CPU usage → glow (emissive intensity) and max movement speed (color itself mostly stable)
-- Thread count → orbiting satellites (up to 14) around the fish
-- Spawn / exit → fade‑in and fade‑out animations
+![WebGPU browser client](./docs/browser-preview.jpg)
 
-**Monitoring**
-- Data source selectable: eBPF or psutil (`--source`)
-- Periodic refresh of CPU / memory / thread stats
-- Internally abstracted layer for future data source extensions
+Screenshot showing a 24-process validation stream.
 
-**Runtime Options**
-- Change sort key (CPU / memory / name / PID)
-- Limit number of displayed processes
-- Headless mode (periodic textual statistics only)
+## Quick start
 
-## Quick Start
+Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 
-### 1. Requirements
-- Python 3.10+
-- Linux (to leverage eBPF fully)
-
-### 2. Installation
 ```bash
-# System dependencies (Ubuntu/Debian)
-sudo apt install -y python3-bpfcc linux-headers-$(uname -r) \
-    libbpf-dev clang llvm make gcc python3-venv
-
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Clone repository
 git clone https://github.com/mouri-lab/process-aquarium.git
 cd process-aquarium
-git switch main
+uv sync --locked --no-dev --extra agent
 
-# Create virtualenv (reuse system bpf packages)
+# Terminal 1: aggregation server
+./.venv/bin/python main.py server
+```
+
+In a second terminal, from the same directory:
+
+```bash
+# Terminal 2: collect this host without root
+./.venv/bin/python main.py agent --server http://127.0.0.1:8080 --source psutil
+```
+
+Open **<http://localhost:8080>**. The aquarium waits for actual telemetry; it does not invent metrics before an agent connects. Stop each process with Ctrl+C.
+
+## Multiple hosts
+
+The aggregation server only needs the Python standard library.
+
+```bash
+# Aggregation host
+uv sync --locked --no-dev
+export AQUARIUM_TOKEN='your-shared-secret'
+./.venv/bin/python main.py server --listen 0.0.0.0 --port 8080
+```
+
+Install and run an agent on every monitored host. Each `--host-id` must be unique; the default is the hostname.
+
+```bash
+uv sync --locked --no-dev --extra agent
+export AQUARIUM_TOKEN='your-shared-secret'
+./.venv/bin/python main.py agent \
+  --server https://aquarium.example.com --host-id worker-01 --source psutil
+```
+
+Open the server URL, enter the token through Toolbox → Connection, and choose a host. The browser keeps the token in that tab's sessionStorage, never in a URL. Prefer `AQUARIUM_TOKEN` over `--token` so the secret is absent from the monitored process's command line.
+
+Remote WebGPU needs HTTPS; HTTP localhost is supported. Terminate TLS with Caddy, nginx, or another reverse proxy. An ordinary HTTP LAN URL uses Canvas 2D instead. Use HTTPS for authenticated remote connections.
+
+## Reading and navigating the aquarium
+
+| Visual | Meaning |
+| --- | --- |
+| Color / markings | Process name |
+| Size | Memory percentage, using power/logarithmic scaling |
+| Glow / swimming speed | CPU usage |
+| Orbiting little fish | Threads, capped at 14 |
+| Schools | Parent/child and related processes |
+| Growth / shrinking | New processes / actual exits |
+
+The aquarium fills the viewport. Press `Esc` or open the toolbox in the corner to summon a small game window. Drag its title bar to move it; fold it with the minus button or a double-click. The aquarium keeps swimming while windows are open.
+
+- Click a fish to inspect it, or right-click to follow it. `/` searches by name or PID and takes you to the fish.
+- Drag to pan; scroll for pointer-centered zoom (0.1–5×). `C` changes camera mode; `R` resets the view.
+- `L` cycles display limits. `1`–`6` select 10, 20, 50, 100, 200 or 400 fish; `0` removes the limit. `S` / `O` change sort field/direction.
+- `D` toggles parent lines, `I` communication lines, and `Q` school highlighting. Click a chat puff to highlight its communication partners.
+- `Space` pauses movement, `T` cycles UI visibility, `F` / `F11` toggles fullscreen, and `?` opens help.
+- Swimming defaults to 1× with ¼–1× controls. The 30Hz simulation is interpolated for display; gentle steering and smaller fin strokes soften rapid visual changes.
+- Full/reduced/minimal/automatic quality, name labels, hosts, authentication and diagnostics live in the toolbox.
+- Display filtering does not imply exits; connection or collection failures retain the last known state.
+
+Seven silhouettes, CPU-dependent glow/speed, family/name schools, fork flashes, exec rainbow changes, memory rings (5%+) and lightning (20%+) are included. See the [native parity audit and comparison images](./docs/feature-parity.md).
+
+Total CPU is the sum of process usage, with 100% representing one CPU core. Total memory sums process percentages; it does not deduplicate shared physical pages.
+
+## eBPF on Linux
+
+eBPF captures fork / exec / exit while psutil periodically refreshes metrics and reconciles the complete process state. Unavailable BCC falls back to psutil. Runtime eBPF polling failure also continues with psutil collection.
+
+Ubuntu / Debian example, using the same system Python as BCC:
+
+```bash
+sudo apt install python3-bpfcc linux-headers-$(uname -r) python3-venv
 uv venv -p /usr/bin/python3 --system-site-packages
+uv sync --locked --no-dev --extra agent
 
-# Install dependencies
-uv sync
+# Configure the token in an appropriate root-readable environment if needed.
+sudo ./.venv/bin/python main.py agent \
+  --server http://127.0.0.1:8080 --source ebpf --host-id linux-01
 ```
 
-### 3. Run
+## Native and text clients
+
 ```bash
-# eBPF (recommended, requires root)
-sudo ./.venv/bin/python3 main.py --source ebpf
+# Existing standalone local aquarium
+uv sync --locked --no-dev --extra agent --extra gui
+./.venv/bin/python main.py --source psutil --limit 100
 
-# psutil (no root required)
-./.venv/bin/python3 main.py --source psutil
+# Remote native client needs only the gui extra, not psutil
+./.venv/bin/python main.py client --server http://127.0.0.1:8080 --host worker-01
+
+# Remote text client: no optional dependencies
+./.venv/bin/python main.py client --server http://127.0.0.1:8080 \
+  --host worker-01 --headless --headless-interval 2
+
+# Existing local text mode
+./.venv/bin/python main.py --source psutil --headless
 ```
 
-⚠️ Notes
-- eBPF mode: root (`sudo`) required for kernel‑level access
-- Using `--system-site-packages` lets you reuse preinstalled bpf tooling
-- Python version mismatch can cause eBPF load failures
+Native controls retain F / F11 (fullscreen), left click (inspect), right click (follow), drag / scroll (camera), L (limit), S / O (sorting), D / I / T / Q (display modes), and Esc (quit). `--no-gpu` disables native SDL GPU rendering.
 
-A window opens and active processes appear as fish.
+Native/text clients require `--host` when multiple hosts exist. A selected host never silently changes during an outage.
 
-## Usage
+## Configuration and API
 
-### Basic Interaction
-- Mouse move: perceive camera reference
-- Left click: select fish & show detail panel
-- Right click: set follow target
-- Left drag: pan camera (cancels follow)
-- Mouse wheel: zoom (0.1x–5x)
-- F / F11: toggle fullscreen
-- Esc: quit
+See `python main.py --help` and each subcommand's `--help` for all options.
 
-### Key Map
-| Key        | Action                      | Note                                   |
-| ---------- | --------------------------- | -------------------------------------- |
-| Esc        | Quit                        | Immediate exit                         |
-| F / F11    | Toggle fullscreen           | Works windowed or fullscreen           |
-| D          | Toggle debug overlay        | Parent/child link hints & internals    |
-| I          | Toggle IPC visualization    | IPC lines / bubbles                    |
-| T          | Toggle UI panels            | Hide/show help & info                  |
-| Q          | Highlight schools           | Dim isolates                           |
-| L          | Cycle process count limit   | Rotates preset caps                    |
-| S          | Cycle sort field            | CPU→MEM→NAME→PID                       |
-| O          | Toggle sort order           | Asc / desc                             |
-| C          | Cycle camera mode           | Auto / follow / manual                 |
-| R          | Reset camera                | Position / zoom / follow off           |
-| Left click | Select fish                 | Updates detail panel                   |
-| Right click| Set follow target           | Reclick to change                      |
-| Wheel      | Zoom                        | Pivot around pointer                   |
-| Drag (LMB) | Pan                         | Cancels follow                         |
+| Option | Default |
+| --- | --- |
+| server `--listen` / `--port` | `127.0.0.1` / `8080` |
+| server `--stale-after` | 5 seconds since the last new revision |
+| server `--retention` / `--max-hosts` | 3600 seconds / 128 hosts |
+| agent `--interval` | 1 second |
+| client `--poll-interval` / `--timeout` | 1 second / 3 seconds |
+| Browser display limit | Unlimited by default (protocol maximum: 50,000); view limits do not affect collection |
 
-### Visual Semantics
-**Color / Shape**
-- Initial color: hash of process name
-- Shape: minor variation by simple name heuristics (e.g., system vs browser naming patterns)
+Environment variables: `AQUARIUM_SERVER`, `AQUARIUM_TOKEN`, `AQUARIUM_HOST_ID` (agent), `AQUARIUM_HOST` (client), and `AQUARIUM_SOURCE`. Native clients also support existing `AQUARIUM_LIMIT`, `AQUARIUM_SORT_BY`, `AQUARIUM_SORT_ORDER`, `AQUARIUM_GPU`, and related settings.
 
-**Size / Glow / Speed**
-- Size: mapped from memory usage (log-compressed + relative weighting)
-- Glow strength: exponential mapping of CPU usage (higher → brighter)
-- Max speed: scaled exponentially by CPU usage
+Endpoints: `/api/v1/hosts`, `/api/v1/snapshot?host=worker-01`, and `POST /api/v1/snapshots`. When a token is configured, send `Authorization: Bearer …`. `/healthz` and browser assets are public.
 
-**Thread Satellites**
-- Up to 14 orbiting dots indicating thread count distribution
+State is held in memory. After a server restart, the next full snapshot from each agent restores it. See [architecture and protocol](./docs/architecture.md) for contracts, limits, and verification notes.
 
-**Special Effects**
-- High memory (above threshold): gentle concentric ripple rings pulsing around the fish
-- Extremely high memory (higher threshold): occasional brief lightning‑like streaks signaling dominance
-- Purpose: let you visually detect outlier memory consumers within seconds without reading numbers
+## Development
 
-**Schools (Flocking)**
-- Goal: visually cluster related processes for contextual grouping
-- Behavior: separation / alignment / cohesion produce natural schooling motion
-- Highlight (Q): dims outsiders to focus on clustered group(s)
-- Typical uses: monitoring many workers, spotting bursty short‑lived spawners, observing restart reshaping
-- Limits: does not geometrically encode parent-child or IPC topology directly
-- Suggested workflow: Q → L → S/O → click for details
-
-**Lifecycle**
-- Birth: spawn animation (fade / scale‑in)
-- Termination: fade‑out (marked internally as dying)
-- fork/exec: transient glow or regenerated color accent
-
-## Command Line Examples
 ```bash
-# Set window size
-sudo ./.venv/bin/python3 main.py --source ebpf --width 1600 --height 1000
+uv sync --locked --extra agent --extra gui
+uv run --locked --extra agent --extra gui python -m pytest -q
 
-# Limit displayed processes
-sudo ./.venv/bin/python3 main.py --source ebpf --limit 50
-
-# Sort by CPU ascending
-sudo ./.venv/bin/python3 main.py --source ebpf --sort-by cpu --sort-order asc
-
-# Sort by memory
-ysudo ./.venv/bin/python3 main.py --source ebpf --sort-by memory
-
-# Headless (no GUI) with 2s interval
-sudo ./.venv/bin/python3 main.py --source ebpf --headless --headless-interval 2.0
-
-# psutil mode (no root)
-./.venv/bin/python3 main.py --source psutil --limit 50
+# Node.js 18+, no npm dependencies needed
+node --test tests/web/*.test.mjs
 ```
 
-### Options
-| Option | Description | Default |
-| ------ | ----------- | ------- |
-| `--width` | Window width | 1200 |
-| `--height` | Window height | 800 |
-| `--limit` | Max displayed processes | Unlimited |
-| `--sort-by` | Sort key (`cpu`, `memory`, `name`, `pid`) | `cpu` |
-| `--sort-order` | Sort order (`asc`, `desc`) | `desc` |
-| `--source` | Data source (`psutil`, `ebpf`) | `ebpf` |
-| `--headless` | Headless mode | false |
-| `--headless-interval` | Interval seconds (headless) | 1.0 |
+Tests cover HTTP authentication and validation, multiple hosts, reordered and duplicate revisions, reconnects, PID reuse, filtering, and separate-process startup/shutdown. With pygame and Node.js installed, differential tests compare the actual native formulas, flocking and drawing primitives. Native rendering also runs through SDL's dummy driver. Browser verification is documented in [architecture](./docs/architecture.md#検証).
 
-## For Developers
-
-### Project Layout
-```
-process-aquarium/
-├── main.py                # Entry point
-├── pyproject.toml         # Project config
-├── src/
-│   ├── core/
-│   │   ├── process_manager.py  # Process management
-│   │   ├── sources.py          # Data source abstraction
-│   │   └── types.py            # Type definitions
-│   └── visuals/
-│       ├── aquarium.py         # Aquarium visualization controller
-│       └── fish.py             # Fish rendering & animation
-├── fork_bomb.py          # Stress test process spawner
-└── README.md             # Japanese README
-```
-
-### Stress Tool
-Use `fork_bomb.py` to spawn many processes (for visualization testing):
-```bash
-# Spawn 30 children (safe range)
-python fork_bomb.py --max-children 30
-
-# Recursive spawning (each child spawns more)
-python fork_bomb.py --recursive --max-children 20
-
-# Auto-stop after duration
-python fork_bomb.py --duration 60
-```
-⚠️ Caution: High load (CPU/memory/thread count). Do NOT use in production systems.
-
-### Dependencies
-- numpy (≥2.2.6)
-- psutil (≥7.1.0)
-- pygame-ce (≥2.5.2)
-- pytest (≥8.4.2)
-
-### Environment Variables
-```bash
-export AQUARIUM_SOURCE="ebpf"
-export AQUARIUM_LIMIT="100"
-export AQUARIUM_SORT_BY="memory"
-export AQUARIUM_SORT_ORDER="desc"
-```
-
-## Contributing
-1. Fork repository
-2. Create branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add some amazing feature'`)
-4. Push branch (`git push origin feature/amazing-feature`)
-5. Open a PR (target `dev` branch)
-
-## License
-MIT License. See [LICENSE](LICENSE).
-
-## Support
-- Bug reports: GitHub Issues
-- Feature requests: GitHub Discussions
-- Questions: Issue or Discussion
-
----
-"Watch your system's processes swim gracefully inside a living, data‑driven aquarium." 🐠✨
+MIT License — [LICENSE](./LICENSE)

@@ -1,0 +1,185 @@
+// Shape construction mirrors pygame Fish._draw_*; both renderers consume it.
+import { appearance, satellites } from "./fish.mjs";
+export function fishPrimitives(
+  f,
+  zoom = 1,
+  highlight = false,
+  quality = "full",
+) {
+  const a = appearance(f, highlight),
+    size = a.size * zoom,
+    color = [...a.color, a.alpha],
+    out = [];
+  const ellipse = (x, y, rx, ry, c = color) =>
+    out.push({ type: 0, points: [x, y, rx, ry, 0, 0], color: c });
+  const triangle = (points, c = color) =>
+    out.push({ type: 1, points: points.flat(), color: c });
+  const { x, y } = f,
+    cos = Math.cos(f.angle),
+    sin = Math.sin(f.angle);
+  if (size < 2) return out;
+  if (quality === "minimal") {
+    ellipse(
+      x,
+      y,
+      Math.max(2, Math.min(Math.trunc(size), 24)),
+      Math.max(2, Math.min(Math.trunc(size), 24)),
+    );
+    return out;
+  }
+  if (size >= 3 && a.alpha > 20 / 255) {
+    let length = size * 1.8,
+      width = size * 0.9;
+    if (f.shape === "ray") {
+      length *= 1.2;
+      width *= 1.5;
+    }
+    if (f.shape === "whale") {
+      length *= 1.3;
+      width *= 1.2;
+    }
+    if (f.shape === "eel") {
+      length *= 2;
+      width *= 0.4;
+    }
+    if (f.shape === "fish") {
+      ellipse(x - length * 0.1, y, length * 0.4, width * 0.5);
+      ellipse(x + length * 0.35, y, length * 0.15, width * 0.3);
+      const tx = x - cos * length * 0.4,
+        ty = y - sin * length * 0.4,
+        ts = width * 0.5;
+      for (const sign of [1, -1])
+        triangle([
+          [tx, ty],
+          [
+            tx - cos * ts * 1.2 + sign * sin * ts * 0.3 * f.tail,
+            ty - sin * ts * 1.2 - sign * cos * ts * 0.3 * f.tail,
+          ],
+          [tx - cos * ts * 0.8, ty - sin * ts * 0.8],
+        ]);
+      const dx = x - cos * length * 0.1,
+        dy = y - sin * length * 0.1,
+        ds = width * 0.3;
+      triangle([
+        [dx, dy],
+        [dx + sin * ds * 0.8, dy - cos * ds * 0.8],
+        [dx + sin * ds * 0.5, dy - cos * ds * 0.5],
+      ]);
+      if (width > 8) {
+        const eye = Math.max(2, width * 0.15),
+          ex = x + cos * length * 0.3 + sin * width * 0.2,
+          ey = y + sin * length * 0.3 - cos * width * 0.2;
+        ellipse(ex, ey, eye, eye, [1, 1, 1, a.alpha]);
+        const pupil = Math.max(1, eye * 0.6);
+        ellipse(ex, ey, pupil, pupil, [0, 0, 0, a.alpha]);
+      }
+    } else {
+      ellipse(x, y, length / 2, width / 2);
+      const tail = {
+        shark: 0.7,
+        tropical: 0.6,
+        ray: 0.8,
+        dolphin: 0.7,
+        whale: 0.9,
+        eel: 0.5,
+      }[f.shape];
+      const angle =
+        f.angle + (f.shape === "ray" ? Math.PI : Math.PI / 2) + f.tail;
+      const ratio = {
+        shark: 0.8,
+        tropical: 0.7,
+        ray: 0.9,
+        dolphin: 0.8,
+        whale: 0.8,
+        eel: 0.7,
+      }[f.shape];
+      triangle([
+        [x, y],
+        [
+          x + Math.cos(angle) * length * tail,
+          y + Math.sin(angle) * length * tail,
+        ],
+        [
+          x + Math.cos(angle) * length * tail * ratio,
+          y + Math.sin(angle) * length * tail * ratio,
+        ],
+      ]);
+      if (["tropical", "dolphin"].includes(f.shape)) {
+        const fin = length * (f.shape === "tropical" ? 0.4 : 0.5),
+          fa = f.angle - Math.PI / 2 + f.tail;
+        triangle([
+          [x, y],
+          [x + Math.cos(fa) * fin, y + Math.sin(fa) * fin],
+          [x + Math.cos(fa) * fin * 0.8, y + Math.sin(fa) * fin * 0.8],
+        ]);
+      }
+    }
+  }
+  if (quality === "full" && f.p.num_threads > 1 && size > 5) {
+    const satSize = Math.max(
+      1.5,
+      Math.min(size * 0.2 * (1 + f.p.num_threads / 20), size * 0.7),
+    );
+    const satColor = [...a.color, Math.floor((a.alpha * 255) / 2) / 255];
+    if (satSize >= 2)
+      for (const [sx, sy] of satellites(f, size)) {
+        ellipse(
+          sx - satSize * 0.25,
+          sy,
+          satSize * 0.75,
+          satSize * 0.5,
+          satColor,
+        );
+        triangle(
+          [
+            [sx - satSize, sy],
+            [sx - satSize * 1.5, sy - satSize / 3],
+            [sx - satSize * 1.5, sy + satSize / 3],
+          ],
+          satColor,
+        );
+      }
+  }
+  return out;
+}
+export function projectedFish(f, camera, width, height) {
+  return {
+    ...f,
+    x: (f.x - camera.x) * camera.zoom + width / 2,
+    y: (f.y - camera.y) * camera.zoom + height / 2,
+  };
+}
+export function visibleFish(f, camera, width, height) {
+  const x = (f.x - camera.x) * camera.zoom + width / 2,
+    y = (f.y - camera.y) * camera.zoom + height / 2;
+  const margin = appearance(f).size * camera.zoom * 7 + 30;
+  return (
+    x > -margin && x < width + margin && y > -margin && y < height + margin
+  );
+}
+// pygame rasterizes degenerate polygons as hairlines. GPU triangles with
+// zero area disappear, so preserve those native tail/fin strokes explicitly.
+export function rasterPrimitive(shape) {
+  if (shape.type !== 1) return shape;
+  const p = shape.points;
+  if (
+    Math.abs((p[2] - p[0]) * (p[5] - p[1]) - (p[3] - p[1]) * (p[4] - p[0])) >
+    1e-6
+  )
+    return shape;
+  const pairs = [
+    [0, 2],
+    [0, 4],
+    [2, 4],
+  ].sort(
+    ([a, b], [c, d]) =>
+      Math.hypot(p[d] - p[c], p[d + 1] - p[c + 1]) -
+      Math.hypot(p[b] - p[a], p[b + 1] - p[a + 1]),
+  );
+  const [a, b] = pairs[0];
+  return {
+    type: 2,
+    points: [p[a], p[a + 1], p[b], p[b + 1], 1, 0],
+    color: shape.color,
+  };
+}

@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#000025" />
+    <title>Process Aquarium</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%2381d7ec' d='M4 16 0 8v16l4-8c7 12 21 8 28 0C25 8 11 4 4 16Z'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./aquarium.css" />
+    <script type="module" src="./app.mjs"></script>
+  </head>
+  <body>
+    <main class="workspace" aria-label="プロセスの水槽">
+      <div
+        id="stage"
+        class="stage"
+        tabindex="0"
+        aria-label="水槽。ドラッグで移動、ホイールでズーム、魚をクリックして選択。Escでメニュー。"
+      >
+        <canvas id="underlay" aria-hidden="true"></canvas>
+        <canvas id="aquarium" aria-label="プロセスを表す魚"></canvas>
+        <canvas id="overlay" aria-hidden="true"></canvas>
+        <div id="empty" class="empty-state">
+          <svg class="empty-mark" viewBox="0 0 64 40" aria-hidden="true">
+            <path d="M13 20 2 10v20l11-10C26 0 48 7 61 20 48 33 26 40 13 20Z" />
+            <circle cx="48" cy="18" r="2" />
+          </svg>
+          <h1>魚たちを待っています</h1>
+          <p id="empty-message">
+            エージェントが接続すると、プロセスが泳ぎ始めます。
+          </p>
+          <code id="agent-command"
+            >python main.py agent --server http://localhost:8080</code
+          >
+        </div>
+        <div id="notice" class="notice" hidden role="status"></div>
+      </div>
+      <button
+        id="menu-toggle"
+        class="menu-trigger"
+        aria-label="水槽のメニュー"
+        aria-haspopup="dialog"
+        title="メニュー (Esc)"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16" /></svg
+        ><span>道具箱</span>
+      </button>
+      <p id="first-hint" class="first-hint">
+        ドラッグで移動 <span>·</span> ホイールでズーム
+        <span>·</span> 魚をクリック <span class="hint-key">Esc メニュー</span>
+      </p>
+      <output id="feedback" class="feedback" aria-live="polite"></output>
+      <div id="paused-indicator" class="paused-indicator" hidden>
+        一時停止 <kbd>Space</kbd> で再開
+      </div>
+    </main>
+    <section
+      id="inspection"
+      class="game-window inspection"
+      hidden
+      aria-labelledby="inspection-title"
+    >
+      <header
+        class="window-titlebar"
+        data-drag-handle
+        tabindex="0"
+        title="ドラッグ・矢印キーで移動 / ダブルクリックで折り畳み"
+      >
+        <svg class="window-fish" viewBox="0 0 32 24" aria-hidden="true">
+          <path d="M9 12 3 6v12l6-6c4-10 17-10 21 0-4 10-17 10-21 0Z" />
+          <circle cx="24" cy="10" r="1.4" />
+        </svg>
+        <h2 id="inspection-title">魚のようす</h2>
+        <button
+          class="window-button"
+          data-collapse
+          aria-label="魚の窓を折り畳む"
+          aria-expanded="true"
+          title="折り畳み"
+        >
+          −
+        </button>
+        <button
+          id="clear-selection"
+          class="window-button close-button"
+          aria-label="選択を解除"
+          title="閉じる (Esc)"
+        >
+          ×
+        </button>
+      </header>
+      <div id="inspect-empty" hidden></div>
+      <div id="details" class="window-body" hidden>
+        <div class="fish-card">
+          <div class="fish-portrait">
+            <canvas
+              id="portrait"
+              width="220"
+              height="110"
+              aria-hidden="true"
+            ></canvas
+            ><span id="detail-shape"></span>
+          </div>
+          <div class="process-heading">
+            <span id="detail-dot" class="color-dot"></span>
+            <h3 id="detail-name"></h3>
+          </div>
+          <div class="fish-identity">
+            <span>PID <b id="detail-pid"></b></span
+            ><span id="detail-status"></span>
+          </div>
+        </div>
+        <div class="vital">
+          <span>CPU</span>
+          <div class="vital-track"><i id="cpu-fill"></i></div>
+          <strong id="detail-cpu"></strong>
+        </div>
+        <div class="vital">
+          <span>メモリ</span>
+          <div class="vital-track"><i id="memory-fill"></i></div>
+          <strong id="detail-memory"></strong>
+        </div>
+        <div class="thread-row">
+          <span>スレッド</span><strong id="detail-threads"></strong>
+        </div>
+        <button id="follow" class="follow-action" aria-pressed="false" disabled>
+          <i class="check-mark" aria-hidden="true"></i>この魚を追いかける
+        </button>
+        <details class="more-details">
+          <summary>くわしく</summary>
+          <dl class="fish-details">
+            <div>
+              <dt>親 PID</dt>
+              <dd id="detail-ppid"></dd>
+            </div>
+            <div>
+              <dt>開始</dt>
+              <dd id="detail-started"></dd>
+            </div>
+            <div>
+              <dt>年齢</dt>
+              <dd id="detail-age"></dd>
+            </div>
+          </dl>
+          <p id="detail-school"></p>
+          <p>通信相手 <span id="detail-partners"></span></p>
+          <code id="detail-command" class="command"></code>
+        </details>
+      </div>
+    </section>
+    <section
+      id="menu"
+      class="game-window aquarium-menu"
+      hidden
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby="menu-title"
+    >
+      <header
+        class="window-titlebar"
+        data-drag-handle
+        tabindex="0"
+        title="ドラッグ・矢印キーで移動 / ダブルクリックで折り畳み"
+      >
+        <svg class="window-fish" viewBox="0 0 32 24" aria-hidden="true">
+          <path d="M9 12 3 6v12l6-6c4-10 17-10 21 0-4 10-17 10-21 0Z" />
+          <circle cx="24" cy="10" r="1.4" />
+        </svg>
+        <h1 id="menu-title">水槽の道具箱</h1>
+        <button
+          class="window-button"
+          data-collapse
+          aria-label="道具箱を折り畳む"
+          aria-expanded="true"
+          title="折り畳み"
+        >
+          −
+        </button>
+        <button
+          id="close-menu"
+          class="window-button close-button"
+          aria-label="メニューを閉じる"
+          title="閉じる (Esc)"
+        >
+          ×
+        </button>
+      </header>
+      <nav class="menu-tabs" role="tablist" aria-label="道具箱の項目">
+        <button
+          id="tab-aquarium"
+          class="menu-tab"
+          data-panel="aquarium"
+          role="tab"
+          aria-selected="true"
+          aria-controls="panel-aquarium"
+        >
+          水槽
+        </button>
+        <button
+          id="tab-processes"
+          class="menu-tab"
+          data-panel="processes"
+          role="tab"
+          aria-selected="false"
+          aria-controls="panel-processes"
+          tabindex="-1"
+        >
+          魚を探す
+        </button>
+        <button
+          id="tab-display"
+          class="menu-tab"
+          data-panel="display"
+          role="tab"
+          aria-selected="false"
+          aria-controls="panel-display"
+          tabindex="-1"
+        >
+          表示
+        </button>
+        <button
+          id="tab-host"
+          class="menu-tab"
+          data-panel="host"
+          role="tab"
+          aria-selected="false"
+          aria-controls="panel-host"
+          tabindex="-1"
+        >
+          接続
+        </button>
+        <button
+          id="tab-help"
+          class="menu-tab"
+          data-panel="help"
+          role="tab"
+          aria-selected="false"
+          aria-controls="panel-help"
+          tabindex="-1"
+        >
+          操作
+        </button>
+      </nav>
+      <div class="menu-content">
+        <div
+          class="menu-panel"
+          data-content="aquarium"
+          id="panel-aquarium"
+          role="tabpanel"
+          aria-labelledby="tab-aquarium"
+        >
+          <fieldset>
+            <legend>ながめ方</legend>
+            <label class="setting-row"
+              ><span>カメラ</span
+              ><select id="camera-mode" aria-label="カメラモード">
+                <option value="0">みんなを眺める</option>
+                <option value="1">選んだ魚を追う</option>
+                <option value="2">自由に移動</option></select
+              ><kbd>C</kbd></label
+            >
+            <button id="reset" class="setting-row action-row">
+              <span>視点を中央に戻す</span
+              ><span class="row-arrow" aria-hidden="true">↶</span><kbd>R</kbd>
+            </button>
+            <label class="setting-row"
+              ><span>泳ぐ速さ</span
+              ><select id="swim-speed" aria-label="泳ぐ速さ">
+                <option value="0.25">のんびり · ¼倍</option>
+                <option value="0.5">ゆっくり · ½倍</option>
+                <option value="0.75">すいすい · ¾倍</option>
+                <option value="1" selected>ふつう · 1倍</option>
+              </select></label
+            >
+          </fieldset>
+          <fieldset>
+            <legend>つながりを見る</legend>
+            <button
+              id="schools"
+              class="setting-row toggle-row"
+              aria-pressed="false"
+            >
+              <i class="check-mark" aria-hidden="true"></i
+              ><span>群れを強調する</span><kbd>Q</kbd>
+            </button>
+            <button id="ipc" class="setting-row toggle-row" aria-pressed="true">
+              <i class="check-mark" aria-hidden="true"></i
+              ><span>通信の流れ</span><kbd>I</kbd>
+            </button>
+            <button
+              id="debug"
+              class="setting-row toggle-row"
+              aria-pressed="false"
+            >
+              <i class="check-mark" aria-hidden="true"></i
+              ><span>親子を線でつなぐ</span><kbd>D</kbd>
+            </button>
+          </fieldset>
+          <button
+            id="pause"
+            class="pause-action"
+            aria-label="泳ぎを一時停止"
+            aria-pressed="false"
+          >
+            <span aria-hidden="true">Ⅱ</span
+            ><span id="pause-label">泳ぎを一時停止</span><kbd>Space</kbd>
+          </button>
+        </div>
+        <div
+          class="menu-panel"
+          data-content="processes"
+          id="panel-processes"
+          role="tabpanel"
+          aria-labelledby="tab-processes"
+          hidden
+        >
+          <label class="search-field"
+            ><svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="10" cy="10" r="6" />
+              <path d="m15 15 5 5" /></svg
+            ><input
+              id="search"
+              type="search"
+              placeholder="名前または PID"
+              aria-label="名前または PID で魚を探す"
+            /><kbd>/</kbd></label
+          >
+          <div class="filter-options">
+            <label
+              >並び順<select id="sort" aria-label="並び順">
+                <option value="cpu">CPU</option>
+                <option value="memory">メモリ</option>
+                <option value="name">名前</option>
+                <option value="pid">PID</option>
+              </select></label
+            ><button
+              id="order"
+              aria-label="並び順を反転"
+              title="順序を反転 (O)"
+            >
+              ↓</button
+            ><label
+              >表示数<select id="limit" aria-label="水槽に表示する数">
+                <option value="0" selected>無制限 (0)</option>
+                <option value="10">10 匹 (1)</option>
+                <option value="20">20 匹 (2)</option>
+                <option value="50">50 匹 (3)</option>
+                <option value="100">100 匹 (4)</option>
+                <option value="200">200 匹 (5)</option>
+                <option value="400">400 匹 (6)</option>
+                <option value="1000">1,000 匹</option>
+              </select></label
+            >
+          </div>
+          <div class="list-caption">
+            <span id="visible-count"></span><span id="list-label"></span>
+          </div>
+          <div id="process-list" class="process-list"></div>
+          <p class="menu-note">魚を選ぶと、その場所へ移動します。</p>
+          <p class="menu-note">
+            表示数：<kbd>L</kbd> で順送り・<kbd>0〜6</kbd> で直接切替
+          </p>
+        </div>
+        <div
+          class="menu-panel"
+          data-content="display"
+          id="panel-display"
+          role="tabpanel"
+          aria-labelledby="tab-display"
+          hidden
+        >
+          <label class="setting-row"
+            ><span
+              ><strong>描画品質</strong
+              ><small>フルは波紋・雷・スレッド・群れ演算を含みます</small></span
+            ><select id="quality" aria-label="描画品質">
+              <option value="full">フル</option>
+              <option value="reduced">簡易</option>
+              <option value="minimal">最小</option>
+              <option value="auto">FPS で自動調整</option>
+            </select></label
+          >
+          <button
+            id="labels"
+            class="setting-row toggle-row"
+            aria-pressed="false"
+          >
+            <span
+              ><strong>魚の名前</strong
+              ><small>水槽の中にプロセス名と PID を表示</small></span
+            ><i class="check-mark" aria-hidden="true"></i>
+          </button>
+          <button id="ui" class="setting-row">
+            <span
+              ><strong>水槽の表示</strong
+              ><small id="ui-mode-label"
+                >通常 · 選択時だけ詳細を表示</small
+              ></span
+            ><span class="row-arrow">↗</span><kbd>T</kbd>
+          </button>
+          <button id="fullscreen" class="setting-row" aria-pressed="false">
+            <span
+              ><strong id="fullscreen-label">フルスクリーン</strong
+              ><small>ブラウザの枠も隠して眺める</small></span
+            ><span class="row-arrow">⛶</span><kbd>F</kbd>
+          </button>
+        </div>
+        <div
+          class="menu-panel"
+          data-content="host"
+          id="panel-host"
+          role="tabpanel"
+          aria-labelledby="tab-host"
+          hidden
+        >
+          <label class="host-field"
+            >観測するホスト<select id="host" aria-label="観測するホスト">
+              <option value="">接続を待っています…</option>
+            </select></label
+          >
+          <div class="connection-state">
+            <span id="status" class="status waiting">接続中</span
+            ><span id="sample-age">—</span>
+          </div>
+          <p id="source-label" class="menu-note"></p>
+          <button id="auth-button" class="setting-row">
+            <span
+              ><strong>アクセストークン</strong
+              ><small>このタブで使用するサーバの認証情報</small></span
+            ><span class="row-arrow">↗</span>
+          </button>
+          <details class="diagnostics">
+            <summary>診断情報</summary>
+            <dl>
+              <div>
+                <dt>プロセス</dt>
+                <dd id="metric-processes">—</dd>
+              </div>
+              <div>
+                <dt>CPU 合計</dt>
+                <dd id="metric-cpu">—</dd>
+              </div>
+              <div>
+                <dt>メモリ合計</dt>
+                <dd id="metric-memory">—</dd>
+              </div>
+              <div>
+                <dt>スレッド合計</dt>
+                <dd id="metric-threads">—</dd>
+              </div>
+              <div>
+                <dt>描画</dt>
+                <dd>
+                  <span id="renderer">準備中</span> ·
+                  <span id="fps">— fps</span>
+                </dd>
+              </div>
+              <div>
+                <dt>視点</dt>
+                <dd id="camera-info"></dd>
+              </div>
+            </dl>
+            <p id="compact-stats"></p>
+            <p id="event-stats"></p>
+            <span id="zoom" hidden></span>
+          </details>
+        </div>
+        <div
+          class="menu-panel"
+          data-content="help"
+          id="panel-help"
+          role="tabpanel"
+          aria-labelledby="tab-help"
+          hidden
+        >
+          <dl class="key-guide">
+            <div>
+              <dt>ドラッグ</dt>
+              <dd>水槽の中を移動</dd>
+            </div>
+            <div>
+              <dt>ホイール</dt>
+              <dd>ズーム (0.1〜5倍)</dd>
+            </div>
+            <div>
+              <dt>クリック</dt>
+              <dd>魚を選んで詳しく見る</dd>
+            </div>
+            <div>
+              <dt>右クリック</dt>
+              <dd>その魚を追いかける</dd>
+            </div>
+            <div>
+              <dt>吹き出し</dt>
+              <dd>クリックで通信相手を強調</dd>
+            </div>
+            <div>
+              <dt>Esc</dt>
+              <dd>選択解除 / メニュー</dd>
+            </div>
+            <div>
+              <dt>Space</dt>
+              <dd>一時停止</dd>
+            </div>
+            <div>
+              <dt>C / R</dt>
+              <dd>カメラ切替 / リセット</dd>
+            </div>
+            <div>
+              <dt>D / I / Q</dt>
+              <dd>親子線 / 通信線 / 群れ</dd>
+            </div>
+            <div>
+              <dt>L / S / O</dt>
+              <dd>表示数 / ソート / 順序</dd>
+            </div>
+            <div>
+              <dt>0 / 1〜6</dt>
+              <dd>無制限 / 10・20・50・100・200・400匹</dd>
+            </div>
+            <div>
+              <dt>T / F・F11</dt>
+              <dd>水槽の表示 / 全画面</dd>
+            </div>
+            <div>
+              <dt>/ / M</dt>
+              <dd>魚を探す / 表示プリセット</dd>
+            </div>
+          </dl>
+          <details class="reading-guide">
+            <summary>魚の読み方</summary>
+            <p>
+              大きさはメモリ使用率。CPU
+              が高いほど明るく、速く泳ぎます。周囲の小魚はスレッド（最大14匹）。親子・同名プロセスは群れを作ります。
+            </p>
+            <p>
+              生成は成長、終了は縮小、fork は白い光、exec は虹色の変化。メモリ
+              5%以上で波紋、20%以上で雷が現れます。
+            </p>
+            <p>
+              ブラウザはサメ、開発ツールは熱帯魚、システムはエイ、通信はイルカ、重量級はクジラ、端末はウナギになります。
+            </p>
+          </details>
+        </div>
+      </div>
+    </section>
+    <dialog id="auth-dialog" class="game-window auth-dialog">
+      <form id="auth-form">
+        <h2>水槽に接続する</h2>
+        <p>
+          サーバに設定したトークンを入力してください。このタブの中にだけ保存されます。
+        </p>
+        <label for="token">API トークン</label
+        ><input
+          id="token"
+          name="token"
+          type="password"
+          autocomplete="current-password"
+        />
+        <p id="auth-error" class="auth-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="forget-token" type="button">忘れる</button
+          ><button id="cancel-auth" type="button">キャンセル</button
+          ><button type="submit" class="primary">接続</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

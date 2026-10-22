@@ -1,251 +1,163 @@
-# 🐠 プロセス水族館 (アクアリウム) - Process Aquarium
+# 🐠 Process Aquarium — プロセス水族館
 
-日本語 | [English README](./README.en.md)
+日本語 | [English](./README.en.md)
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)
+OS のプロセスを魚として観察する水族館です。監視対象で動く **収集エージェント**、GUI を必要としない **集約サーバ**、**WebGPU ブラウザクライアント**を独立して動かせます。従来の pygame クライアントとローカル実行も利用できます。
 
-**プロセスを美しい魚として可視化する、インタラクティブな水族館アプリケーション**
+```mermaid
+flowchart LR
+    A[収集エージェント A<br/>psutil / eBPF] -->|HTTP JSON| S[集約サーバ<br/>ホスト別の現在状態]
+    B[収集エージェント B<br/>psutil / eBPF] -->|HTTP JSON| S
+    S -->|完全スナップショット| W[ブラウザ<br/>シミュレーション + WebGPU]
+    S --> N[pygame / 統計クライアント]
+```
 
-プロセス水族館は、コンピューター上で動作するプロセス（プログラム）を水族館の魚として表現し、リアルタイムでモニタリングできる革新的なシステム監視ツールです。従来の味気ないプロセス監視とは一線を画す、視覚的で楽しい体験を提供します。
+サーバはメトリクスと静的ファイルを配信します。魚の動きと描画はブラウザ内で実行し、サーバに GPU・pygame・ディスプレイは不要です。WebGPU が使えない場合や GPU デバイスを失った場合は Canvas 2D に切り替わります。
 
-## 特徴
+![WebGPU ブラウザクライアント](./docs/browser-preview.jpg)
 
-**ビジュアライゼーション概要**
-- 各プロセスはプロセス名を元に決定された色と形状の「魚」として表示
-- メモリ使用量: 魚のサイズに反映
-- CPU使用率: 発光（グロー）強度と魚の移動速度へ反映
-- スレッド数: 周囲の衛星（最大14個）の数や軌道に反映
-- 新規生成/終了: スポーン(フェードイン)とフェードアウトアニメーション
+検証用の 24 プロセスを表示した画面です。
 
-**監視**
-- eBPF または psutil によるプロセス情報取得（`--source` で選択）
-- CPU / メモリ / スレッド情報を定期更新
-- 将来の他ソース追加を見据えた抽象化レイヤを内部実装
+## 最短で動かす
 
-**実行オプション**
-- ソート基準変更（CPU / メモリ / 名前 / PID）
-- 表示数制限
-- ヘッドレスモード（統計ログ出力）
-
-## クイックスタート
-
-### 1. 必要な環境
-
-- **Python 3.10以上**
-- **Linux**（eBPF機能を最大限活用するため）
-
-### 2. インストール
+Python 3.10 以上と [uv](https://docs.astral.sh/uv/) を使用します。ブラウザ側はビルド不要で、Node.js も実行には不要です。
 
 ```bash
-# システム依存関係をインストール（Ubuntu/Debian）
-sudo apt install -y python3-bpfcc linux-headers-$(uname -r) \
-    libbpf-dev clang llvm make gcc python3-venv
-
-# uvをインストール
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# リポジトリをクローン
 git clone https://github.com/mouri-lab/process-aquarium.git
 cd process-aquarium
-git switch main
+uv sync --locked --no-dev --extra agent
 
-# 仮想環境を作成（システムサイトパッケージへのアクセスを有効化）
+# ターミナル 1: 集約サーバ
+./.venv/bin/python main.py server
+```
+
+別のターミナルから同じディレクトリでエージェントを起動します。
+
+```bash
+# ターミナル 2: このマシンを監視（root 不要）
+./.venv/bin/python main.py agent --server http://127.0.0.1:8080 --source psutil
+```
+
+**<http://localhost:8080>** を開くと魚が表示されます。エージェントが接続するまで架空のメトリクスは表示しません。終了は各ターミナルで Ctrl+C です。
+
+## 複数マシンで使う
+
+集約サーバには Python 標準ライブラリ以外の依存はありません。
+
+```bash
+# 集約マシン
+uv sync --locked --no-dev
+export AQUARIUM_TOKEN='your-shared-secret'
+./.venv/bin/python main.py server --listen 0.0.0.0 --port 8080
+```
+
+監視対象ごとにエージェントを動かします。`--host-id` は監視対象間で一意にしてください。省略時はホスト名です。
+
+```bash
+# 監視対象マシン
+uv sync --locked --no-dev --extra agent
+export AQUARIUM_TOKEN='your-shared-secret'
+./.venv/bin/python main.py agent \
+  --server https://aquarium.example.com --host-id worker-01 --source psutil
+```
+
+ブラウザでサーバの URL を開き、道具箱の「接続」からトークンを入力し、ホストを選択します。トークンはタブの sessionStorage に保持し、URL に含めません。コマンドラインでも `--token` を指定できますが、監視対象のコマンドラインに秘密を残さないよう環境変数を推奨します。
+
+リモートの WebGPU には HTTPS が必要です（localhost は HTTP でも利用可能）。Caddy / nginx などで TLS を終端し、集約サーバへ転送してください。HTTP の LAN アドレスで開いた場合も Canvas 2D で操作できます。認証を使うリモート通信では HTTPS を使用してください。
+
+## 魚の読み方・操作
+
+| 表現 | 意味 |
+| --- | --- |
+| 色・模様 | プロセス名に応じた外見 |
+| 大きさ | メモリ使用率（べき乗・対数スケール） |
+| 光・速さ | CPU 使用率 |
+| 周囲の小魚 | スレッド数（最大14匹） |
+| 群れ | 親子関係・関連するプロセス |
+| 成長 / 縮小 | 新規プロセス / 実際の終了 |
+
+水槽が画面全体に広がります。操作は `Esc` または左上の道具箱から呼び出します。窓はタイトルバーで移動・折り畳みでき、開いている間も魚は泳ぎ続けます。
+
+- 魚をクリックして詳細、右クリックで追従。`/` で名前・PIDを検索して、その魚へ移動できます。
+- ドラッグで移動、ホイールで0.1〜5倍にズーム。`C` でカメラ切替、`R` でリセットします。
+- `L` で表示数を順送り。`1`〜`6` は10・20・50・100・200・400匹、`0` は無制限です。`S` / `O` で並び順・昇降順を切り替えます。
+- `D` は親子線、`I` は通信線、`Q` は群れの強調。小さな会話の吹き出しをクリックすると通信相手を強調します。
+- `Space` で泳ぎを一時停止。`T` で表示を簡略化、`F` / `F11` で全画面、`?` で操作ガイドを開きます。
+- 速度は標準1倍、道具箱で¼〜1倍を選べます。固定30Hzの計算に描画補間と方向転換の平滑化を加え、尾の振幅を抑えています。
+- フル・簡易・最小・FPS自動調整の品質設定、プロセス名表示、ホスト切替、認証、診断情報も道具箱にあります。
+- 表示制限や検索をプロセス終了と区別し、通信断や収集失敗時にも最後の状態を保持します。
+
+7種類の形状、CPUによる光・速さ、親子・同名の群れ、forkの白い光、execの虹色変化、メモリ5%以上の波紋・20%以上の雷を実装しています。対応表と比較画像は[ネイティブ版との比較](./docs/feature-parity.md)にまとめています。
+
+CPU はプロセスごとの値を合計し、100% が 1 コア分です。メモリの合計はプロセス別使用率の和であり、共有ページの重複を除いた物理メモリ使用量ではありません。
+
+## eBPF を利用する（Linux）
+
+eBPF は fork / exec / exit を取得し、CPU・メモリなどの定期更新と状態の再照合には psutil を使用します。BCC が利用できない場合は psutil にフォールバックし、実行中に eBPF の読み取りが失敗した場合も psutil の収集を継続します。
+
+Ubuntu / Debian の例です。BCC と同じシステム Python を使ってください。
+
+```bash
+sudo apt install python3-bpfcc linux-headers-$(uname -r) python3-venv
 uv venv -p /usr/bin/python3 --system-site-packages
+uv sync --locked --no-dev --extra agent
 
-# 依存関係をインストール
-uv sync
+# トークンを使う場合は root から読める適切な環境設定を別途用意
+sudo ./.venv/bin/python main.py agent \
+  --server http://127.0.0.1:8080 --source ebpf --host-id linux-01
 ```
 
-### 3. 実行
+## ネイティブ・統計クライアント
 
 ```bash
-# eBPFを使用して実行（推奨、root権限が必要）
-sudo ./.venv/bin/python3 main.py --source ebpf
+# 従来のローカル水族館
+uv sync --locked --no-dev --extra agent --extra gui
+./.venv/bin/python main.py --source psutil --limit 100
 
-# またはpsutilを使用して実行（root権限不要）
-./.venv/bin/python3 main.py --source psutil
+# リモート水族館: 収集用の psutil は不要（gui 追加依存のみ）
+./.venv/bin/python main.py client --server http://127.0.0.1:8080 --host worker-01
+
+# GUI 依存が不要なリモート統計表示
+./.venv/bin/python main.py client --server http://127.0.0.1:8080 \
+  --host worker-01 --headless --headless-interval 2
+
+# 従来のローカル統計表示
+./.venv/bin/python main.py --source psutil --headless
 ```
 
-⚠️ 重要な注意事項
-- eBPFモード（推奨）: カーネルレベルアクセスが必要なため `sudo` 必須
-- システムサイトパッケージ利用: `--system-site-packages` を付けて既存 bpf 関連を再利用
-- Pythonバージョン整合性: 不一致は eBPF 読み込み失敗要因
+ネイティブ版は F / F11（全画面）、左クリック（選択）、右クリック（追従）、ドラッグ・ホイール（カメラ）、L（件数）、S / O（ソート）、D / I / T / Q（表示切替）、Esc（終了）を維持しています。`--no-gpu` で SDL GPU 描画を無効化できます。
 
-水族館のウィンドウが開き、システム上で動作しているプロセスが魚として表示されます。
+複数ホストがある場合、ネイティブ・統計クライアントでは `--host` を指定します。一度選択したホストが切断しても、別ホストへ自動で切り替わりません。
 
-## 使い方
+## 設定・API
 
-### 基本操作
+`python main.py --help` と各サブコマンドの `--help` で全オプションを確認できます。
 
-- マウス移動: 視点（カメラ）基準位置の把握
-- 左クリック: 魚選択 & 詳細パネル表示
-- 右クリック: 選択魚を追従ターゲットに設定
-- 左ドラッグ: カメラパン（ドラッグ開始で追従解除）
-- マウスホイール: ズーム（0.1x〜5x）
-- F / F11: フルスクリーン切替
-- Esc: 終了
+| 設定 | 既定値 |
+| --- | --- |
+| server `--listen` / `--port` | `127.0.0.1` / `8080` |
+| server `--stale-after` | 最後の新しい状態から 5 秒 |
+| server `--retention` / `--max-hosts` | 3600 秒 / 128 ホスト |
+| agent `--interval` | 1 秒 |
+| client `--poll-interval` / `--timeout` | 1 秒 / 3 秒 |
+| ブラウザ表示件数 | 無制限（プロトコル上限50,000件）。表示制限は収集対象に影響しません |
 
-### キー操作一覧
+環境変数は `AQUARIUM_SERVER`、`AQUARIUM_TOKEN`、`AQUARIUM_HOST_ID`（agent）、`AQUARIUM_HOST`（client）、`AQUARIUM_SOURCE` を利用できます。ネイティブ版は既存の `AQUARIUM_LIMIT`、`AQUARIUM_SORT_BY`、`AQUARIUM_SORT_ORDER`、`AQUARIUM_GPU` なども使用します。
 
-| キー       | 機能                   | 備考                                 |
-| ---------- | ---------------------- | ------------------------------------ |
-| Esc        | 終了                   | 即時終了                             |
-| F / F11    | フルスクリーン切替     | GPU/非GPU両対応                      |
-| D          | デバッグ表示トグル     | 親子プロセス接続線・内部統計補助表示 |
-| I          | IPC可視化トグル        | IPCライン/バブル描画                 |
-| T          | UI表示トグル           | 情報/ヘルプパネル一括切替            |
-| Q          | 群れ強調表示トグル     | 孤立プロセス半透明化                 |
-| L          | 表示プロセス数制限切替 | いくつかのプリセット値を循環         |
-| S          | ソートフィールド切替   | CPU→MEM→NAME→PID 循環                |
-| O          | ソート順序切替         | 昇順/降順                            |
-| C          | カメラモード切替       | 自動 / 選択追従 / 手動               |
-| R          | カメラリセット         | 位置/ズーム/追従解除                 |
-| 左クリック | 魚選択                 | 詳細パネル更新                       |
-| 右クリック | 追従ターゲット設定     | 再設定で対象変更                     |
-| ホイール   | ズーム                 | ポインタ位置中心スケール             |
-| 左ドラッグ | パン                   | 追従解除                             |
+API は `/api/v1/hosts`、`/api/v1/snapshot?host=worker-01`、`POST /api/v1/snapshots` です。トークン設定時は `Authorization: Bearer …` が必要です。`/healthz` とブラウザの静的ファイルは認証なしで取得できます。
 
-### 視覚要素の意味
+状態はメモリ内に保持します。サーバを再起動すると保持状態は消え、エージェントが送信する次の完全スナップショットで復元します。詳細な契約・制限は [アーキテクチャ](./docs/architecture.md) を参照してください。
 
-**色 / 形状**
-- 初期色: プロセス名のハッシュから決定
-- 形状: ブラウザ/開発ツール/システム系など名称パターンで差異
-
-**サイズ / 発光 / 速度**
-- サイズ: メモリ使用量（対数圧縮＋相対シェア補正）
-- 発光強度: CPU使用率を指数カーブでマッピング（高負荷ほど強く）
-- 速度上限: CPU使用率で指数スケール拡張
-
-**スレッド衛星**
-- 最大14個の小衛星ドットが周回（スレッド数に応じて変化）
-
-**特殊エフェクト**
-- 大きなメモリ使用（一定閾値超）: 魚の周囲に淡い同心円状の波紋リングがゆっくり脈動
-- さらに巨大化（より高い閾値）: 不定期に短い稲妻状の光が周囲に走り、資源突出個体を視覚的に警告
-- 目的: リストや数値を見なくても「異様に肥大した/影響力の大きい」プロセスを数秒以内に発見できるようにする
-
-**群れ**
-- 目的: 関連するプロセス群を視覚的なまとまりとして把握しやすくするクラスタリング
-- 挙動: 距離バランスを保ち整列・凝集する自然な泳ぎを表現
-- 強調 (Q): 群れ以外のプロセスを薄く表示し、群れているプロセス際立たせる（分析開始時に有効化推奨）
-- 代表的な用途: 大量ワーカー監視 / 短命プロセス生成検知 / 再起動後の再構成観察
-- 推奨手順: Q → L → S/O → クリックで詳細
-
-**ライフサイクル**
-- 生成直後: スポーンアニメーション（フェード/スケールイン）
-- 終了中: フェードアウト
-- fork/exec: 一時的な発光や色再生成効果
-
-### コマンドラインオプション
+## 開発・テスト
 
 ```bash
-# ウィンドウサイズを指定
-sudo ./.venv/bin/python3 main.py --source ebpf --width 1600 --height 1000
+uv sync --locked --extra agent --extra gui
+uv run --locked --extra agent --extra gui python -m pytest -q
 
-# 表示するプロセス数を制限
-sudo ./.venv/bin/python3 main.py --source ebpf --limit 50
-
-# CPU使用率でソート（昇順）
-sudo ./.venv/bin/python3 main.py --source ebpf --sort-by cpu --sort-order asc
-
-# メモリ使用率でソート
-sudo ./.venv/bin/python3 main.py --source ebpf --sort-by memory
-
-# ヘッドレスモード（GUIなし、統計情報のみ）
-sudo ./.venv/bin/python3 main.py --source ebpf --headless --headless-interval 2.0
-
-# psutilモードで実行（root権限不要）
-./.venv/bin/python3 main.py --source psutil --limit 50
+# Node.js 18 以上。ブラウザモデルのテストのみで、依存インストールは不要
+node --test tests/web/*.test.mjs
 ```
 
-### 利用可能なオプション一覧
+HTTP の認証・検証、複数ホスト、順序逆転・再送、切断と復旧、PID 再利用、表示フィルタ、別プロセスの起動・停止を検証します。pygame と Node.js がある場合は、実際のネイティブ実装と数式・群れ演算・描画プリミティブを差分検証します。SDL ダミードライバによる描画テストも含みます。実ブラウザでの確認手順は [アーキテクチャ](./docs/architecture.md#検証) に記載しています。
 
-| オプション | 説明 | デフォルト値 |
-|-----------|------|------------|
-| `--width` | ウィンドウの幅 | 1200 |
-| `--height` | ウィンドウの高さ | 800 |
-| `--limit` | 表示プロセス数の上限 | 制限なし |
-| `--sort-by` | ソート基準 (`cpu`, `memory`, `name`, `pid`) | `cpu` |
-| `--sort-order` | ソート順序 (`asc`, `desc`) | `desc` |
-| `--source` | データソース (`psutil`, `ebpf`) | `ebpf` |
-| `--headless` | ヘッドレスモード | false |
-| `--headless-interval` | ヘッドレス時の更新間隔（秒） | 1.0 |
-
-## 開発者向け情報
-
-### プロジェクト構造
-
-```
-process-aquarium/
-├── main.py                    # メインエントリーポイント
-├── pyproject.toml            # プロジェクト設定
-├── src/
-│   ├── core/                 # コア機能
-│   │   ├── process_manager.py # プロセス管理
-│   │   ├── sources.py        # データソース抽象化（開発者向け内部構造）
-│   │   └── types.py          # 型定義
-│   └── visuals/              # 視覚化機能
-│       ├── aquarium.py       # メイン水族館クラス
-│       └── fish.py           # 魚の描画とアニメーション
-├── fork_bomb.py              # テスト用大量プロセス生成スクリプト
-└── README.md                 # このファイル
-```
-
-### テスト用ツール
-
-プロジェクトには大量のプロセスを生成してProcess Aquariumをテストするための `fork_bomb.py` が含まれています：
-
-```bash
-# 30個の子プロセスを生成（安全な範囲）
-python fork_bomb.py --max-children 30
-
-# 再帰的なプロセス生成（各子プロセスがさらに子を作る）
-python fork_bomb.py --recursive --max-children 20
-
-# 指定時間後に自動終了
-python fork_bomb.py --duration 60
-```
-
-⚠️ **注意**: `fork_bomb.py` は大量のプロセス生成により CPU / メモリ / スレッド数が急増します。実運用環境では使用しないでください。
-
-### 依存関係
-
-- **numpy** (≥2.2.6): 数値計算
-- **psutil** (≥7.1.0): システム・プロセス情報取得
-- **pygame-ce** (≥2.5.2): グラフィック描画エンジン
-- **pytest** (≥8.4.2): テストフレームワーク
-
-### 環境変数
-
-以下の環境変数で動作をカスタマイズできます：
-
-```bash
-export AQUARIUM_SOURCE="ebpf"              # データソース
-export AQUARIUM_LIMIT="100"                # プロセス表示数制限
-export AQUARIUM_SORT_BY="memory"           # ソート基準
-export AQUARIUM_SORT_ORDER="desc"          # ソート順序
-```
-
-## コントリビューション
-
-1. このリポジトリをフォーク
-2. 新しいブランチを作成 (`git checkout -b feature/amazing-feature`)
-3. 変更をコミット (`git commit -m 'Add some amazing feature'`)
-4. ブランチにプッシュ (`git push origin feature/amazing-feature`)
-5. プルリクエストを作成 (`dev`ブランチに対して)
-
-## ライセンス
-
-このプロジェクトはMITライセンスの下で公開されています。詳細は[LICENSE](LICENSE)ファイルをご覧ください。
-
-## サポート
-
-- **バグレポート**: [GitHub Issues](https://github.com/mouri-lab/process-aquarium/issues)
-- **機能リクエスト**: [GitHub Discussions](https://github.com/mouri-lab/process-aquarium/discussions)
-- **質問**: Issue またはDiscussionでお気軽にお尋ねください
-
----
-
-**コンピューターの中で泳ぐプロセスたちを、美しい水族館で観察してみませんか？** 🐠✨
+MIT License — [LICENSE](./LICENSE)
