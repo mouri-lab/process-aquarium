@@ -1,15 +1,26 @@
 """Headless aggregation server retaining bounded, complete per-host state."""
 
-from collections import deque
 from dataclasses import dataclass, field
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
+from pathlib import Path
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
 from .telemetry import MAX_BODY_BYTES, ProtocolError, Snapshot, snapshot_from_bytes
+
+
+WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
+STATIC_FILES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/aquarium.css": ("aquarium.css", "text/css; charset=utf-8"),
+    "/app.mjs": ("app.mjs", "text/javascript; charset=utf-8"),
+    "/world.mjs": ("world.mjs", "text/javascript; charset=utf-8"),
+    "/renderer.mjs": ("renderer.mjs", "text/javascript; charset=utf-8"),
+}
 
 
 class ConflictError(ValueError):
@@ -31,7 +42,8 @@ class _Host:
 class SnapshotStore:
     def __init__(self, *, stale_after=5.0, retention=3600.0, max_hosts=128,
                  clock=time.monotonic, wall_clock=time.time):
-        if stale_after <= 0 or retention < stale_after or max_hosts < 1:
+        if (not math.isfinite(stale_after) or not math.isfinite(retention) or
+                stale_after <= 0 or retention < stale_after or max_hosts < 1):
             raise ValueError("Require 0 < stale_after <= retention and max_hosts >= 1")
         self.stale_after = stale_after
         self.retention = retention
@@ -147,6 +159,25 @@ class TelemetryHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path)
+        if path.path in STATIC_FILES:
+            name, content_type = STATIC_FILES[path.path]
+            try:
+                body = (WEB_ROOT / name).read_bytes()
+            except OSError:
+                self._json(503, {"error": "Browser assets are missing"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         if path.path == "/healthz":
             self._json(200, {"status": "ok", "schema_version": 1})
             return

@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Process Aquarium</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%235ee6bc' d='M4 16 0 8v16l4-8c7 12 21 8 28 0C25 8 11 4 4 16Z'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./aquarium.css" />
+    <script type="module" src="./app.mjs"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="Process Aquarium home">
+        <svg viewBox="0 0 38 28" aria-hidden="true">
+          <path d="M8 14 1 6v16l7-8c8 13 23 8 29 0C31 6 16 1 8 14Z" />
+          <circle cx="28" cy="11" r="1.4" />
+        </svg>
+        <span
+          >process<span class="brand-light">aquarium</span
+          ><small>A LITTLE LIFE IN YOUR MACHINE</small></span
+        >
+      </a>
+      <div class="connection">
+        <span id="status" class="status waiting">Connecting</span
+        ><button
+          id="auth-button"
+          class="quiet"
+          title="Set or clear the API token"
+        >
+          Access
+        </button>
+      </div>
+    </header>
+    <div class="workspace">
+      <main class="ocean" aria-label="Process aquarium">
+        <div class="ocean-light"></div>
+        <div class="toolbar">
+          <label class="host-field"
+            ><span class="eyebrow">OBSERVING</span
+            ><select id="host" aria-label="Host">
+              <option value="">Waiting for an agent…</option>
+            </select></label
+          >
+          <div class="view-controls">
+            <input
+              id="search"
+              type="search"
+              placeholder="Find a process…"
+              aria-label="Filter processes by name or PID"
+            />
+            <select id="sort" aria-label="Sort processes">
+              <option value="cpu">CPU</option>
+              <option value="memory">Memory</option>
+              <option value="name">Name</option>
+              <option value="pid">PID</option>
+            </select>
+            <button
+              id="order"
+              class="square"
+              aria-label="Reverse sort order"
+              title="Reverse sort order"
+            >
+              ↓
+            </button>
+            <select id="limit" aria-label="Display limit">
+              <option value="100">100 fish</option>
+              <option value="300" selected>300 fish</option>
+              <option value="1000">1,000 fish</option>
+              <option value="0">All · up to 10,000</option>
+            </select>
+          </div>
+        </div>
+        <div
+          id="stage"
+          class="stage"
+          tabindex="0"
+          aria-label="Aquarium. Drag to pan, scroll to zoom, click a fish to inspect. Space pauses; R resets the view."
+        >
+          <canvas
+            id="aquarium"
+            aria-label="Animated fish representing monitored processes"
+          ></canvas>
+          <canvas id="overlay" aria-hidden="true"></canvas>
+          <div id="empty" class="empty-state">
+            <div class="empty-fish">◌</div>
+            <p class="eyebrow">THE WATER IS READY</p>
+            <h1>Let your processes swim.</h1>
+            <p id="empty-message">
+              Connect an agent to bring this aquarium to life.
+            </p>
+            <code id="agent-command"
+              >python main.py agent --server http://localhost:8080</code
+            >
+          </div>
+          <div id="notice" class="notice" hidden role="status"></div>
+        </div>
+        <footer class="ocean-footer">
+          <div class="camera-controls">
+            <button
+              id="pause"
+              title="Pause movement (Space)"
+              aria-label="Pause movement"
+            >
+              Ⅱ</button
+            ><button id="reset" title="Reset camera (R)">Recenter</button
+            ><button id="follow" aria-pressed="false" disabled>
+              Follow fish</button
+            ><span id="zoom">100%</span>
+          </div>
+          <div class="render-info">
+            <span id="fps">— fps</span
+            ><span class="renderer" id="renderer">Starting renderer</span>
+          </div>
+        </footer>
+      </main>
+      <aside class="sidebar" aria-label="Host metrics and process inspection">
+        <section class="overview">
+          <div class="section-title">
+            <h2>Under the surface</h2>
+            <span id="sample-age">No samples</span>
+          </div>
+          <div class="metric-grid">
+            <div class="metric">
+              <span>PROCESSES</span><strong id="metric-processes">—</strong
+              ><small id="visible-count">waiting for telemetry</small>
+            </div>
+            <div class="metric">
+              <span>CPU · TOTAL</span><strong id="metric-cpu">—</strong
+              ><small>100% = one CPU core</small>
+            </div>
+            <div class="metric">
+              <span>MEMORY · TOTAL</span><strong id="metric-memory">—</strong
+              ><small>sum of process shares</small>
+            </div>
+            <div class="metric">
+              <span>THREADS</span><strong id="metric-threads">—</strong
+              ><small>across all processes</small>
+            </div>
+          </div>
+        </section>
+        <section class="inspection">
+          <div class="section-title">
+            <h2>Field notes</h2>
+            <button id="clear-selection" class="quiet" hidden>Clear</button>
+          </div>
+          <div id="inspect-empty" class="inspect-empty">
+            <span class="crosshair">⊕</span>
+            <p>Every fish has a story.</p>
+            <small>Select one to see the process behind it.</small>
+          </div>
+          <div id="details" hidden>
+            <div class="process-heading">
+              <span id="detail-dot" class="color-dot"></span>
+              <h3 id="detail-name"></h3>
+              <span id="detail-status" class="pill"></span>
+            </div>
+            <dl class="details-grid">
+              <div>
+                <dt>PID</dt>
+                <dd id="detail-pid"></dd>
+              </div>
+              <div>
+                <dt>Parent PID</dt>
+                <dd id="detail-ppid"></dd>
+              </div>
+              <div>
+                <dt>CPU</dt>
+                <dd id="detail-cpu"></dd>
+              </div>
+              <div>
+                <dt>Memory</dt>
+                <dd id="detail-memory"></dd>
+              </div>
+              <div>
+                <dt>Threads</dt>
+                <dd id="detail-threads"></dd>
+              </div>
+              <div>
+                <dt>Started</dt>
+                <dd id="detail-started"></dd>
+              </div>
+            </dl>
+            <div class="command-label">COMMAND</div>
+            <code id="detail-command" class="command"></code>
+          </div>
+        </section>
+        <section class="activity">
+          <div class="section-title">
+            <h2>In the current</h2>
+            <span id="list-label">TOP CPU</span>
+          </div>
+          <div id="process-list" class="process-list">
+            <p class="muted">Processes will appear here.</p>
+          </div>
+        </section>
+        <section class="legend">
+          <span class="eyebrow">READING THE AQUARIUM</span>
+          <div>
+            <i class="legend-size"></i><span>Memory gives a fish its size</span>
+          </div>
+          <div>
+            <i class="legend-glow"></i
+            ><span>CPU makes it glow and swim faster</span>
+          </div>
+          <div>
+            <i class="legend-threads">· · ·</i
+            ><span>Orbiting dots are threads · up to 12</span>
+          </div>
+          <div>
+            <i class="legend-school">≈</i
+            ><span>Related processes swim together</span>
+          </div>
+        </section>
+        <div class="sidebar-footer">
+          Real processes. A different perspective.<span id="source-label"
+            >PROCESS AQUARIUM</span
+          >
+        </div>
+      </aside>
+    </div>
+    <dialog id="auth-dialog">
+      <form id="auth-form">
+        <span class="eyebrow">A PRIVATE AQUARIUM</span>
+        <h2>Connect to your server</h2>
+        <p>
+          Enter the API token configured on the aggregation server. It stays in
+          this browser tab.
+        </p>
+        <label for="token">API token</label
+        ><input
+          id="token"
+          name="token"
+          type="password"
+          autocomplete="current-password"
+          placeholder="Your server token"
+        />
+        <p id="auth-error" class="auth-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="forget-token" type="button" class="quiet">
+            Forget token</button
+          ><button id="cancel-auth" type="button" class="quiet">Cancel</button
+          ><button type="submit" class="primary">Connect</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
