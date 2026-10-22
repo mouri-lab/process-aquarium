@@ -1,4 +1,5 @@
-import { AquariumMenu } from "./menu.mjs";
+import { AquariumMenu, GameWindow } from "./menu.mjs";
+import { appearance } from "./fish.mjs";
 import { AquariumWorld, colorOf, keyOf, selectedProcesses } from "./world.mjs";
 import { CanvasRenderer, createRenderer, freshCanvas } from "./renderer.mjs";
 import { Camera, View, SHORTCUTS } from "./controls.mjs";
@@ -11,6 +12,9 @@ import {
 const $ = (id) => document.getElementById(id);
 const world = new AquariumWorld();
 const menu = new AquariumMenu();
+const inspection = new GameWindow(document.getElementById("inspection"));
+const portrait = new CanvasRenderer(document.getElementById("portrait"));
+let inspectedKey;
 let feedbackTimer;
 const processRows = new Map();
 function feedback(message) {
@@ -336,6 +340,8 @@ function updateMetrics() {
 }
 function updateDetails() {
   const fish = world.selected();
+  if (fish && inspectedKey !== world.selection) inspection.show();
+  inspectedKey = world.selection;
   $("inspection").hidden = !fish;
   $("details").hidden = !fish;
   $("inspect-empty").hidden = Boolean(fish);
@@ -368,7 +374,43 @@ function updateDetails() {
         ? `${fish.school.length} 匹 · リーダー PID ${Math.min(...fish.school)}`
         : "単独",
   );
-  setText("detail-shape", fish.shape);
+  setText(
+    "detail-shape",
+    {
+      shark: "サメ",
+      tropical: "熱帯魚",
+      ray: "エイ",
+      dolphin: "イルカ",
+      whale: "クジラ",
+      eel: "ウナギ",
+      fish: "さかな",
+    }[fish.shape],
+  );
+  if ($("portrait").clientWidth) {
+    // Same geometry and colour as the selected fish, fitted to its little window.
+    const sample = {
+      ...fish,
+      x: 0,
+      y: 0,
+      angle: 0,
+      spawn: 1,
+      death: 0,
+      dying: false,
+      numThreads: 1,
+      p: { ...fish.p, num_threads: 1 },
+    };
+    const scale = 25 / Math.max(1, appearance(sample).size);
+    portrait.render(
+      {
+        fish: new Map([[0, sample]]),
+        quality: "full",
+        highlightSchools: false,
+      },
+      { x: 0, y: 0, zoom: scale },
+      $("portrait").clientWidth,
+      $("portrait").clientHeight,
+    );
+  }
   setText("detail-partners", fish.partners.join(", ") || "—");
   setText(
     "detail-started",
@@ -437,7 +479,7 @@ function togglePause() {
   $("paused-indicator").hidden = !paused;
   $("pause").setAttribute(
     "aria-label",
-    paused ? "Resume movement" : "Pause movement",
+    paused ? "泳ぎを再開" : "泳ぎを一時停止",
   );
   $("pause").setAttribute("aria-pressed", String(paused));
 }
@@ -453,13 +495,12 @@ function resetCamera() {
 async function perform(action) {
   if (action === "pause") togglePause();
   else if (action === "fullscreen") {
-    menu.close();
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
       else await document.documentElement.requestFullscreen();
+      menu.close();
     } catch (error) {
-      setText("notice", `フルスクリーンを開始できません: ${error.message}`);
-      $("notice").hidden = false;
+      feedback(`フルスクリーンを開始できません: ${error.message}`);
     }
   } else view.action(action, world, camera);
   syncControls();
@@ -609,13 +650,15 @@ stage.addEventListener(
 );
 window.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
-  if (event.target.closest("input,select,textarea,dialog")) return;
+  if (event.target.closest("dialog")) return;
   if (event.key === "Escape") {
     event.preventDefault();
-    if (world.selection) perform("escape");
+    if (menu.visible) menu.close();
+    else if (world.selection) perform("escape");
     else menu.open();
     return;
   }
+  if (event.target.closest("input,select,textarea")) return;
   if (event.key === "/" || event.key === "?") {
     event.preventDefault();
     menu.open(event.key === "/" ? "processes" : "help");
@@ -669,9 +712,9 @@ function frame(now) {
   const elapsed = (now - lastFrame) / 1000;
   lastFrame = now;
   if (elapsed > 0) fps = fps * 0.95 + Math.min(120, 1 / elapsed) * 0.05;
-  if (!paused && !menu.visible && !$("auth-dialog").open) world.step(elapsed);
+  if (!paused && !$("auth-dialog").open) world.step(elapsed);
   const oldMode = camera.mode;
-  if (!menu.visible) camera.update(world, elapsed);
+  camera.update(world, elapsed);
   if (camera.mode !== oldMode) syncControls();
   view.adapt(fps, elapsed, world);
   const width = stage.clientWidth,
