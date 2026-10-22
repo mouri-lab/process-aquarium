@@ -345,13 +345,13 @@
               ↓</button
             ><label
               >表示数<select id="limit" aria-label="水槽に表示する数">
-                <option value="0" selected>無制限</option>
-                <option value="10">10 匹</option>
-                <option value="20">20 匹</option>
-                <option value="50">50 匹</option>
-                <option value="100">100 匹</option>
-                <option value="200">200 匹</option>
-                <option value="400">400 匹</option>
+                <option value="0" selected>無制限 (0)</option>
+                <option value="10">10 匹 (1)</option>
+                <option value="20">20 匹 (2)</option>
+                <option value="50">50 匹 (3)</option>
+                <option value="100">100 匹 (4)</option>
+                <option value="200">200 匹 (5)</option>
+                <option value="400">400 匹 (6)</option>
                 <option value="1000">1,000 匹</option>
               </select></label
             >
@@ -361,6 +361,9 @@
           </div>
           <div id="process-list" class="process-list"></div>
           <p class="menu-note">魚を選ぶと、その場所へ移動します。</p>
+          <p class="menu-note">
+            表示数：<kbd>L</kbd> で順送り・<kbd>0〜6</kbd> で直接切替
+          </p>
         </div>
         <div
           class="menu-panel"
@@ -514,6 +517,10 @@
             <div>
               <dt>L / S / O</dt>
               <dd>表示数 / ソート / 順序</dd>
+            </div>
+            <div>
+              <dt>0 / 1〜6</dt>
+              <dd>無制限 / 10・20・50・100・200・400匹</dd>
             </div>
             <div>
               <dt>T / F・F11</dt>

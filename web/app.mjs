@@ -512,14 +512,15 @@ async function perform(action) {
     schools: `群れの強調 ${world.highlightSchools ? "ON" : "OFF"}`,
     reset: "視点をリセット",
     camera: ["自動センタリング", "選択した魚を追従", "自由に移動"][camera.mode],
-    limit: `表示 ${world.filters.limit || "無制限"}`,
+    limit: `表示 ${world.filters.limit ? `${world.filters.limit} 匹` : "無制限"}`,
     sort: `ソート ${world.filters.sort}`,
     order: world.filters.order === "desc" ? "降順" : "昇順",
     ui: ["通常", "静かな水槽", "没入モード"][view.ui],
     labels: `名前 ${view.labels ? "ON" : "OFF"}`,
     preset: "表示プリセットを切替",
   };
-  if (messages[action]) feedback(messages[action]);
+  const message = messages[action.startsWith("limit:") ? "limit" : action];
+  if (message) feedback(message);
 }
 function syncControls() {
   document.documentElement.dataset.ui = String(view.ui);

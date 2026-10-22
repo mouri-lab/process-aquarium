@@ -166,3 +166,26 @@ test("world bounds, orbit, death and multicore CPU stay bounded", () => {
   assert.equal(f.death, 1);
   assert.equal(appearance(f).alpha, 0);
 });
+
+test("number keys select a limit directly and L continues from that preset", () => {
+  const w = new AquariumWorld(),
+    v = new View(),
+    c = new Camera();
+  for (const [key, limit] of Object.entries({
+    0: 0,
+    1: 10,
+    2: 20,
+    3: 50,
+    4: 100,
+    5: 200,
+    6: 400,
+  })) {
+    v.action(SHORTCUTS[key], w, c);
+    assert.equal(w.filters.limit, limit);
+    v.action(SHORTCUTS.l, w, c);
+    assert.equal(
+      w.filters.limit,
+      LIMITS[(LIMITS.indexOf(limit) + 1) % LIMITS.length],
+    );
+  }
+});

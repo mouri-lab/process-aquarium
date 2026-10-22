@@ -2,6 +2,13 @@ import { clamp } from "./fish.mjs";
 export const LIMITS = [0, 10, 20, 50, 100, 200, 400];
 export const SORTS = ["cpu", "memory", "name", "pid"];
 export const SHORTCUTS = {
+  0: "limit:0",
+  1: "limit:10",
+  2: "limit:20",
+  3: "limit:50",
+  4: "limit:100",
+  5: "limit:200",
+  6: "limit:400",
   d: "debug",
   i: "ipc",
   t: "ui",
@@ -105,6 +112,8 @@ export class View {
       quality === "minimal" ? 20 : quality === "reduced" ? 35 : 50;
   }
   action(action, world, camera) {
+    if (action.startsWith("limit:"))
+      world.setFilters({ limit: Number(action.slice(6)) });
     if (["debug", "ipc", "labels"].includes(action))
       this[action] = !this[action];
     if (action === "ui") this.ui = (this.ui + 1) % 3;
