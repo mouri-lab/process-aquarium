@@ -100,3 +100,24 @@ test("simulation is finite and frame-rate independent for bounded time steps", (
     assert.ok(fish.alpha >= 0 && fish.alpha <= 1);
   }
 });
+
+test("sorting and search apply before display limits", () => {
+  const data = snapshot(1, [process(1), process(2), process(3)]);
+  assert.deepEqual(
+    selectedProcesses(data, { sort: "pid", order: "asc", limit: 2 }).map(
+      (p) => p.pid,
+    ),
+    [1, 2],
+  );
+  assert.deepEqual(
+    selectedProcesses(data, { search: "3", limit: 1 }).map((p) => p.pid),
+    [3],
+  );
+});
+
+test("large fish can be selected across their body", () => {
+  const world = new AquariumWorld();
+  world.apply(snapshot(1, [{ ...process(), memory_percent: 20 }]));
+  const fish = [...world.fish.values()][0];
+  assert.equal(world.pick(fish.x + 35, fish.y, 20), fish.key);
+});

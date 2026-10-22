@@ -30,6 +30,8 @@ class PsutilProcessSource(IProcessSource):
             raise ValueError("Collection interval must be finite and positive")
         self.max_processes = max_processes  # Collection is never display-limited.
         self.host_id = host_id or socket.gethostname()
+        if not isinstance(self.host_id, str) or len(self.host_id) > 128:
+            raise ValueError("Host ID must be text of at most 128 characters")
         self.hostname = socket.gethostname()
         self.boot_id = boot_identity()
         self.session_id = uuid.uuid4().hex
@@ -231,7 +233,7 @@ class EbpfProcessSource(PsutilProcessSource):
     }
     """
 
-    def __init__(self, enable=True, hybrid_mode=True, **kwargs):
+    def __init__(self, enable=True, **kwargs):
         super().__init__(**kwargs)
         self.available = False
         self.error = None

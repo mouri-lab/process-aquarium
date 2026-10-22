@@ -1,6 +1,7 @@
 """Bounded JSON HTTP transport; no OS monitoring or GUI dependencies."""
 
 import json
+import math
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -22,6 +23,8 @@ class _NoRedirect(HTTPRedirectHandler):
 
 class APIClient:
     def __init__(self, server: str, *, token: str = "", timeout: float = 5.0):
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("Request timeout must be finite and positive")
         parsed = urlsplit(server)
         if (parsed.scheme not in ("http", "https") or not parsed.hostname or
                 parsed.username or parsed.password or parsed.query or parsed.fragment):

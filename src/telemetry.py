@@ -98,15 +98,47 @@ def _text(value: Any, name: str, *, nonempty: bool = False) -> str:
 
 
 def _integer(value: Any, name: str, minimum: int = 0) -> int:
-    if type(value) is not int or value < minimum or value > 2**63 - 1:
+    if type(value) is not int or value < minimum or value > 2**53 - 1:
         raise ProtocolError(f"{name} must be an integer >= {minimum}")
     return value
 
 
 def _number(value: Any, name: str) -> float:
-    if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+    try:
+        valid = type(value) in (int, float) and math.isfinite(value) and value >= 0
+    except OverflowError:
+        valid = False
+    if not valid:
         raise ProtocolError(f"{name} must be a finite nonnegative number")
     return float(value)
+
+
+def _identifier(value: Any, name: str) -> str:
+    value = _text(value, name, nonempty=True)
+    if len(value) > 128:
+        raise ProtocolError(f"{name} must be at most 128 characters")
+    return value
+
+
+def _metadata(value: Any, name: str, depth: int = 0) -> Any:
+    if depth > 4:
+        raise ProtocolError(f"{name} is nested too deeply")
+    if value is None or type(value) is bool:
+        return value
+    if isinstance(value, str):
+        return _text(value, name)
+    if type(value) in (int, float):
+        try:
+            if math.isfinite(value):
+                return value
+        except OverflowError:
+            pass
+        raise ProtocolError(f"{name} contains a non-finite number")
+    if isinstance(value, dict) and len(value) <= 64:
+        return {_text(k, name): _metadata(v, name, depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)) and len(value) <= 64:
+        return [_metadata(v, name, depth + 1) for v in value]
+    raise ProtocolError(f"{name} must contain bounded JSON values")
 
 
 def _array(value: Any, name: str, limit: int) -> list:
@@ -156,7 +188,7 @@ def snapshot_from_dict(value: Any) -> Snapshot:
             event_type=kind, pid=_integer(item.get("pid"), "event pid"),
             ppid=None if ppid is None else _integer(ppid, "event ppid"),
             timestamp=_number(item.get("timestamp"), "event timestamp"),
-            details=None if details is None else _object(details, "event details"),
+            details=None if details is None else _metadata(_object(details, "event details"), "event details"),
             event_id=event_id, create_time=_number(item.get("create_time", 0), "event create_time"),
         ))
     connections = []
@@ -167,17 +199,17 @@ def snapshot_from_dict(value: Any) -> Snapshot:
             pid_a=_integer(item.get("pid_a"), "pid_a"),
             pid_b=_integer(item.get("pid_b"), "pid_b"),
             kind=_text(item.get("kind"), "kind", nonempty=True),
-            metadata=None if metadata is None else _object(metadata, "connection metadata"),
+            metadata=None if metadata is None else _metadata(_object(metadata, "connection metadata"), "connection metadata"),
         ))
     stats = _object(data.get("event_stats", {}), "event_stats")
     if len(stats) > 32:
         raise ProtocolError("Too many event statistics")
     error = data.get("error")
     return Snapshot(
-        host_id=_text(data.get("host_id"), "host_id", nonempty=True),
+        host_id=_identifier(data.get("host_id"), "host_id"),
         hostname=_text(data.get("hostname"), "hostname", nonempty=True),
-        boot_id=_text(data.get("boot_id"), "boot_id", nonempty=True),
-        session_id=_text(data.get("session_id"), "session_id", nonempty=True),
+        boot_id=_identifier(data.get("boot_id"), "boot_id"),
+        session_id=_identifier(data.get("session_id"), "session_id"),
         sequence=_integer(data.get("sequence"), "sequence", 1),
         collected_at=_number(data.get("collected_at"), "collected_at"),
         source=_text(data.get("source"), "source", nonempty=True),

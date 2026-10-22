@@ -17,7 +17,7 @@ def create_local_source(source: str, *, max_processes=2000, host_id=None, interv
     options = dict(max_processes=max_processes, host_id=host_id, interval=interval)
     if source == "ebpf":
         try:
-            candidate = EbpfProcessSource(enable=True, hybrid_mode=True, **options)
+            candidate = EbpfProcessSource(enable=True, **options)
         except Exception as exc:
             print(f"[eBPF] 初期化失敗: {exc} -> psutil フォールバック", flush=True)
         else:

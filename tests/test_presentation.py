@@ -37,6 +37,9 @@ def test_display_limit_never_generates_lifecycle_exits():
     assert len(manager.get_all_processes()) == 2
     assert not manager.get_new_processes()
     assert not manager.get_dying_processes()
+    manager.set_process_limit(0)
+    assert manager.process_limit is None
+    assert len(manager.processes) == 2
 
 
 def test_outage_preserves_state_and_pid_reuse_replaces_identity():

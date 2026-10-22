@@ -26,6 +26,7 @@ let timer,
   lastFrame = performance.now(),
   fps = 60,
   lastMetrics = 0;
+let labelKeys = [];
 const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const percent = (value) => `${number.format(value)}%`;
 const rgb = (color) =>
@@ -212,6 +213,8 @@ function updateEmpty() {
 function updateMetrics() {
   const snapshot = world.snapshot;
   if (!snapshot) {
+    labelKeys = [];
+    setText("source-label", "PROCESS AQUARIUM");
     for (const id of [
       "metric-processes",
       "metric-cpu",
@@ -244,6 +247,11 @@ function updateMetrics() {
     number.format(processes.reduce((sum, p) => sum + p.num_threads, 0)),
   );
   const visible = selectedProcesses(snapshot, world.filters);
+  labelKeys = visible
+    .slice()
+    .sort((a, b) => b.cpu_percent - a.cpu_percent)
+    .slice(0, 6)
+    .map((p) => keyOf(snapshot, p));
   setText("visible-count", `${number.format(visible.length)} fish in view`);
   stage.dataset.fishCount = String(visible.length);
   setText("source-label", `${snapshot.source} / ${snapshot.hostname}`);
@@ -518,10 +526,7 @@ function drawOverlay(width, height) {
     }
     ctx.setLineDash([]);
   }
-  const labels = [...world.fish.values()]
-    .filter((f) => !f.dying)
-    .sort((a, b) => b.p.cpu_percent - a.p.cpu_percent)
-    .slice(0, 6);
+  const labels = labelKeys.map((key) => world.fish.get(key)).filter(Boolean);
   if (selected && !labels.includes(selected)) labels.push(selected);
   ctx.font = "10px ui-monospace,monospace";
   ctx.textAlign = "center";

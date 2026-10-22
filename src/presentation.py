@@ -40,7 +40,7 @@ class ProcessManager:
     def set_process_limit(self, limit):
         if limit is not None and limit < 0:
             raise ValueError("Process limit must be >= 0")
-        self.process_limit = limit
+        self.process_limit = limit or None
         self._select()
 
     def set_sort_config(self, sort_by, sort_order="desc"):

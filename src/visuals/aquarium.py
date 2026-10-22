@@ -522,6 +522,8 @@ class Aquarium:
         fish = self.fishes.pop(pid)
         if self.selected_fish is fish:
             self.selected_fish = None
+            if self.camera_mode == 1:
+                self.camera_mode = 0
         if self.follow_target is fish:
             self.follow_target = None
         self.communication_history = {key: value for key, value in self.communication_history.items() if pid not in key}

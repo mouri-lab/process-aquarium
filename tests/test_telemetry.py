@@ -57,3 +57,16 @@ def test_replayed_event_ids_are_rejected():
 def test_invalid_json_is_rejected(payload):
     with pytest.raises(ProtocolError):
         snapshot_from_bytes(payload)
+
+
+def test_numeric_overflow_and_deep_metadata_are_rejected():
+    data = sample().to_dict()
+    data["collected_at"] = 10**1000
+    with pytest.raises(ProtocolError):
+        snapshot_from_dict(data)
+    details = {}
+    for _ in range(10):
+        details = {"nested": details}
+    snapshot = sample(events=(LifecycleEvent("exec", 42, 1, 100, details, 1),))
+    with pytest.raises(ProtocolError, match="deeply"):
+        snapshot_from_bytes(snapshot.to_bytes())
