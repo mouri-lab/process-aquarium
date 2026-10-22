@@ -19,15 +19,25 @@ def test_ipc_combines_network_unix_pipe_and_parent_fallback(monkeypatch):
     records = {pid: replace(process(), pid=pid, ppid=1) for pid in range(10, 17)}
     records[16] = replace(records[16], ppid=10)
     endpoint = lambda port: NS(ip="127.0.0.1", port=port)
-    inet = [NS(pid=10, laddr=endpoint(8000), raddr=endpoint(10000)),
-            NS(pid=11, laddr=endpoint(10000), raddr=endpoint(8000))]
+    inet = [
+        NS(pid=10, laddr=endpoint(8000), raddr=endpoint(10000)),
+        NS(pid=11, laddr=endpoint(10000), raddr=endpoint(8000)),
+    ]
     unix = [NS(pid=12, laddr="/tmp/app socket"), NS(pid=13, laddr="/tmp/app socket")]
-    monkeypatch.setattr(psutil, "net_connections", lambda kind: inet if kind == "inet" else unix)
+    monkeypatch.setattr(
+        psutil, "net_connections", lambda kind: inet if kind == "inet" else unix
+    )
     detector = IPCDetector()
-    monkeypatch.setattr(detector, "read_descriptors", lambda _: {("pipe", "123"): {14, 15}})
+    monkeypatch.setattr(
+        detector, "read_descriptors", lambda _: {("pipe", "123"): {14, 15}}
+    )
     conns = detector.detect(records)
     assert {(c.pid_a, c.pid_b, c.kind) for c in conns} == {
-        (10, 11, "tcp-loop"), (12, 13, "unix"), (14, 15, "pipe"), (10, 16, "parent-child")}
+        (10, 11, "tcp-loop"),
+        (12, 13, "unix"),
+        (14, 15, "pipe"),
+        (10, 16, "parent-child"),
+    }
     records[14] = replace(records[14], create_time=200)
     assert not any(c.kind == "pipe" for c in detector.detect(records))
 
@@ -35,6 +45,7 @@ def test_ipc_combines_network_unix_pipe_and_parent_fallback(monkeypatch):
 def test_permissions_and_missing_lsof_keep_parent_relationships(monkeypatch):
     def denied(**kwargs):
         raise psutil.AccessDenied()
+
     monkeypatch.setattr(psutil, "net_connections", denied)
     detector = IPCDetector()
     monkeypatch.setattr(detector, "read_descriptors", lambda _: {})

@@ -1,4 +1,5 @@
 """Best-effort agent-side IPC discovery; never imported by remote clients."""
+
 from collections import defaultdict
 from itertools import combinations
 import re
@@ -26,9 +27,11 @@ def descriptor_groups(output, visible):
         kind = record.get("t", "")
         name = record.get("n", "")
         if kind == "PIPE":
-            identifiers = re.findall(r"0x[0-9a-fA-F]+", record.get("D", "") + " " + name)
+            identifiers = re.findall(
+                r"0x[0-9a-fA-F]+", record.get("D", "") + " " + name
+            )
             if record.get("i"):
-                identifiers.append("inode:"+record.get("D", "")+":"+record["i"])
+                identifiers.append("inode:" + record.get("D", "") + ":" + record["i"])
             for identity in identifiers:
                 groups[("pipe", identity)].add(pid)
         elif kind in ("unix", "sock") and name and name not in ("socket", "sock"):
@@ -63,8 +66,13 @@ class IPCDetector:
         # Disk-backed capture bounds memory even for hosts with many descriptors.
         try:
             with tempfile.TemporaryFile() as output:
-                subprocess.run(["lsof", "-n", "-P", "+c", "0", "-F", "pftnDi"],
-                    stdout=output, stderr=subprocess.DEVNULL, timeout=2, check=False)
+                subprocess.run(
+                    ["lsof", "-n", "-P", "+c", "0", "-F", "pftnDi"],
+                    stdout=output,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                    check=False,
+                )
                 output.seek(0)
                 data = output.read(2 * 1024 * 1024).decode("utf-8", "replace")
             return descriptor_groups(data.rsplit("\n", 1)[0], processes)
@@ -82,12 +90,21 @@ class IPCDetector:
                         if conn.laddr:
                             groups[("unix", str(conn.laddr))].add(conn.pid)
                         continue
-                    if (not conn.laddr or not conn.raddr or
-                            conn.laddr.ip not in ("127.0.0.1", "::1") or
-                            conn.raddr.ip not in ("127.0.0.1", "::1")):
+                    if (
+                        not conn.laddr
+                        or not conn.raddr
+                        or conn.laddr.ip not in ("127.0.0.1", "::1")
+                        or conn.raddr.ip not in ("127.0.0.1", "::1")
+                    ):
                         continue
-                    endpoints = tuple(sorted(((conn.laddr.ip, conn.laddr.port),
-                                              (conn.raddr.ip, conn.raddr.port))))
+                    endpoints = tuple(
+                        sorted(
+                            (
+                                (conn.laddr.ip, conn.laddr.port),
+                                (conn.raddr.ip, conn.raddr.port),
+                            )
+                        )
+                    )
                     groups[("tcp-loop", endpoints)].add(conn.pid)
             except (psutil.Error, OSError, NotImplementedError):
                 continue
@@ -96,12 +113,17 @@ class IPCDetector:
             raw = self.read_descriptors(processes)
             # Cached ownership carries create_time so PID reuse cannot join an
             # old pipe owner to an unrelated new process.
-            self.descriptors = {key: {(pid, processes[pid].create_time) for pid in owners}
-                                for key, owners in raw.items()}
+            self.descriptors = {
+                key: {(pid, processes[pid].create_time) for pid in owners}
+                for key, owners in raw.items()
+            }
             self.last_descriptors = now
         for key, owners in self.descriptors.items():
-            groups[key].update(pid for pid, created in owners
-                              if pid in processes and processes[pid].create_time == created)
+            groups[key].update(
+                pid
+                for pid, created in owners
+                if pid in processes and processes[pid].create_time == created
+            )
         result, seen = [], set()
         for (kind, _), owners in groups.items():
             for a, b in combinations(sorted(owners), 2):

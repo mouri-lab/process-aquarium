@@ -1,4 +1,9 @@
-import {fishPrimitives, projectedFish, visibleFish,rasterPrimitive} from './geometry.mjs';
+import {
+  fishPrimitives,
+  projectedFish,
+  visibleFish,
+  rasterPrimitive,
+} from "./geometry.mjs";
 const shader = /* wgsl */ `
 struct Globals { viewport: vec2f, camera: vec2f, zoom: f32, time: f32, padding: vec2f }
 struct Primitive { a: vec4f, b: vec4f, color: vec4f }
@@ -26,10 +31,18 @@ struct Output { @builtin(position) position: vec4f, @location(0) uv: vec2f,
   return vec4f(input.color.rgb,alpha);
 }
 `;
-function primitives(world,camera,width,height){
-  const result=[];
-  for(const fish of world.fish.values())if(visibleFish(fish,camera,width,height))
-    result.push(...fishPrimitives(projectedFish(fish,camera,width,height),camera.zoom,world.highlightSchools,world.quality).map(rasterPrimitive));
+function primitives(world, camera, width, height) {
+  const result = [];
+  for (const fish of world.fish.values())
+    if (visibleFish(fish, camera, width, height))
+      result.push(
+        ...fishPrimitives(
+          projectedFish(fish, camera, width, height),
+          camera.zoom,
+          world.highlightSchools,
+          world.quality,
+        ).map(rasterPrimitive),
+      );
   return result;
 }
 
@@ -142,10 +155,13 @@ class WebGPURenderer {
     );
     if (this.canvas.width !== pixelWidth) this.canvas.width = pixelWidth;
     if (this.canvas.height !== pixelHeight) this.canvas.height = pixelHeight;
-    const shapes=primitives(world,camera,width,height);
+    const shapes = primitives(world, camera, width, height);
     this.reserve(shapes.length);
-    let index=0;
-    for(const shape of shapes){this.data.set([...shape.points,shape.type,0,...shape.color],index);index+=12;}
+    let index = 0;
+    for (const shape of shapes) {
+      this.data.set([...shape.points, shape.type, 0, ...shape.color], index);
+      index += 12;
+    }
     this.device.queue.writeBuffer(
       this.uniform,
       0,
@@ -203,14 +219,26 @@ export class CanvasRenderer {
       this.canvas.height = Math.max(1, Math.round(height * ratio));
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    for(const shape of primitives(world,camera,width,height)){
-      const [r,g,b,alpha]=shape.color;
-      ctx.fillStyle=`rgba(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)},${alpha})`;
+    for (const shape of primitives(world, camera, width, height)) {
+      const [r, g, b, alpha] = shape.color;
+      ctx.fillStyle = `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)},${alpha})`;
       ctx.beginPath();
-      const p=shape.points;
-      if(shape.type===0)ctx.ellipse(p[0],p[1],p[2],p[3],0,0,Math.PI*2);
-      else if(shape.type===2){ctx.moveTo(p[0],p[1]);ctx.lineTo(p[2],p[3]);ctx.strokeStyle=ctx.fillStyle;ctx.lineWidth=1;ctx.stroke();continue;}
-      else{ctx.moveTo(p[0],p[1]);ctx.lineTo(p[2],p[3]);ctx.lineTo(p[4],p[5]);ctx.closePath();}
+      const p = shape.points;
+      if (shape.type === 0)
+        ctx.ellipse(p[0], p[1], p[2], p[3], 0, 0, Math.PI * 2);
+      else if (shape.type === 2) {
+        ctx.moveTo(p[0], p[1]);
+        ctx.lineTo(p[2], p[3]);
+        ctx.strokeStyle = ctx.fillStyle;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        continue;
+      } else {
+        ctx.moveTo(p[0], p[1]);
+        ctx.lineTo(p[2], p[3]);
+        ctx.lineTo(p[4], p[5]);
+        ctx.closePath();
+      }
       ctx.fill();
     }
   }
