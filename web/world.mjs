@@ -41,6 +41,22 @@ export function interpolateFish(f, alpha, out = {}) {
         blend;
   return out;
 }
+export function glidePose(previous, target, seconds) {
+  const dt = Math.max(0, Math.min(seconds, 0.1));
+  const position = -Math.expm1(-dt / 0.14);
+  const turn = -Math.expm1(-dt / 0.24);
+  return {
+    x: previous.x + (target.x - previous.x) * position,
+    y: previous.y + (target.y - previous.y) * position,
+    angle:
+      previous.angle +
+      Math.atan2(
+        Math.sin(target.angle - previous.angle),
+        Math.cos(target.angle - previous.angle),
+      ) *
+        turn,
+  };
+}
 function compareNames(a, b) {
   const aa = Array.from(a),
     bb = Array.from(b);
@@ -422,12 +438,28 @@ export class AquariumWorld {
       this.accumulator -= 1 / 30;
     }
   }
-  renderFrame() {
+  renderFrame(seconds, moving = true) {
     const scene = this.scene;
     const alpha = Math.max(0, Math.min(1, this.accumulator * 30));
     scene.time = Math.max(0, this.time - (1 - alpha) / 30);
-    for (const [key, fish] of this.fish)
-      scene.fish.set(key, interpolateFish(fish, alpha, scene.fish.get(key)));
+    for (const [key, fish] of this.fish) {
+      const last = scene.fish.get(key);
+      const pose = last && { x: last.x, y: last.y, angle: last.angle };
+      const display = interpolateFish(fish, alpha, last);
+      if (seconds !== undefined) {
+        if (pose)
+          Object.assign(
+            display,
+            glidePose(pose, display, moving ? seconds : 0),
+          );
+        // Keep the native CPU-dependent travel speed, but give the fins a
+        // continuous, small stroke instead of amplifying every steering twitch.
+        const effort = Math.min(1, Math.hypot(fish.vx, fish.vy) / 14);
+        display.tail =
+          Math.sin(scene.time * 3.2 + fish.phase) * (0.12 + effort * 0.08);
+      }
+      scene.fish.set(key, display);
+    }
     for (const key of scene.fish.keys())
       if (!this.fish.has(key)) scene.fish.delete(key);
     return scene;

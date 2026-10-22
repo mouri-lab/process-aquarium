@@ -717,9 +717,9 @@ function frame(now) {
   const elapsed = (now - lastFrame) / 1000;
   lastFrame = now;
   if (elapsed > 0) fps = fps * 0.95 + Math.min(120, 1 / elapsed) * 0.05;
-  if (!paused && !$("auth-dialog").open)
-    world.step(Math.min(elapsed, 0.1) * view.speed);
-  const scene = world.renderFrame();
+  const moving = !paused && !$("auth-dialog").open;
+  if (moving) world.step(Math.min(elapsed, 0.1) * view.speed);
+  const scene = world.renderFrame(elapsed, moving);
   const oldMode = camera.mode;
   camera.update(scene, elapsed);
   if (camera.mode !== oldMode) syncControls();

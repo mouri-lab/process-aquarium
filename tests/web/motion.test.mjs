@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AquariumWorld, interpolateFish } from "../../web/world.mjs";
+import { AquariumWorld, interpolateFish, glidePose } from "../../web/world.mjs";
 import { makeFish } from "../../web/fish.mjs";
 import { View } from "../../web/controls.mjs";
 
@@ -54,7 +54,7 @@ test("angles cross the wrap boundary by the short arc", () => {
   assert.ok(Math.abs(rendered.angle - Math.PI) < 1e-10);
   assert.ok(Math.abs(rendered.pulse - Math.PI * 2) < 1e-10);
 });
-test("the gentler default remains identical at 30, 60 and 120 Hz", () => {
+test("normal speed remains identical at 30, 60 and 120 Hz", () => {
   const states = [30, 60, 120].map((hz) => {
     const w = world();
     for (let i = 0; i < hz * 4; i++) w.step(new View().speed / hz);
@@ -63,5 +63,27 @@ test("the gentler default remains identical at 30, 60 and 120 Hz", () => {
   });
   assert.deepEqual(states[0], states[1]);
   assert.deepEqual(states[1], states[2]);
-  assert.equal(states[0][2], 60);
+  assert.equal(states[0][2], 120);
+});
+
+test("gliding damps short steering changes, is refresh independent, and holds on pause", () => {
+  const target = { x: 100, y: -50, angle: -0.3 };
+  const start = { x: 0, y: 0, angle: 0.2 };
+  const a = glidePose(start, target, 1 / 30);
+  const b = glidePose(glidePose(start, target, 1 / 60), target, 1 / 60);
+  for (const key of ["x", "y", "angle"])
+    assert.ok(Math.abs(a[key] - b[key]) < 1e-10);
+  assert.ok(a.x > 0 && a.x < 30);
+  assert.ok(a.angle > -0.3 && a.angle < 0.2);
+  assert.deepEqual(glidePose(a, target, 0), a);
+  const w = world();
+  w.step(1 / 30);
+  w.renderFrame(1 / 60);
+  w.step(1 / 30);
+  const before = { ...w.renderFrame(1 / 60).fish.get("fish") };
+  const stopped = w.renderFrame(1 / 60, false).fish.get("fish");
+  assert.equal(stopped.x, before.x);
+  assert.equal(stopped.y, before.y);
+  assert.equal(stopped.tail, before.tail);
+  assert.ok(Math.abs(stopped.tail) <= 0.2);
 });
