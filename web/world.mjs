@@ -13,6 +13,34 @@ import {
   TAU,
 } from "./fish.mjs";
 export { hash, colorOf } from "./fish.mjs";
+const MOTION_FIELDS = [
+  "x",
+  "y",
+  "age",
+  "tail",
+  "spawn",
+  "death",
+  "fork",
+  "exec",
+  "size",
+  "glow",
+];
+export function interpolateFish(f, alpha, out = {}) {
+  Object.assign(out, f);
+  if (!f.previous) return out;
+  const blend = Math.max(0, Math.min(1, alpha));
+  for (const field of MOTION_FIELDS)
+    out[field] = f.previous[field] + (f[field] - f.previous[field]) * blend;
+  for (const field of ["angle", "pulse"])
+    out[field] =
+      f.previous[field] +
+      Math.atan2(
+        Math.sin(f[field] - f.previous[field]),
+        Math.cos(f[field] - f.previous[field]),
+      ) *
+        blend;
+  return out;
+}
 function compareNames(a, b) {
   const aa = Array.from(a),
     bb = Array.from(b);
@@ -121,6 +149,9 @@ export class AquariumWorld {
     this.quality = "full";
     this.history = new Map();
     this.highlighted = new Set();
+    // A read-only presentation view shares telemetry, but owns interpolated fish.
+    this.scene = Object.create(this);
+    this.scene.fish = new Map();
   }
   clear() {
     this.snapshot = null;
@@ -391,6 +422,16 @@ export class AquariumWorld {
       this.accumulator -= 1 / 30;
     }
   }
+  renderFrame() {
+    const scene = this.scene;
+    const alpha = Math.max(0, Math.min(1, this.accumulator * 30));
+    scene.time = Math.max(0, this.time - (1 - alpha) / 30);
+    for (const [key, fish] of this.fish)
+      scene.fish.set(key, interpolateFish(fish, alpha, scene.fish.get(key)));
+    for (const key of scene.fish.keys())
+      if (!this.fish.has(key)) scene.fish.delete(key);
+    return scene;
+  }
   tick() {
     this.time += 1 / 30;
     const byPid = this.byPid(),
@@ -435,6 +476,9 @@ export class AquariumWorld {
       }
     }
     for (const [key, f] of this.fish) {
+      f.previous = Object.fromEntries(
+        [...MOTION_FIELDS, "angle", "pulse"].map((field) => [field, f[field]]),
+      );
       const nearby = [];
       if (this.quality === "full" && !f.dying) {
         const gx = Math.floor(f.x / cell),
@@ -452,10 +496,10 @@ export class AquariumWorld {
     }
   }
 
-  pick(x, y, radius = 30) {
+  pick(x, y, radius = 30, fishToPick = this.fish) {
     let best = null,
       distance = Infinity;
-    for (const fish of this.fish.values()) {
+    for (const fish of fishToPick.values()) {
       if (fish.dying) continue;
       const d = (fish.x - x) ** 2 + (fish.y - y) ** 2;
       if (d < Math.max(radius, fish.size) ** 2 && d < distance) {

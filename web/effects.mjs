@@ -90,7 +90,10 @@ export function drawUnderlay(ctx, world, camera, width, height, view) {
     // Deterministic per simulation frame: pause and high refresh rates cannot
     // change lightning frequency or consume the movement RNG.
     const seed = hash(f.key + Math.floor(world.time * 30));
-    if (f.p.memory_percent >= 20 && (f.age % 30 === 0 || seed % 10 === 0)) {
+    if (
+      f.p.memory_percent >= 20 &&
+      (Math.floor(f.age) % 30 === 0 || seed % 10 === 0)
+    ) {
       ctx.strokeStyle = `rgba(255,255,150,${Math.max(100, (a.alpha * 255) / 2) / 255})`;
       ctx.lineWidth = 2;
       for (let bolt = 0; bolt < 3 + (seed % 3); bolt++) {

@@ -81,6 +81,7 @@ export class View {
     this.particles = 50;
     this.bubbles = [];
     this.quality = "full";
+    this.speed = 0.5;
     this.samples = [];
     this.elapsed = 0;
   }

@@ -556,6 +556,9 @@ $("camera-mode").addEventListener("change", () => {
 $("quality").addEventListener("change", () => {
   view.quality = $("quality").value;
 });
+$("swim-speed").addEventListener("change", () => {
+  view.speed = Number($("swim-speed").value);
+});
 $("follow").addEventListener("click", () => {
   if (camera.mode === 1) camera.manual();
   else camera.follow(world.selection);
@@ -619,6 +622,7 @@ stage.addEventListener("pointerup", (event) => {
         (sx - rect.width / 2) / camera.zoom + camera.x,
         (sy - rect.height / 2) / camera.zoom + camera.y,
         24 / camera.zoom,
+        world.scene.fish,
       );
       world.highlighted.clear();
       if (drag.button === 2) {
@@ -671,11 +675,11 @@ window.addEventListener("keydown", (event) => {
     perform(action);
   }
 });
-function drawOverlay(width, height) {
+function drawOverlay(scene, width, height) {
   const under = prepareCanvas($("underlay"), width, height);
-  drawUnderlay(under, world, camera, width, height, view);
+  drawUnderlay(under, scene, camera, width, height, view);
   const ctx = prepareCanvas(overlay, width, height);
-  paintOverlay(ctx, world, camera, width, height, view);
+  paintOverlay(ctx, scene, camera, width, height, view);
   if (view.ui !== 2 && world.snapshot) {
     const visible = [...world.fish.values()].filter((f) => !f.dying);
     const mean =
@@ -712,9 +716,11 @@ function frame(now) {
   const elapsed = (now - lastFrame) / 1000;
   lastFrame = now;
   if (elapsed > 0) fps = fps * 0.95 + Math.min(120, 1 / elapsed) * 0.05;
-  if (!paused && !$("auth-dialog").open) world.step(elapsed);
+  if (!paused && !$("auth-dialog").open)
+    world.step(Math.min(elapsed, 0.1) * view.speed);
+  const scene = world.renderFrame();
   const oldMode = camera.mode;
-  camera.update(world, elapsed);
+  camera.update(scene, elapsed);
   if (camera.mode !== oldMode) syncControls();
   view.adapt(fps, elapsed, world);
   const width = stage.clientWidth,
@@ -723,11 +729,11 @@ function frame(now) {
     world.resize(width, height);
   if (renderer && width && height) {
     try {
-      renderer.render(world, camera, width, height);
+      renderer.render(scene, camera, width, height);
     } catch (error) {
       fallback(error.message);
     }
-    drawOverlay(width, height);
+    drawOverlay(scene, width, height);
   }
   if (now - lastMetrics > 500) {
     setText("fps", `${Math.round(fps)} fps`);
