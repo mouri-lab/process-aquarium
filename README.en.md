@@ -60,7 +60,7 @@ export AQUARIUM_TOKEN='your-shared-secret'
   --server https://aquarium.example.com --host-id worker-01 --source psutil
 ```
 
-Open the server URL, enter the token through Access, and choose a host. The browser keeps the token in that tab's sessionStorage, never in a URL. Prefer `AQUARIUM_TOKEN` over `--token` so the secret is absent from the monitored process's command line.
+Open the server URL, enter the token through Toolbox → Connection, and choose a host. The browser keeps the token in that tab's sessionStorage, never in a URL. Prefer `AQUARIUM_TOKEN` over `--token` so the secret is absent from the monitored process's command line.
 
 Remote WebGPU needs HTTPS; HTTP localhost is supported. Terminate TLS with Caddy, nginx, or another reverse proxy. An ordinary HTTP LAN URL uses Canvas 2D instead. Use HTTPS for authenticated remote connections.
 
@@ -69,19 +69,24 @@ Remote WebGPU needs HTTPS; HTTP localhost is supported. Terminate TLS with Caddy
 | Visual | Meaning |
 | --- | --- |
 | Color / markings | Process name |
-| Size | Memory percentage, logarithmically scaled |
+| Size | Memory percentage, using power/logarithmic scaling |
 | Glow / swimming speed | CPU usage |
-| Orbiting dots | Threads, capped at 12 in the browser |
+| Orbiting little fish | Threads, capped at 14 |
 | Schools | Parent/child and related processes |
-| Fade in / out | New processes / actual exits |
+| Growth / shrinking | New processes / actual exits |
 
-- Click a fish or a process row to inspect it.
-- Drag to pan and scroll to zoom around the pointer.
-- Follow fish tracks the selection; Recenter / R resets the camera.
-- Space / Pause stops movement while telemetry continues updating.
-- Search by name or PID; sort by CPU, memory, name, or PID; change display limits.
-- Hiding a process through filtering does not generate an exit animation.
-- Disconnections and collection failures retain the last state with a Stale / Offline indicator, rather than making every fish die.
+The aquarium fills the viewport. Press `Esc` or open the toolbox in the corner to summon a small game window. Drag its title bar to move it; fold it with the minus button or a double-click. The aquarium keeps swimming while windows are open.
+
+- Click a fish to inspect it, or right-click to follow it. `/` searches by name or PID and takes you to the fish.
+- Drag to pan; scroll for pointer-centered zoom (0.1–5×). `C` changes camera mode; `R` resets the view.
+- `L` cycles display limits. `1`–`6` select 10, 20, 50, 100, 200 or 400 fish; `0` removes the limit. `S` / `O` change sort field/direction.
+- `D` toggles parent lines, `I` communication lines, and `Q` school highlighting. Click a chat puff to highlight its communication partners.
+- `Space` pauses movement, `T` cycles UI visibility, `F` / `F11` toggles fullscreen, and `?` opens help.
+- Swimming defaults to 1× with ¼–1× controls. The 30Hz simulation is interpolated for display; gentle steering and smaller fin strokes soften rapid visual changes.
+- Full/reduced/minimal/automatic quality, name labels, hosts, authentication and diagnostics live in the toolbox.
+- Display filtering does not imply exits; connection or collection failures retain the last known state.
+
+Seven silhouettes, CPU-dependent glow/speed, family/name schools, fork flashes, exec rainbow changes, memory rings (5%+) and lightning (20%+) are included. See the [native parity audit and comparison images](./docs/feature-parity.md).
 
 Total CPU is the sum of process usage, with 100% representing one CPU core. Total memory sums process percentages; it does not deduplicate shared physical pages.
 
@@ -134,7 +139,7 @@ See `python main.py --help` and each subcommand's `--help` for all options.
 | server `--retention` / `--max-hosts` | 3600 seconds / 128 hosts |
 | agent `--interval` | 1 second |
 | client `--poll-interval` / `--timeout` | 1 second / 3 seconds |
-| Browser display limit | 300 fish; up to 10,000, independent of collection |
+| Browser display limit | Unlimited by default (protocol maximum: 50,000); view limits do not affect collection |
 
 Environment variables: `AQUARIUM_SERVER`, `AQUARIUM_TOKEN`, `AQUARIUM_HOST_ID` (agent), `AQUARIUM_HOST` (client), and `AQUARIUM_SOURCE`. Native clients also support existing `AQUARIUM_LIMIT`, `AQUARIUM_SORT_BY`, `AQUARIUM_SORT_ORDER`, `AQUARIUM_GPU`, and related settings.
 
@@ -152,6 +157,6 @@ uv run --locked --extra agent --extra gui python -m pytest -q
 node --test tests/web/*.test.mjs
 ```
 
-Tests cover HTTP authentication and validation, multiple hosts, reordered and duplicate revisions, reconnects, PID reuse, filtering, and separate-process startup/shutdown. With pygame installed, native rendering is tested through SDL's dummy driver. Browser verification is documented in [architecture](./docs/architecture.md#検証).
+Tests cover HTTP authentication and validation, multiple hosts, reordered and duplicate revisions, reconnects, PID reuse, filtering, and separate-process startup/shutdown. With pygame and Node.js installed, differential tests compare the actual native formulas, flocking and drawing primitives. Native rendering also runs through SDL's dummy driver. Browser verification is documented in [architecture](./docs/architecture.md#検証).
 
 MIT License — [LICENSE](./LICENSE)
