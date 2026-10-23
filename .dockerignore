@@ -1,0 +1,8 @@
+**
+!main.py
+!src/
+!src/**
+!web/
+!web/**
+**/__pycache__/
+**/*.pyc

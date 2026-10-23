@@ -42,6 +42,32 @@ uv sync --locked --no-dev --extra agent
 
 水槽の淡い光と浮遊物には、実測した送受信量に応じてゆっくり潮が生まれます。通信が収まると静まり、`I` で通信表示と一緒に切り替えられます。対象NICが複数ある場合は、agent に `--network-interface en0`（Linuxなら例: `eth0`）を指定してください。自動選択は、loopbackと既知の仮想NICを除いた稼働中の候補が1つの場合だけ行います。VPNを観測する場合も対象を1つ指定し、物理NICと重複して足しません。LinuxではBCCによる相手別の実測通信量で、水槽間にも潮が流れます。接続数から流量を推測しません。導入方法は下の「eBPFを利用する」を参照してください。
 
+## Docker / Dockge で集約・Webサーバを動かす
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+`.env` の `DOMAIN` に公開するホスト名を設定してください。
+共有の外部Dockerネットワーク `caddy` 上で caddy-docker-proxy と接続し、
+ラベルで `.env` に設定したドメインへ公開します。
+`caddy.tls: internal` を使用するため、ブラウザ側でCaddyの内部CAを信頼する必要があります。
+ホスト上のエージェントの接続先は `http://127.0.0.1:8765` です。
+イメージはサーバとWebクライアントを含み、BCC・psutil・GPUは不要です。
+eBPFエージェントはホスト上で実行してください。コンテナは非rootで動き、
+ヘルスチェックと自動再起動を設定しています。
+
+Dockgeでは、設定済みのstacksディレクトリ内の `process-aquarium/` に
+`compose.yaml`、`.env`、`Dockerfile`、`.dockerignore`、`main.py`、`src/`、`web/` を置き、
+「Scan Stacks Folder」で取り込みます。更新時はそのディレクトリのソースを更新し、
+再ビルド・再作成してください。`process-aquarium:local` はローカルビルド用で、
+レジストリからpullするイメージではありません。
+
+ホストへのポート公開はloopbackに限定し、ブラウザはCaddy経由で接続します。
+認証が必要な場合はサーバとエージェントに `AQUARIUM_TOKEN` を設定してください。状態はメモリ内に保持され、
+再起動後はエージェントの次回送信で復元されるため、データ用ボリュームは不要です。
+
 ## 複数マシンで使う
 
 集約サーバには Python 標準ライブラリ以外の依存はありません。
@@ -116,6 +142,20 @@ sudo ./.venv/bin/python main.py agent \
 通信する水槽は同じ集約サーバへ登録し、同じルーティング範囲には同じ `--network-scope` を指定します。別ネットワークでIPが重複する場合は異なるscopeに分けてください。NAT越しの対応は推測しません。VPNは内側のNICを1つ選びます。両端の観測は二重加算せず、速度を上げずに潮の幅と濃さへ反映します。詳しい計測範囲・制限・検証方法は[水流の設計](./docs/network-currents.md)に記載しています。
 
 ## ネイティブ・統計クライアント
+
+### eBPFエージェントをsystemdで常駐させる
+
+このチェックアウトを `/home/ubuntu/process-aquarium` に配置し、上記のeBPF依存環境を
+準備した後、手動起動中のエージェントを停止して実行します。
+
+```bash
+sudo ./tools/install-agent-service.sh
+```
+
+OS起動時に自動開始し、終了時は5秒後に再起動します。
+接続先とNICは `/etc/default/process-aquarium-agent` で設定できます。
+ログは `sudo journalctl -u process-aquarium-agent -f`、
+停止は `sudo systemctl stop process-aquarium-agent` です。
 
 ```bash
 # 従来のローカル水族館

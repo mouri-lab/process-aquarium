@@ -1,0 +1,27 @@
+services:
+  aquarium:
+    image: process-aquarium:local
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8080"
+    networks:
+      - caddy
+    labels:
+      caddy: ${DOMAIN:?Set DOMAIN in .env}
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+      caddy.tls: internal
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  caddy:
+    external: true
