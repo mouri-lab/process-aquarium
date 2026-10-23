@@ -145,6 +145,8 @@ function activate(tank) {
   freshness = tank.freshness;
   $("search").value = tank.search;
   $("background").value = tank.background.kind;
+  view.seaTime = tank.background.seaTime || "auto";
+  $("sea-time").value = view.seaTime;
   $("host").value = hostId;
   processRows.clear();
   inspectedKey = null;
@@ -167,6 +169,8 @@ function populateHosts(hosts) {
       );
       if (saved && Object.hasOwn(BACKGROUNDS, saved.kind)) {
         tank.background.kind = saved.kind;
+        if (["auto", "morning", "day", "evening", "night"].includes(saved.seaTime))
+          tank.background.seaTime = saved.seaTime;
       }
     } catch {}
   }
@@ -731,6 +735,11 @@ $("camera-mode").addEventListener("change", () => {
 $("quality").addEventListener("change", () => {
   view.quality = $("quality").value;
 });
+$("sea-time").addEventListener("change", () => {
+  view.seaTime = $("sea-time").value;
+  if (activeTank) activeTank.background.seaTime = view.seaTime;
+  saveBackground();
+});
 $("swim-speed").addEventListener("change", () => {
   view.speed = Number($("swim-speed").value);
 });
@@ -879,7 +888,7 @@ window.addEventListener("keydown", (event) => {
   }
 });
 function drawOverlay(scene, width, height) {
-  const under = prepareCanvas($("underlay"), width, height);
+  const under = prepareCanvas($("underlay"), width, height, 1.5);
   if (activeTank)
     drawBackground(
       under,
@@ -964,7 +973,7 @@ function frame(now) {
       if (inMap && tanks.length) {
         const rects = galaxyLayout(tanks.length, width, height),
           focus = rects[Math.max(0, tanks.indexOf(activeTank))];
-        const under = prepareCanvas($("underlay"), width, height);
+        const under = prepareCanvas($("underlay"), width, height, 1.5);
         prepareCanvas(overlay, width, height);
         view.bubbles = [];
         drawSpace(under, width, height, skyTime, journey.depth, {
