@@ -56,3 +56,11 @@ def test_explicit_psutil_does_not_initialize_ebpf(monkeypatch):
 def test_unknown_source_is_rejected():
     with pytest.raises(ValueError, match="Unknown process source"):
         runtime.create_process_manager("unknown")
+
+
+def test_interface_selection_reaches_local_collector():
+    source = runtime.create_local_source("psutil", network_interface="en0")
+    try:
+        assert source._network_sampler.interface == "en0"
+    finally:
+        source.shutdown()

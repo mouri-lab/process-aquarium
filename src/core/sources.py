@@ -13,6 +13,7 @@ import psutil
 
 from .source import IProcessSource, SourceStatus
 from .ipc import IPCDetector
+from .network import NetworkSampler
 from ..telemetry import MAX_EVENTS, Connection, LifecycleEvent, ProcessRecord, Snapshot
 
 
@@ -26,7 +27,7 @@ def boot_identity() -> str:
 class PsutilProcessSource(IProcessSource):
     name = "psutil"
 
-    def __init__(self, max_processes=2000, *, host_id=None, interval=1.0):
+    def __init__(self, max_processes=2000, *, host_id=None, interval=1.0, network_interface=None):
         if not math.isfinite(interval) or interval <= 0:
             raise ValueError("Collection interval must be finite and positive")
         self.max_processes = max_processes  # Collection is never display-limited.
@@ -54,6 +55,8 @@ class PsutilProcessSource(IProcessSource):
         self._recent_network = ()
         self._ipc_detector = IPCDetector()
         self._last_ipc_refresh = float("-inf")
+        self._network_sampler = NetworkSampler(network_interface)
+        self._network_activity = None
 
     def update(self):
         if self._poll_thread is None and not self._shutdown.is_set():
@@ -127,6 +130,7 @@ class PsutilProcessSource(IProcessSource):
             self._event_stats["initial_scan"] = len(processes)
         self._processes = processes
         self._seen_events.clear()
+        self._network_activity = self._network_sampler.sample()
         self._publish()
 
     def _reconcile(self, processes):
@@ -142,6 +146,8 @@ class PsutilProcessSource(IProcessSource):
                 self._emit("exec", current, deduplicate=True)
 
     def _publish(self, error=None):
+        if error:
+            self._network_activity = self._network_sampler.reset()
         self._sequence += 1
         # Failure preserves the last complete state and marks it stale.
         collected_at = self._snapshot.collected_at if error and self._snapshot else time.time()
@@ -152,6 +158,7 @@ class PsutilProcessSource(IProcessSource):
             events=tuple(self._events), connections=self._recent_ipc,
             event_stats=dict(self._event_stats), error=error,
             network_flows=self._recent_network,
+            network_activity=self._network_activity,
         )
         with self._lock:
             self._error = error

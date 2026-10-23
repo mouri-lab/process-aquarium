@@ -5,7 +5,8 @@ from typing import Optional
 from ..presentation import ProcessManager
 
 
-def create_local_source(source: str, *, max_processes=2000, host_id=None, interval=1.0):
+def create_local_source(source: str, *, max_processes=2000, host_id=None, interval=1.0,
+                        network_interface=None):
     if source not in ("psutil", "ebpf"):
         raise ValueError(f"Unknown process source: {source}")
     try:
@@ -14,7 +15,8 @@ def create_local_source(source: str, *, max_processes=2000, host_id=None, interv
         if exc.name == "psutil":
             raise RuntimeError("Local collection requires 'uv sync --extra agent'") from None
         raise
-    options = dict(max_processes=max_processes, host_id=host_id, interval=interval)
+    options = dict(max_processes=max_processes, host_id=host_id, interval=interval,
+                   network_interface=network_interface)
     if source == "ebpf":
         try:
             candidate = EbpfProcessSource(enable=True, **options)

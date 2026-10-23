@@ -120,7 +120,8 @@ def _run_agent(args, parser):
 
     try:
         client = APIClient(args.server, token=args.token, timeout=args.timeout)
-        source = create_local_source(args.source, host_id=args.host_id, interval=args.interval)
+        source = create_local_source(args.source, host_id=args.host_id, interval=args.interval,
+                                     network_interface=args.network_interface)
     except (ValueError, RuntimeError) as exc:
         parser.error(str(exc))
     try:
@@ -161,6 +162,8 @@ def main_cli(argv=None):
     agent.add_argument("--host-id", default=os.environ.get("AQUARIUM_HOST_ID"))
     agent.add_argument("--source", choices=["psutil", "ebpf"], default=os.environ.get("AQUARIUM_SOURCE", "ebpf"))
     agent.add_argument("--interval", type=positive_interval, default=1.0)
+    agent.add_argument("--network-interface", default=os.environ.get("AQUARIUM_NETWORK_INTERFACE"),
+                       help="One interface for water currents (e.g. en0 or eth0); auto-select only when unambiguous")
     agent.add_argument("--timeout", type=positive_interval, default=3.0)
     _credentials(agent)
     server = modes.add_parser("server", help="Aggregate telemetry and serve the browser client")

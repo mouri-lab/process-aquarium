@@ -75,6 +75,19 @@ class NetworkFlow:
 
 
 @dataclass(frozen=True)
+class NetworkActivity:
+    """Measured byte deltas for one interface, never inferred from sockets."""
+
+    status: str
+    interface: str = ""
+    interval_seconds: Optional[float] = None
+    sent_bytes: Optional[int] = None
+    received_bytes: Optional[int] = None
+    scope: str = "interface"
+    source: str = "psutil"
+
+
+@dataclass(frozen=True)
 class Snapshot:
     host_id: str
     hostname: str
@@ -89,6 +102,7 @@ class Snapshot:
     event_stats: dict[str, int] = field(default_factory=dict)
     error: Optional[str] = None
     network_flows: tuple[NetworkFlow, ...] = ()
+    network_activity: Optional[NetworkActivity] = None
 
     @property
     def revision(self) -> tuple[str, str, int]:
@@ -255,6 +269,7 @@ def snapshot_from_dict(value: Any) -> Snapshot:
     if len(stats) > 32:
         raise ProtocolError("Too many event statistics")
     error = data.get("error")
+    activity = network_activity_from_dict(data.get("network_activity"))
     return Snapshot(
         host_id=_identifier(data.get("host_id"), "host_id"),
         hostname=_text(data.get("hostname"), "hostname", nonempty=True),
@@ -267,7 +282,33 @@ def snapshot_from_dict(value: Any) -> Snapshot:
         event_stats={_text(k, "statistic"): _integer(v, "statistic") for k, v in stats.items()},
         error=None if error is None else _text(error, "error"),
         network_flows=tuple(network_flows),
+        network_activity=activity,
     )
+
+
+def network_activity_from_dict(raw: Any) -> Optional[NetworkActivity]:
+    if raw is None:
+        return None
+    item = _object(raw, "network_activity")
+    status = item.get("status")
+    if status not in ("ready", "warming", "unavailable", "ambiguous", "denied", "unsupported", "error"):
+        raise ProtocolError("Invalid network activity status")
+    if item.get("scope") != "interface" or item.get("source") != "psutil":
+        raise ProtocolError("Unsupported network activity scope or source")
+    interface = _text(item.get("interface"), "network interface")
+    if len(interface) > 128 or (status in ("ready", "warming") and not interface):
+        raise ProtocolError("Invalid network interface")
+    interval, sent, received = (item.get(k) for k in
+                                ("interval_seconds", "sent_bytes", "received_bytes"))
+    if status == "ready":
+        interval = _number(interval, "network interval")
+        if interval <= 0 or (sent is None and received is None):
+            raise ProtocolError("Measured activity needs an interval and byte counters")
+        sent = None if sent is None else _integer(sent, "sent_bytes")
+        received = None if received is None else _integer(received, "received_bytes")
+    elif any(v is not None for v in (interval, sent, received)):
+        raise ProtocolError("Unmeasured activity cannot contain byte counters")
+    return NetworkActivity(status, interface, interval, sent, received)
 
 
 def decode_json(payload: bytes, *, limit: int = MAX_BODY_BYTES) -> Any:
