@@ -3,6 +3,7 @@ import { appearance } from "./fish.mjs";
 import { AquariumWorld, colorOf, keyOf, selectedProcesses } from "./world.mjs";
 import { CanvasRenderer, createRenderer, freshCanvas } from "./renderer.mjs";
 import { Camera, View, SHORTCUTS } from "./controls.mjs";
+import { drawBetweenTides, transferLinks, transferDirections } from "./intertank.mjs";
 import {
   Multiverse,
   Journey,
@@ -216,6 +217,8 @@ function updateGalaxies(rects, tanks) {
   $("galaxies").hidden = !shown;
   $("galaxy-pages").hidden = !shown || universe.pages < 2;
   $("map-hint").hidden = !shown;
+  setText("map-caption", tanks.some(t => t.world.snapshot?.simulated_transfers?.length)
+    ? "潮のシミュレーション · 銀河を選んで海の中へ" : "銀河を選んで、海の中へ");
   $("galaxies").style.opacity = String(Math.max(0, 1 - journey.depth / 0.3));
   setText("galaxy-page", `${universe.page + 1} / ${universe.pages}`);
   $("previous-galaxies").disabled = universe.page === 0;
@@ -283,7 +286,10 @@ async function poll() {
       updateEmpty();
       return;
     }
-    const targets = journey.moving
+    const hasSimulatedTransfers = universe.ordered
+      .slice(universe.page * 6, universe.page * 6 + 6)
+      .some(t => t.world.snapshot?.simulated_transfers?.length);
+    const targets = journey.moving || hasSimulatedTransfers
       ? universe.ordered.slice(universe.page * 6, universe.page * 6 + 6)
       : universe.visible;
     await pollTanks(
@@ -965,6 +971,14 @@ function frame(now) {
     tank.scene = w.renderFrame(elapsed, moving);
     if (!inMap) tank.camera.update(tank.scene, elapsed);
   }
+  const chartTanks = universe.ordered.slice(universe.page * 6, universe.page * 6 + 6);
+  for (const tank of chartTanks)
+    tank.transfers.step(dt * view.speed, now, {
+      live: tank.freshness.mode === "live", paused: !moving, reduced: reducedMotion.matches,
+    }, chartTanks);
+  const chartRects = galaxyLayout(chartTanks.length, width, height);
+  const links = transferLinks(chartTanks, chartRects);
+  for (const tank of chartTanks) tank.transferDirections = transferDirections(tank, links);
   if (camera.mode !== oldMode) syncControls();
   if (renderer && width && height) {
     try {
@@ -978,6 +992,12 @@ function frame(now) {
           x: focus.centerX,
           y: focus.centerY,
         });
+        if (view.ipc) {
+          const travelled = rects.map(rect => transitionRect(rect, focus, journey.depth, width, height));
+          drawBetweenTides(under, transferLinks(tanks, travelled), skyTime, {
+            depth: journey.depth, quality: world.quality, reduced: reducedMotion.matches,
+          });
+        }
         const views = tanks.map((tank, i) => {
           const depth = tank === activeTank ? journey.depth : 0;
           const rect = transitionRect(

@@ -37,6 +37,7 @@ export function backgroundFrame(tank, camera, width, height, time, wallTime, opt
     time,
     quality: tank.world.quality,
     tide: options.communication === false ? null : tank.tide,
+    transfers: tank.transferDirections,
     reducedMotion: Boolean(options.reducedMotion),
     // Reserved for future time-dependent providers (#13/#14); current
     // backgrounds keep their chosen palette regardless of wall time.

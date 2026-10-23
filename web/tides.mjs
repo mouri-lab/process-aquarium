@@ -62,7 +62,7 @@ export class Tide {
 }
 
 const fraction = (n) => n - Math.floor(n);
-function scatter(value) {
+export function scatter(value) {
   // Avalanche neighbouring indices; raw string hashes put adjacent motes in
   // little dotted rows, which would look like the discarded connection paths.
   let n = hash(value);
@@ -70,11 +70,11 @@ function scatter(value) {
   n = Math.imul(n ^ (n >>> 15), 0x846ca68b);
   return ((n ^ (n >>> 16)) >>> 0) / 2 ** 32;
 }
-export function tideMote(seed, index, phase, outgoing) {
+export function tideMote(seed, index, phase, outgoing, angle = null) {
   const a = scatter(`${seed}:${index}`);
   const b = scatter(`${seed}:depth:${index}`);
   const u = fraction(phase + a);
-  return {
+  const point = {
     // Receive from the left, release to the right. These are visual directions,
     // not geographical locations or a claim about any particular peer.
     x: (outgoing ? 0.25 : -0.2) + u * 0.95,
@@ -82,12 +82,19 @@ export function tideMote(seed, index, phase, outgoing) {
     alpha: Math.sin(Math.PI * u) ** 2,
     radius: 0.8 + b * 1.3,
   };
+  if (angle !== null) {
+    const distance = outgoing ? .15 + u : 1.15 - u;
+    const lane = (b - .5) * .40 + Math.sin(u * TAU + b) * .035;
+    point.x = .5 + Math.cos(angle) * distance * .65 - Math.sin(angle) * lane;
+    point.y = .48 + Math.sin(angle) * distance * .65 + Math.cos(angle) * lane;
+  }
+  return point;
 }
 
 // Cache one feathered light patch per palette. No full-screen blur filters or
 // per-pixel work on each frame; Canvas underlays also serve the WebGPU client.
 const lights = new Map();
-function lightPatch(color) {
+export function lightPatch(color) {
   if (lights.has(color)) return lights.get(color);
   const canvas = typeof OffscreenCanvas === "function"
     ? new OffscreenCanvas(192, 192) : document.createElement("canvas");
@@ -107,17 +114,18 @@ export function drawTide(ctx, frame, color) {
   const tide = frame.tide;
   if (!tide || frame.quality === "minimal") return;
   const { width: w, height: h, seed } = frame;
-  const phases = [[tide.received, false], [tide.sent, true]];
+  const phases = frame.transfers?.length ? frame.transfers.map(p => [p.strength, p.outgoing, p.angle])
+    : [[tide.received, false, null], [tide.sent, true, null]];
   ctx.save();
-  for (const [strength, outgoing] of phases) {
+  for (const [strength, outgoing, angle] of phases) {
     if (strength < 0.002) continue;
     const offset = outgoing ? 37 : 0;
     for (let i = 0; i < 3; i++) {
-      const p = tideMote(seed, i * 13 + offset, tide.phase, outgoing);
+      const p = tideMote(seed, i * 13 + offset, tide.phase, outgoing, angle);
       ctx.globalAlpha = strength * p.alpha * 0.10;
       ctx.save();
       ctx.translate(p.x * w, p.y * h);
-      ctx.rotate(-0.18 + Math.sin(p.y * 4) * 0.08);
+      ctx.rotate(angle ?? (-0.18 + Math.sin(p.y * 4) * 0.08));
       ctx.drawImage(lightPatch(color), -w * 0.42, -h * 0.19, w * 0.84, h * 0.38);
       ctx.restore();
     }
@@ -125,7 +133,7 @@ export function drawTide(ctx, frame, color) {
     const count = frame.quality === "full" ? 24 : 12;
     ctx.fillStyle = color;
     for (let i = 0; i < count; i++) {
-      const p = tideMote(seed, i + offset, tide.phase, outgoing);
+      const p = tideMote(seed, i + offset, tide.phase, outgoing, angle);
       ctx.globalAlpha = strength * p.alpha * 0.28;
       ctx.beginPath();
       ctx.ellipse(p.x * w, p.y * h, p.radius * 1.4, p.radius, -0.18, 0, TAU);

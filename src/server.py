@@ -28,6 +28,7 @@ STATIC_FILES = {
     "/multiverse.mjs": ("multiverse.mjs", "text/javascript; charset=utf-8"),
     "/backgrounds.mjs": ("backgrounds.mjs", "text/javascript; charset=utf-8"),
     "/tides.mjs": ("tides.mjs", "text/javascript; charset=utf-8"),
+    "/intertank.mjs": ("intertank.mjs", "text/javascript; charset=utf-8"),
     "/effects.mjs": ("effects.mjs", "text/javascript; charset=utf-8"),
 }
 

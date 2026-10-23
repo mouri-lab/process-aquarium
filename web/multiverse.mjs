@@ -3,6 +3,7 @@ import { AquariumWorld, keyOf } from "./world.mjs";
 import { Camera } from "./controls.mjs";
 import { hash } from "./fish.mjs";
 import { Tide } from "./tides.mjs";
+import { TransferField } from "./intertank.mjs";
 export const tankKey = (source, host) => JSON.stringify([source, host]);
 export const processRef = (tank, p) => ({
   tank: tank.id,
@@ -37,6 +38,8 @@ export class Tank {
     this.name = host;
     this.world = new AquariumWorld();
     this.tide = new Tide();
+    this.transfers = new TransferField();
+    this.transferDirections = [];
     this.camera = new Camera();
     this.sky = skyFor(this.id);
     this.background = {
@@ -56,6 +59,7 @@ export class Tank {
     const changed = this.world.apply(envelope.snapshot);
     if (changed) {
       this.tide.accept(envelope.snapshot, now);
+      this.transfers.accept(envelope.snapshot, now);
       this.freshness.last = now;
       this.name = envelope.snapshot.hostname;
       if (before && before.boot_id !== envelope.snapshot.boot_id)
