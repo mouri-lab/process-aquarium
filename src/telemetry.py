@@ -88,6 +88,17 @@ class NetworkActivity:
 
 
 @dataclass(frozen=True)
+class SimulatedTransfer:
+    """Fixture-only traffic between two named aquariums; not measured data."""
+
+    host_id: str
+    boot_id: str
+    interval_seconds: float
+    sent_bytes: int
+    received_bytes: int
+
+
+@dataclass(frozen=True)
 class Snapshot:
     host_id: str
     hostname: str
@@ -103,6 +114,7 @@ class Snapshot:
     error: Optional[str] = None
     network_flows: tuple[NetworkFlow, ...] = ()
     network_activity: Optional[NetworkActivity] = None
+    simulated_transfers: tuple[SimulatedTransfer, ...] = ()
 
     @property
     def revision(self) -> tuple[str, str, int]:
@@ -270,6 +282,24 @@ def snapshot_from_dict(value: Any) -> Snapshot:
         raise ProtocolError("Too many event statistics")
     error = data.get("error")
     activity = network_activity_from_dict(data.get("network_activity"))
+    simulated = []
+    peers = set()
+    for raw in _array(data.get("simulated_transfers", []), "simulated_transfers", 32):
+        if data.get("source") != "fixture":
+            raise ProtocolError("Simulated transfers require fixture telemetry")
+        item = _object(raw, "simulated transfer")
+        peer = _identifier(item.get("host_id"), "peer host_id")
+        if peer == data.get("host_id") or peer in peers:
+            raise ProtocolError("Simulated peer must be unique and external")
+        peers.add(peer)
+        interval = _number(item.get("interval_seconds"), "transfer interval")
+        if interval <= 0:
+            raise ProtocolError("Transfer interval must be positive")
+        simulated.append(SimulatedTransfer(
+            peer, _identifier(item.get("boot_id"), "peer boot_id"), interval,
+            _integer(item.get("sent_bytes"), "transfer sent_bytes"),
+            _integer(item.get("received_bytes"), "transfer received_bytes"),
+        ))
     return Snapshot(
         host_id=_identifier(data.get("host_id"), "host_id"),
         hostname=_text(data.get("hostname"), "hostname", nonempty=True),
@@ -283,6 +313,7 @@ def snapshot_from_dict(value: Any) -> Snapshot:
         error=None if error is None else _text(error, "error"),
         network_flows=tuple(network_flows),
         network_activity=activity,
+        simulated_transfers=tuple(simulated),
     )
 
 
