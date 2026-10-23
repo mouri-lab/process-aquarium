@@ -19,6 +19,12 @@ from .transfers import resolve_transfers
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json; charset=utf-8"),
+    "/sw.js": ("sw.js", "text/javascript; charset=utf-8"),
+    "/pwa.mjs": ("pwa.mjs", "text/javascript; charset=utf-8"),
+    "/icons/icon-180.png": ("icons/icon-180.png", "image/png"),
+    "/icons/icon-192.png": ("icons/icon-192.png", "image/png"),
+    "/icons/icon-512.png": ("icons/icon-512.png", "image/png"),
     "/aquarium.css": ("aquarium.css", "text/css; charset=utf-8"),
     "/app.mjs": ("app.mjs", "text/javascript; charset=utf-8"),
     "/world.mjs": ("world.mjs", "text/javascript; charset=utf-8"),
