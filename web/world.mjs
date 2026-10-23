@@ -143,6 +143,29 @@ export function validateSnapshot(snapshot) {
       throw new Error("Invalid lifecycle event");
     cursor = event.event_id;
   }
+  if (
+    snapshot.network_flows !== undefined &&
+    (!Array.isArray(snapshot.network_flows) ||
+      snapshot.network_flows.length > 4096 ||
+      snapshot.network_flows.some(
+        (flow) =>
+          !flow ||
+          !Number.isSafeInteger(flow.pid) ||
+          flow.pid < 0 ||
+          !Number.isFinite(flow.create_time) ||
+          !["transport", "local_address", "state"].every(
+            (key) => typeof flow[key] === "string",
+          ) ||
+          typeof flow.remote_address !== "string" ||
+          !Number.isSafeInteger(flow.local_port) ||
+          flow.local_port < 0 ||
+          flow.local_port > 65535 ||
+          !Number.isSafeInteger(flow.remote_port) ||
+          flow.remote_port < 0 ||
+          flow.remote_port > 65535,
+      ))
+  )
+    throw new Error("Invalid network stream telemetry");
   return snapshot;
 }
 

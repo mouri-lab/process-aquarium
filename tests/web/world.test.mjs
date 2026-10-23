@@ -68,6 +68,14 @@ test("collection failures cannot erase a healthy state", () => {
   assert.equal(world.processes.size, 1);
   assert.throws(() => world.apply(snapshot(1, [process(1), process(1)])));
 });
+test("network stream telemetry is validated before it reaches the simulation", () => {
+  const world = new AquariumWorld();
+  const valid = [{ pid: 1, create_time: 1, transport: "tcp", local_address: "127.0.0.1",
+    local_port: 4000, remote_address: "127.0.0.1", remote_port: 5000, state: "ESTABLISHED" }];
+  world.apply(snapshot(1, [process()], { network_flows: valid }));
+  assert.equal(world.snapshot.network_flows[0].remote_port, 5000);
+  assert.throws(() => world.apply(snapshot(2, [process()], { network_flows: [{ ...valid[0], local_port: 65536 }] })));
+});
 test("event replay does not repeatedly trigger animations", () => {
   const world = new AquariumWorld();
   const event = { event_id: 1, event_type: "exec", pid: 1, create_time: 1 };
