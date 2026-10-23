@@ -557,6 +557,9 @@ $("camera-mode").addEventListener("change", () => {
 $("quality").addEventListener("change", () => {
   view.quality = $("quality").value;
 });
+$("sea-time").addEventListener("change", () => {
+  view.seaTime = $("sea-time").value;
+});
 $("swim-speed").addEventListener("change", () => {
   view.speed = Number($("swim-speed").value);
 });

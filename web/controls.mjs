@@ -89,6 +89,7 @@ export class View {
     this.bubbles = [];
     this.quality = "full";
     this.speed = 1;
+    this.seaTime = "auto";
     this.samples = [];
     this.elapsed = 0;
   }
