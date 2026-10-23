@@ -1,4 +1,4 @@
-// The preview carries explicit fixture-only peers. Never infer these paths
+// Explicit fixtures and server-resolved measured peers. Never infer these paths
 // from interface totals, socket counts, or the positions of real hosts.
 import { Tide, lightPatch, scatter } from "./tides.mjs";
 import { TAU, hash } from "./fish.mjs";
@@ -38,6 +38,7 @@ export class TransferField {
       }}, now);
     }
     for (const [id, peer] of this.peers) {
+      if (peer.measured && snapshot.source !== "fixture") continue;
       if (!incoming.has(id)) peer.tide.expires = -Infinity;
       if (!incoming.has(id) && (peer.tide.sent + peer.tide.received < .002 || this.peers.size > 64))
         this.peers.delete(id);
@@ -47,9 +48,72 @@ export class TransferField {
     for (const peer of this.peers.values()) {
       const target = tanks.find(t => t.host === peer.host);
       const live = options.live && target?.freshness.mode === "live" &&
-        target.world.snapshot?.boot_id === peer.boot && target.world.snapshot?.source === "fixture";
-      peer.tide.step(dt, now, { ...options, live });
+        target.world.snapshot?.boot_id === peer.boot &&
+        (peer.measured ? target.world.snapshot?.session_id === peer.session &&
+          target.world.snapshot?.source !== "fixture" : target.world.snapshot?.source === "fixture");
+      if (peer.measured) {
+        peer.outgoing.step(dt, now, { ...options, live });
+        peer.incoming.step(dt, now, { ...options, live });
+        Object.assign(peer.tide, { sent: peer.outgoing.sent, received: peer.incoming.sent,
+          phase: peer.outgoing.phase });
+      } else peer.tide.step(dt, now, { ...options, live });
     }
+  }
+}
+
+export function validateMeasuredTransfers(list) {
+  if (!Array.isArray(list) || list.length > 512) throw new Error("Invalid measured transfers");
+  const text = s => typeof s === "string" && s.length > 0 && s.length <= 128;
+  const identity = p => p && [p.host_id, p.boot_id, p.session_id].every(text);
+  const same = (a, b) => ["host_id", "boot_id", "session_id"].every(k => a[k] === b[k]);
+  const seen = new Set();
+  for (const p of list) {
+    if (!p || !identity(p.source) || !identity(p.target) || !identity(p.observer) ||
+        p.source.host_id === p.target.host_id ||
+        (!same(p.observer, p.source) && !same(p.observer, p.target)) ||
+        !text(p.observer.interface) || !Number.isSafeInteger(p.observer.sequence) || p.observer.sequence < 1 ||
+        !text(p.network_scope) || p.byte_basis !== "observed_ip" ||
+        !Number.isSafeInteger(p.bytes) || p.bytes < 0 ||
+        !Number.isFinite(p.interval_seconds) || p.interval_seconds <= 0 ||
+        !Number.isFinite(p.age_seconds) || p.age_seconds < 0)
+      throw new Error("Invalid measured transfer");
+    const key = JSON.stringify([p.source.host_id, p.target.host_id]);
+    if (seen.has(key)) throw new Error("Duplicate measured direction");
+    seen.add(key);
+  }
+}
+
+export function applyMeasuredTransfers(tanks, list, now) {
+  validateMeasuredTransfers(list); // Validate the complete response before mutation.
+  const byHost = new Map(tanks.map(t => [t.host, t]));
+  const updated = new Set();
+  const matches = (tank, id) => tank?.world.snapshot?.source !== "fixture" &&
+    tank?.world.snapshot?.boot_id === id.boot_id && tank?.world.snapshot?.session_id === id.session_id;
+  for (const p of list) {
+    const source = byHost.get(p.source.host_id), target = byHost.get(p.target.host_id);
+    if (!matches(source, p.source) || !matches(target, p.target) || source.source !== target.source) continue;
+    const [owner, other] = [source, target].sort((a, b) => a.host.localeCompare(b.host));
+    let peer = owner.transfers.peers.get(other.host);
+    const snapshot = other.world.snapshot;
+    if (!peer?.measured || peer.boot !== snapshot.boot_id || peer.session !== snapshot.session_id) {
+      peer = { measured: true, host: other.host, boot: snapshot.boot_id, session: snapshot.session_id,
+        tide: new Tide(), outgoing: new Tide(), incoming: new Tide() };
+      owner.transfers.peers.set(other.host, peer);
+    }
+    const tide = owner === source ? peer.outgoing : peer.incoming;
+    const identity = JSON.stringify([p.source, p.target, p.network_scope,
+      p.observer.host_id, p.observer.boot_id, p.observer.session_id, p.observer.interface]);
+    tide.acceptSample(identity, JSON.stringify([identity, p.observer.sequence]), {
+      status: "ready", interval_seconds: p.interval_seconds, sent_bytes: p.bytes, received_bytes: 0,
+    }, now - p.age_seconds * 1000);
+    updated.add(tide);
+  }
+  for (const tank of tanks) for (const [id, peer] of tank.transfers.peers) {
+    if (!peer.measured) continue;
+    for (const tide of [peer.outgoing, peer.incoming])
+      if (!updated.has(tide)) tide.expires = -Infinity;
+    if (!updated.has(peer.outgoing) && !updated.has(peer.incoming) &&
+        peer.tide.sent + peer.tide.received < .002) tank.transfers.peers.delete(id);
   }
 }
 
@@ -57,12 +121,13 @@ export function transferLinks(tanks, rects) {
   const visible = new Map(tanks.map((tank, i) => [tank.host, { tank, rect: rects[i] }]));
   const links = [], seen = new Set();
   for (const source of [...tanks].sort((a, b) => a.host.localeCompare(b.host))) {
-    if (source.world.snapshot?.source !== "fixture") continue;
     for (const peer of source.transfers.peers.values()) {
       const target = visible.get(peer.host);
       if (!target?.rect || target.tank.source !== source.source ||
           target.tank.world.snapshot?.boot_id !== peer.boot ||
-          target.tank.world.snapshot?.source !== "fixture") continue;
+          (peer.measured ? target.tank.world.snapshot?.session_id !== peer.session ||
+            source.world.snapshot?.source === "fixture" || target.tank.world.snapshot?.source === "fixture"
+            : source.world.snapshot?.source !== "fixture" || target.tank.world.snapshot?.source !== "fixture")) continue;
       const key = JSON.stringify([source.host, peer.host].sort());
       if (seen.has(key)) continue;
       seen.add(key);

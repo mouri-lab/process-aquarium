@@ -3,7 +3,7 @@ import { appearance } from "./fish.mjs";
 import { AquariumWorld, colorOf, keyOf, selectedProcesses } from "./world.mjs";
 import { CanvasRenderer, createRenderer, freshCanvas } from "./renderer.mjs";
 import { Camera, View, SHORTCUTS } from "./controls.mjs";
-import { drawBetweenTides, transferLinks, transferDirections } from "./intertank.mjs";
+import { applyMeasuredTransfers, drawBetweenTides, transferLinks, transferDirections } from "./intertank.mjs";
 import {
   Multiverse,
   Journey,
@@ -132,8 +132,11 @@ async function request(path, signal) {
   } catch {
     throw new Error("Server returned invalid JSON");
   }
-  if (!response.ok)
-    throw new Error(data.error || `Server returned HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(data.error || `Server returned HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 function activate(tank) {
@@ -286,10 +289,10 @@ async function poll() {
       updateEmpty();
       return;
     }
-    const hasSimulatedTransfers = universe.ordered
+    const hasTransfers = hosts.hosts.some(h => h.source !== "fixture") || universe.ordered
       .slice(universe.page * 6, universe.page * 6 + 6)
       .some(t => t.world.snapshot?.simulated_transfers?.length);
-    const targets = journey.moving || hasSimulatedTransfers
+    const targets = journey.moving || hasTransfers
       ? universe.ordered.slice(universe.page * 6, universe.page * 6 + 6)
       : universe.visible;
     await pollTanks(
@@ -303,6 +306,18 @@ async function poll() {
       () => performance.now(),
     );
     if (version !== generation) return;
+    // Independent peer telemetry must not mark successfully fetched fish offline.
+    if (hosts.hosts.some(h => h.source !== "fixture")) {
+      try {
+        const data = await request("api/v1/transfers", controller.signal);
+        if (version !== generation) return;
+        applyMeasuredTransfers(targets, data.transfers, performance.now());
+      } catch (error) {
+        if (version !== generation) return;
+        if (error.authentication) throw error;
+        applyMeasuredTransfers(targets, [], performance.now());
+      }
+    }
     setStatus(freshness.mode, freshness.error);
     updateMetrics();
     updateEmpty();

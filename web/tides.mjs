@@ -35,16 +35,20 @@ export class Tide {
     const a = snapshot.network_activity;
     validateActivity(a);
     const revision = JSON.stringify([snapshot.host_id, snapshot.boot_id, snapshot.session_id, snapshot.sequence]);
+    const identity = JSON.stringify([snapshot.host_id, snapshot.boot_id, snapshot.session_id, a?.interface]);
+    this.acceptSample(identity, revision, snapshot.error ? null : a, now);
+  }
+  // Wire validation belongs to each caller; all activity shares this smoother.
+  acceptSample(identity, revision, a, now) {
     if (revision === this.revision) return;
     this.revision = revision;
-    const identity = JSON.stringify([snapshot.host_id, snapshot.boot_id, snapshot.session_id, a?.interface]);
     if (identity !== this.identity) {
       this.sent = this.received = 0;
       this.identity = identity;
     }
     this.targetSent = this.targetReceived = 0;
     this.expires = -Infinity;
-    if (a?.status === "ready" && !snapshot.error) {
+    if (a?.status === "ready") {
       this.targetSent = activityStrength(a.sent_bytes, a.interval_seconds);
       this.targetReceived = activityStrength(a.received_bytes, a.interval_seconds);
       this.expires = now + Math.max(5000, Math.min(30000, a.interval_seconds * 3000));
