@@ -156,3 +156,11 @@ def test_network_flows_require_authentication(service):
     with pytest.raises(RemoteError) as exc:
         APIClient(client.server).request("GET", "/api/v1/flows")
     assert exc.value.status == 401
+
+
+def test_network_transfers_require_authentication(service):
+    _, client = service
+    assert client.request("GET", "/api/v1/transfers") == {"transfers": []}
+    with pytest.raises(RemoteError) as exc:
+        APIClient(client.server).request("GET", "/api/v1/transfers")
+    assert exc.value.status == 401

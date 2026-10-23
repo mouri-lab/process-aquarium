@@ -3,7 +3,7 @@
 from collections import defaultdict
 
 
-def resolve_transfers(hosts, *, stale_after, limit=512):
+def resolve_transfers(hosts, *, stale_after, limit=512, epochs=None):
     """hosts contains (snapshot, monotonic receipt age). Sender wins per direction.
 
     Different observation windows are never added or compared by maximum. An
@@ -56,6 +56,12 @@ def resolve_transfers(hosts, *, stale_after, limit=512):
             continue
         snapshot, age = live[owner]
         activity = snapshot.network_peers
+        # After an observed reboot, session or address change, wait for a full
+        # new observation window. An older peer sample cannot be rebound to the
+        # newly registered identity. Receipt times use only the server's clock.
+        if any(age + activity.interval_seconds > (epochs or {}).get(h, float("inf"))
+               for h in (sender, receiver)):
+            continue
         result.append({
             "source": identity(live[sender][0]), "target": identity(live[receiver][0]),
             "observer": {**identity(snapshot), "sequence": snapshot.sequence,

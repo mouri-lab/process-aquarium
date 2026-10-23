@@ -80,3 +80,19 @@ def test_multiple_addresses_of_one_peer_sum_once():
     store.publish(host("a", "10.0.0.1", (PeerTraffic("10.0.0.2", 100, 0), PeerTraffic("fd00::2", 200, 0))))
     store.publish(host("b", "10.0.0.2", addresses=("10.0.0.2", "fd00::2")))
     assert store.network_transfers()[0]["bytes"] == 300
+
+
+def test_peer_restart_cannot_rebind_old_observation_to_new_session():
+    now = [0]
+    store = SnapshotStore(clock=lambda: now[0])
+    a = host("a", "10.0.0.1", (PeerTraffic("10.0.0.2", 100, 0),))
+    b = host("b", "10.0.0.2")
+    store.publish(a)
+    store.publish(b)
+    assert len(store.network_transfers()) == 1
+    now[0] = 1
+    store.publish(replace(b, session_id="restarted", boot_id="new-boot"))
+    assert store.network_transfers() == []
+    now[0] = 2.1
+    store.publish(replace(a, sequence=2))
+    assert store.network_transfers()[0]["target"]["boot_id"] == "new-boot"

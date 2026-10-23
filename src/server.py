@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 import threading
 import time
+from typing import Optional
 from urllib.parse import parse_qs, urlsplit
 
 from .telemetry import MAX_BODY_BYTES, NetworkFlow, ProtocolError, Snapshot, snapshot_from_bytes
@@ -48,6 +49,7 @@ class _Host:
     received_at: float
     received_monotonic: float
     retired_sessions: set[str] = field(default_factory=set)
+    peer_epoch: Optional[float] = None
 
 
 class SnapshotStore:
@@ -76,8 +78,15 @@ class SnapshotStore:
             self._expire(now)
             previous = self._hosts.get(snapshot.host_id)
             retired = set()
+            peer_epoch = previous.peer_epoch if previous else None
             if previous:
                 old = previous.snapshot
+                def peer_identity(state):
+                    a = state.network_peers
+                    return (state.boot_id, state.session_id, None if a is None else
+                            (a.network_scope, a.interface, a.addresses))
+                if peer_identity(snapshot) != peer_identity(old):
+                    peer_epoch = now
                 retired = previous.retired_sessions
                 if snapshot.session_id == old.session_id:
                     if snapshot.sequence == old.sequence and snapshot == old:
@@ -96,7 +105,7 @@ class SnapshotStore:
                     retired = retired | {old.session_id}
             elif len(self._hosts) >= self.max_hosts:
                 raise CapacityError("Host capacity reached")
-            self._hosts[snapshot.host_id] = _Host(snapshot, self._wall_clock(), now, retired)
+            self._hosts[snapshot.host_id] = _Host(snapshot, self._wall_clock(), now, retired, peer_epoch)
             return True
 
     def _status(self, host, now):
@@ -139,7 +148,9 @@ class SnapshotStore:
             self._expire(now)
             hosts = [(host.snapshot, max(0, now - host.received_monotonic))
                      for host in self._hosts.values()]
-        return resolve_transfers(hosts, stale_after=self.stale_after)
+            epochs = {key: max(0, now - host.peer_epoch) for key, host in self._hosts.items()
+                      if host.peer_epoch is not None}
+        return resolve_transfers(hosts, stale_after=self.stale_after, epochs=epochs)
 
     def network_flows(self, limit=512) -> list[dict]:
         """Correlate client/listener sockets observed on different hosts.
