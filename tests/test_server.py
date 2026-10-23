@@ -8,7 +8,7 @@ import pytest
 
 from src.server import CapacityError, ConflictError, SnapshotStore, TelemetryHTTPServer
 from src.transport import APIClient, RemoteError
-from src.telemetry import MAX_BODY_BYTES
+from src.telemetry import MAX_BODY_BYTES, NetworkFlow
 from test_telemetry import process, sample
 
 
@@ -113,3 +113,54 @@ def test_near_limit_upload_can_be_downloaded_with_its_status_envelope(service):
     assert client.request("POST", "/api/v1/snapshots", payload)["accepted"]
     result = client.request("GET", "/api/v1/snapshot?host=host-a")
     assert tuple(result["snapshot"]["processes"][0]["cmdline"]) == args
+
+
+def test_cross_host_flows_join_client_and_wildcard_listener_without_duplicates():
+    store = SnapshotStore()
+    client = sample(host_id="client", network_flows=(
+        NetworkFlow(42, 1.0, "tcp", "10.0.0.1", 41000, "10.0.0.2", 5432, "ESTABLISHED"),
+    ))
+    server = sample(host_id="server", network_flows=(
+        NetworkFlow(42, 1.0, "tcp", "0.0.0.0", 5432, "", 0, "LISTEN"),
+        NetworkFlow(42, 1.0, "tcp", "10.0.0.2", 41001, "10.0.0.9", 443, "ESTABLISHED"),
+    ))
+    store.publish(client)
+    assert store.network_flows() == []  # A port alone cannot identify a host.
+    store.publish(server)
+    flows = store.network_flows()
+    assert len(flows) == 1
+    assert flows[0]["source"]["host_id"] == "client"
+    assert flows[0]["target"]["host_id"] == "server"
+    assert flows[0]["target_port"] == 5432
+
+
+def test_bidirectional_observations_collapse_into_one_flow_and_skip_same_host():
+    store = SnapshotStore()
+    a = NetworkFlow(42, 1.0, "tcp", "10.0.0.1", 41000, "10.0.0.2", 5432, "ESTABLISHED")
+    b = NetworkFlow(42, 1.0, "tcp", "10.0.0.2", 5432, "10.0.0.1", 41000, "ESTABLISHED")
+    store.publish(sample(host_id="a", network_flows=(a,)))
+    store.publish(sample(host_id="b", network_flows=(b,)))
+    flows = store.network_flows()
+    assert len(flows) == 1 and flows[0]["direction"] == "bidirectional"
+    local = NetworkFlow(43, 1.0, "tcp", "10.9.9.9", 50000, "10.9.9.9", 60000, "ESTABLISHED")
+    other = replace(local, pid=44)
+    store.publish(sample(host_id="a", sequence=2, processes=[process(42), process(43), process(44)],
+                         network_flows=(a, local, other)))
+    assert all(flow["source"]["host_id"] != flow["target"]["host_id"]
+               for flow in store.network_flows())
+
+
+def test_network_flows_require_authentication(service):
+    _, client = service
+    assert client.request("GET", "/api/v1/flows") == {"flows": []}
+    with pytest.raises(RemoteError) as exc:
+        APIClient(client.server).request("GET", "/api/v1/flows")
+    assert exc.value.status == 401
+
+
+def test_network_transfers_require_authentication(service):
+    _, client = service
+    assert client.request("GET", "/api/v1/transfers") == {"transfers": []}
+    with pytest.raises(RemoteError) as exc:
+        APIClient(client.server).request("GET", "/api/v1/transfers")
+    assert exc.value.status == 401

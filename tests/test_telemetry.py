@@ -4,7 +4,7 @@ import json
 import pytest
 
 from src.telemetry import (
-    Connection, LifecycleEvent, ProcessRecord, ProtocolError, Snapshot,
+    Connection, LifecycleEvent, NetworkFlow, ProcessRecord, ProtocolError, Snapshot,
     snapshot_from_bytes, snapshot_from_dict,
 )
 
@@ -27,6 +27,8 @@ def test_protocol_roundtrip_preserves_identity_and_relationships():
     snapshot = sample(
         events=(LifecycleEvent("exec", 42, 1, 100, {"exe": "/bin/test"}, 1, 1),),
         connections=(Connection(1, 42, "parent-child"),), event_stats={"exec": 1},
+        network_flows=(NetworkFlow(42, 1.0, "tcp", "127.0.0.1", 41000,
+                                   "127.0.0.1", 5432, "ESTABLISHED"),),
     )
     assert snapshot_from_bytes(snapshot.to_bytes()) == snapshot
     assert "birth_time" not in snapshot.to_dict()["processes"][0]
@@ -76,3 +78,15 @@ def test_non_utf8_os_strings_survive_telemetry_encoding():
     record = replace(process(), name="worker-\udcff", cmdline=("worker", "argument-\udcff"))
     snapshot = sample(processes=[record])
     assert snapshot_from_bytes(snapshot.to_bytes()) == snapshot
+
+
+def test_network_flows_are_optional_and_port_bounds_are_enforced():
+    old = sample().to_dict()
+    old.pop("network_flows")
+    assert snapshot_from_dict(old).network_flows == ()
+    flow = NetworkFlow(42, 1.0, "tcp", "127.0.0.1", 41000,
+                       "127.0.0.1", 5432, "ESTABLISHED")
+    data = sample(network_flows=(flow,)).to_dict()
+    data["network_flows"][0]["remote_port"] = 65536
+    with pytest.raises(ProtocolError, match="65535"):
+        snapshot_from_dict(data)

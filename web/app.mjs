@@ -3,6 +3,7 @@ import { appearance } from "./fish.mjs";
 import { AquariumWorld, colorOf, keyOf, selectedProcesses } from "./world.mjs";
 import { CanvasRenderer, createRenderer, freshCanvas } from "./renderer.mjs";
 import { Camera, View, SHORTCUTS } from "./controls.mjs";
+import { applyMeasuredTransfers, drawBetweenTides, transferLinks, transferDirections } from "./intertank.mjs";
 import {
   Multiverse,
   Journey,
@@ -13,6 +14,7 @@ import {
 } from "./multiverse.mjs";
 import {
   BACKGROUNDS,
+  normalizeBackground,
   drawBackground,
   backgroundFrame,
   drawSpace,
@@ -131,8 +133,11 @@ async function request(path, signal) {
   } catch {
     throw new Error("Server returned invalid JSON");
   }
-  if (!response.ok)
-    throw new Error(data.error || `Server returned HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(data.error || `Server returned HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 function activate(tank) {
@@ -167,11 +172,8 @@ function populateHosts(hosts) {
       const saved = JSON.parse(
         localStorage.getItem(`aquarium-background:${tank.id}`),
       );
-      if (saved && Object.hasOwn(BACKGROUNDS, saved.kind)) {
-        tank.background.kind = saved.kind;
-        if (["auto", "morning", "day", "evening", "night"].includes(saved.seaTime))
-          tank.background.seaTime = saved.seaTime;
-      }
+      if (saved && (Object.hasOwn(BACKGROUNDS, saved.kind) || saved.kind === "dusk"))
+        Object.assign(tank.background, normalizeBackground(saved));
     } catch {}
   }
   if (!activeTank) activate(hostId ? universe.select(hostId) : universe.active);
@@ -220,6 +222,8 @@ function updateGalaxies(rects, tanks) {
   $("galaxies").hidden = !shown;
   $("galaxy-pages").hidden = !shown || universe.pages < 2;
   $("map-hint").hidden = !shown;
+  setText("map-caption", tanks.some(t => t.world.snapshot?.simulated_transfers?.length)
+    ? "潮のシミュレーション · 銀河を選んで海の中へ" : "銀河を選んで、海の中へ");
   $("galaxies").style.opacity = String(Math.max(0, 1 - journey.depth / 0.3));
   setText("galaxy-page", `${universe.page + 1} / ${universe.pages}`);
   $("previous-galaxies").disabled = universe.page === 0;
@@ -287,7 +291,10 @@ async function poll() {
       updateEmpty();
       return;
     }
-    const targets = journey.moving
+    const hasTransfers = hosts.hosts.some(h => h.source !== "fixture") || universe.ordered
+      .slice(universe.page * 6, universe.page * 6 + 6)
+      .some(t => t.world.snapshot?.simulated_transfers?.length);
+    const targets = journey.moving || hasTransfers
       ? universe.ordered.slice(universe.page * 6, universe.page * 6 + 6)
       : universe.visible;
     await pollTanks(
@@ -301,6 +308,18 @@ async function poll() {
       () => performance.now(),
     );
     if (version !== generation) return;
+    // Independent peer telemetry must not mark successfully fetched fish offline.
+    if (hosts.hosts.some(h => h.source !== "fixture")) {
+      try {
+        const data = await request("api/v1/transfers", controller.signal);
+        if (version !== generation) return;
+        applyMeasuredTransfers(targets, data.transfers, performance.now());
+      } catch (error) {
+        if (version !== generation) return;
+        if (error.authentication) throw error;
+        applyMeasuredTransfers(targets, [], performance.now());
+      }
+    }
     setStatus(freshness.mode, freshness.error);
     updateMetrics();
     updateEmpty();
@@ -893,7 +912,9 @@ function drawOverlay(scene, width, height) {
     drawBackground(
       under,
       activeTank.background,
-      backgroundFrame(activeTank, camera, width, height, skyTime, new Date()),
+      backgroundFrame(activeTank, camera, width, height, skyTime, new Date(), {
+        communication: view.ipc, reducedMotion: reducedMotion.matches,
+      }),
     );
   drawUnderlay(under, scene, camera, width, height, {
     ...view,
@@ -964,9 +985,22 @@ function frame(now) {
     w.quality = world.quality;
     if (w.width !== width || w.height !== height) w.resize(width, height);
     if (moving) w.step(dt * view.speed);
+    tank.tide.step(dt * view.speed, now, {
+      live: tank.freshness.mode === "live",
+      paused: !moving,
+      reduced: reducedMotion.matches,
+    });
     tank.scene = w.renderFrame(elapsed, moving);
     if (!inMap) tank.camera.update(tank.scene, elapsed);
   }
+  const chartTanks = universe.ordered.slice(universe.page * 6, universe.page * 6 + 6);
+  for (const tank of chartTanks)
+    tank.transfers.step(dt * view.speed, now, {
+      live: tank.freshness.mode === "live", paused: !moving, reduced: reducedMotion.matches,
+    }, chartTanks);
+  const chartRects = galaxyLayout(chartTanks.length, width, height);
+  const links = transferLinks(chartTanks, chartRects);
+  for (const tank of chartTanks) tank.transferDirections = transferDirections(tank, links);
   if (camera.mode !== oldMode) syncControls();
   if (renderer && width && height) {
     try {
@@ -980,6 +1014,12 @@ function frame(now) {
           x: focus.centerX,
           y: focus.centerY,
         });
+        if (view.ipc) {
+          const travelled = rects.map(rect => transitionRect(rect, focus, journey.depth, width, height));
+          drawBetweenTides(under, transferLinks(tanks, travelled), skyTime, {
+            depth: journey.depth, quality: world.quality, reduced: reducedMotion.matches,
+          });
+        }
         const views = tanks.map((tank, i) => {
           const depth = tank === activeTank ? journey.depth : 0;
           const rect = transitionRect(
@@ -1008,6 +1048,7 @@ function frame(now) {
             new Date(),
             width,
             height,
+            { communication: view.ipc, reducedMotion: reducedMotion.matches },
           );
           return {
             world: tank.scene,

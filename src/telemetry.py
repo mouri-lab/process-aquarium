@@ -7,6 +7,7 @@ animation, sorting, nor display-limit state.
 
 from dataclasses import asdict, dataclass, field
 import json
+import ipaddress
 import math
 from typing import Any, Optional
 
@@ -16,6 +17,8 @@ MAX_BODY_BYTES = 16 * 1024 * 1024
 MAX_RESPONSE_BYTES = MAX_BODY_BYTES + 1024 * 1024
 MAX_EVENTS = 2048
 MAX_PROCESSES = 50000
+MAX_NETWORK_FLOWS = 4096
+MAX_NETWORK_PEERS = 4096
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,70 @@ class Connection:
 
 
 @dataclass(frozen=True)
+class NetworkFlow:
+    """One observed socket endpoint owned by a process.
+
+    A listener may omit the remote endpoint. This is an observation, not a
+    bandwidth estimate; both ends can be correlated by an aggregation server.
+    """
+
+    pid: int
+    create_time: float
+    transport: str
+    local_address: str
+    local_port: int
+    remote_address: str = ""
+    remote_port: int = 0
+    state: str = ""
+
+
+@dataclass(frozen=True)
+class NetworkActivity:
+    """Measured byte deltas for one interface, never inferred from sockets."""
+
+    status: str
+    interface: str = ""
+    interval_seconds: Optional[float] = None
+    sent_bytes: Optional[int] = None
+    received_bytes: Optional[int] = None
+    scope: str = "interface"
+    source: str = "psutil"
+
+
+@dataclass(frozen=True)
+class PeerTraffic:
+    address: str
+    sent_bytes: int
+    received_bytes: int
+
+
+@dataclass(frozen=True)
+class PeerNetworkActivity:
+    """IP bytes observed on one NIC, grouped by peer; no packet payloads."""
+
+    status: str
+    interface: str
+    network_scope: str
+    addresses: tuple[str, ...] = ()
+    interval_seconds: Optional[float] = None
+    peers: tuple[PeerTraffic, ...] = ()
+    source: str = "ebpf"
+    byte_basis: str = "observed_ip"
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class SimulatedTransfer:
+    """Fixture-only traffic between two named aquariums; not measured data."""
+
+    host_id: str
+    boot_id: str
+    interval_seconds: float
+    sent_bytes: int
+    received_bytes: int
+
+
+@dataclass(frozen=True)
 class Snapshot:
     host_id: str
     hostname: str
@@ -69,6 +136,10 @@ class Snapshot:
     connections: tuple[Connection, ...] = ()
     event_stats: dict[str, int] = field(default_factory=dict)
     error: Optional[str] = None
+    network_flows: tuple[NetworkFlow, ...] = ()
+    network_activity: Optional[NetworkActivity] = None
+    simulated_transfers: tuple[SimulatedTransfer, ...] = ()
+    network_peers: Optional[PeerNetworkActivity] = None
 
     @property
     def revision(self) -> tuple[str, str, int]:
@@ -113,6 +184,20 @@ def _number(value: Any, name: str) -> float:
     if not valid:
         raise ProtocolError(f"{name} must be a finite nonnegative number")
     return float(value)
+
+
+def _port(value: Any, name: str) -> int:
+    value = _integer(value, name)
+    if value > 65535:
+        raise ProtocolError(f"{name} must be at most 65535")
+    return value
+
+
+def _short_text(value: Any, name: str) -> str:
+    value = _text(value, name)
+    if len(value) > 64:
+        raise ProtocolError(f"{name} must be at most 64 characters")
+    return value
 
 
 def _identifier(value: Any, name: str) -> str:
@@ -203,10 +288,43 @@ def snapshot_from_dict(value: Any) -> Snapshot:
             kind=_text(item.get("kind"), "kind", nonempty=True),
             metadata=None if metadata is None else _metadata(_object(metadata, "connection metadata"), "connection metadata"),
         ))
+    network_flows = []
+    for raw in _array(data.get("network_flows", []), "network_flows", MAX_NETWORK_FLOWS):
+        item = _object(raw, "network flow")
+        remote_address = _short_text(item.get("remote_address", ""), "remote_address")
+        network_flows.append(NetworkFlow(
+            pid=_integer(item.get("pid"), "network pid"),
+            create_time=_number(item.get("create_time"), "network create_time"),
+            transport=_short_text(item.get("transport"), "transport"),
+            local_address=_short_text(item.get("local_address"), "local_address"),
+            local_port=_port(item.get("local_port"), "local_port"),
+            remote_address=remote_address,
+            remote_port=_port(item.get("remote_port", 0), "remote_port"),
+            state=_short_text(item.get("state", ""), "network state"),
+        ))
     stats = _object(data.get("event_stats", {}), "event_stats")
     if len(stats) > 32:
         raise ProtocolError("Too many event statistics")
     error = data.get("error")
+    activity = network_activity_from_dict(data.get("network_activity"))
+    simulated = []
+    peers = set()
+    for raw in _array(data.get("simulated_transfers", []), "simulated_transfers", 32):
+        if data.get("source") != "fixture":
+            raise ProtocolError("Simulated transfers require fixture telemetry")
+        item = _object(raw, "simulated transfer")
+        peer = _identifier(item.get("host_id"), "peer host_id")
+        if peer == data.get("host_id") or peer in peers:
+            raise ProtocolError("Simulated peer must be unique and external")
+        peers.add(peer)
+        interval = _number(item.get("interval_seconds"), "transfer interval")
+        if interval <= 0:
+            raise ProtocolError("Transfer interval must be positive")
+        simulated.append(SimulatedTransfer(
+            peer, _identifier(item.get("boot_id"), "peer boot_id"), interval,
+            _integer(item.get("sent_bytes"), "transfer sent_bytes"),
+            _integer(item.get("received_bytes"), "transfer received_bytes"),
+        ))
     return Snapshot(
         host_id=_identifier(data.get("host_id"), "host_id"),
         hostname=_text(data.get("hostname"), "hostname", nonempty=True),
@@ -218,7 +336,89 @@ def snapshot_from_dict(value: Any) -> Snapshot:
         processes=tuple(processes), events=tuple(events), connections=tuple(connections),
         event_stats={_text(k, "statistic"): _integer(v, "statistic") for k, v in stats.items()},
         error=None if error is None else _text(error, "error"),
+        network_flows=tuple(network_flows),
+        network_activity=activity,
+        simulated_transfers=tuple(simulated),
+        network_peers=network_peers_from_dict(data.get("network_peers")),
     )
+
+
+def peer_address(value: Any) -> str:
+    """Canonical unicast address usable across hosts in an explicit scope."""
+    raw = _short_text(value, "peer address")
+    try:
+        address = ipaddress.ip_address(raw)
+    except ValueError:
+        raise ProtocolError("Invalid peer IP address") from None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    if ("%" in raw or address.is_unspecified or address.is_loopback or
+            address.is_multicast or address.is_link_local or str(address) == "255.255.255.255"):
+        raise ProtocolError("Peer address must be unscoped unicast")
+    return str(address)
+
+
+def network_peers_from_dict(raw: Any) -> Optional[PeerNetworkActivity]:
+    if raw is None:
+        return None
+    item = _object(raw, "network_peers")
+    status = item.get("status")
+    if status not in ("ready", "warming", "disabled", "unsupported", "unavailable",
+                      "ambiguous", "denied", "error", "overflow"):
+        raise ProtocolError("Invalid peer measurement status")
+    if item.get("source") != "ebpf" or item.get("byte_basis") != "observed_ip":
+        raise ProtocolError("Unsupported peer measurement source or byte basis")
+    interface = _text(item.get("interface"), "peer interface")
+    if len(interface) > 128 or (status in ("ready", "warming") and not interface):
+        raise ProtocolError("Invalid peer interface")
+    addresses = tuple(peer_address(a) for a in _array(item.get("addresses", []), "addresses", 64))
+    if len(set(addresses)) != len(addresses):
+        raise ProtocolError("Duplicate local address")
+    interval = item.get("interval_seconds")
+    peers = []
+    seen = set()
+    for raw_peer in _array(item.get("peers", []), "peers", MAX_NETWORK_PEERS):
+        p = _object(raw_peer, "peer")
+        address = peer_address(p.get("address"))
+        if address in seen or address in addresses:
+            raise ProtocolError("Peer address must be unique and external")
+        seen.add(address)
+        peers.append(PeerTraffic(address, _integer(p.get("sent_bytes"), "peer sent_bytes"),
+                                 _integer(p.get("received_bytes"), "peer received_bytes")))
+    if status == "ready":
+        interval = _number(interval, "peer interval")
+        if interval <= 0 or not addresses:
+            raise ProtocolError("Peer measurement needs addresses and a positive interval")
+    elif interval is not None or peers:
+        raise ProtocolError("Unmeasured peer activity cannot contain counters")
+    error = item.get("error")
+    return PeerNetworkActivity(status, interface, _identifier(item.get("network_scope"), "network_scope"),
+        addresses, interval, tuple(peers), error=None if error is None else _text(error, "peer error"))
+
+
+def network_activity_from_dict(raw: Any) -> Optional[NetworkActivity]:
+    if raw is None:
+        return None
+    item = _object(raw, "network_activity")
+    status = item.get("status")
+    if status not in ("ready", "warming", "unavailable", "ambiguous", "denied", "unsupported", "error"):
+        raise ProtocolError("Invalid network activity status")
+    if item.get("scope") != "interface" or item.get("source") != "psutil":
+        raise ProtocolError("Unsupported network activity scope or source")
+    interface = _text(item.get("interface"), "network interface")
+    if len(interface) > 128 or (status in ("ready", "warming") and not interface):
+        raise ProtocolError("Invalid network interface")
+    interval, sent, received = (item.get(k) for k in
+                                ("interval_seconds", "sent_bytes", "received_bytes"))
+    if status == "ready":
+        interval = _number(interval, "network interval")
+        if interval <= 0 or (sent is None and received is None):
+            raise ProtocolError("Measured activity needs an interval and byte counters")
+        sent = None if sent is None else _integer(sent, "sent_bytes")
+        received = None if received is None else _integer(received, "received_bytes")
+    elif any(v is not None for v in (interval, sent, received)):
+        raise ProtocolError("Unmeasured activity cannot contain byte counters")
+    return NetworkActivity(status, interface, interval, sent, received)
 
 
 def decode_json(payload: bytes, *, limit: int = MAX_BODY_BYTES) -> Any:

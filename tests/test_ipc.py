@@ -42,6 +42,24 @@ def test_ipc_combines_network_unix_pipe_and_parent_fallback(monkeypatch):
     assert not any(c.kind == "pipe" for c in detector.detect(records))
 
 
+def test_network_flows_keep_both_socket_endpoints_and_listeners(monkeypatch):
+    records = {10: replace(process(), pid=10), 11: replace(process(), pid=11)}
+    endpoint = lambda ip, port: NS(ip=ip, port=port)
+    inet = [
+        NS(pid=10, laddr=endpoint("10.0.0.1", 41000),
+           raddr=endpoint("10.0.0.2", 5432), status="ESTABLISHED"),
+        NS(pid=11, laddr=endpoint("0.0.0.0", 5432), raddr=(), status="LISTEN"),
+    ]
+    monkeypatch.setattr(psutil, "net_connections", lambda kind: inet if kind == "inet" else [])
+    detector = IPCDetector()
+    monkeypatch.setattr(detector, "read_descriptors", lambda _: {})
+    detector.detect(records)
+    assert [(f.pid, f.local_port, f.remote_port, f.state) for f in detector.network_flows] == [
+        (10, 41000, 5432, "ESTABLISHED"),
+        (11, 5432, 0, "LISTEN"),
+    ]
+
+
 def test_permissions_and_missing_lsof_keep_parent_relationships(monkeypatch):
     def denied(**kwargs):
         raise psutil.AccessDenied()

@@ -9,6 +9,20 @@ import {
   transitionRect,
   pollTanks,
 } from "../../web/multiverse.mjs";
+
+test("direct selection keeps the interior and its peer polling on the same chart page", () => {
+  const universe = new Multiverse();
+  universe.catalog(Array.from({length: 8}, (_, i) => ({host_id: `host-${i}`, hostname: `host-${i}`})));
+  universe.select("host-7");
+  assert.equal(universe.page, 1);
+  assert.equal(universe.visible[0].host, "host-7");
+  universe.select("host-1");
+  assert.equal(universe.page, 0);
+  universe.overview = true;
+  universe.page = 1;
+  universe.select("host-0");
+  assert.equal(universe.page, 1); // Overview paging remains explicit.
+});
 const p = {
   pid: 1,
   ppid: 0,

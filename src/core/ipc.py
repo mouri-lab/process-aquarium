@@ -9,7 +9,7 @@ import time
 
 import psutil
 
-from ..telemetry import Connection
+from ..telemetry import Connection, NetworkFlow
 
 
 def descriptor_groups(output, visible):
@@ -61,6 +61,7 @@ class IPCDetector:
     def __init__(self):
         self.descriptors = {}
         self.last_descriptors = float("-inf")
+        self.network_flows = ()
 
     def read_descriptors(self, processes):
         # Disk-backed capture bounds memory even for hosts with many descriptors.
@@ -81,6 +82,7 @@ class IPCDetector:
 
     def detect(self, processes, limit=100):
         groups = defaultdict(set)
+        network_flows = []
         for kind in ("inet", "unix"):
             try:
                 for conn in psutil.net_connections(kind=kind):
@@ -90,6 +92,18 @@ class IPCDetector:
                         if conn.laddr:
                             groups[("unix", str(conn.laddr))].add(conn.pid)
                         continue
+                    process = processes[conn.pid]
+                    local = conn.laddr
+                    remote = conn.raddr
+                    if local and len(network_flows) < 4096:
+                        network_flows.append(NetworkFlow(
+                            pid=conn.pid, create_time=process.create_time,
+                            transport="tcp", local_address=str(local.ip),
+                            local_port=int(local.port),
+                            remote_address=str(remote.ip) if remote else "",
+                            remote_port=int(remote.port) if remote else 0,
+                            state=str(getattr(conn, "status", "") or ""),
+                        ))
                     if (
                         not conn.laddr
                         or not conn.raddr
@@ -108,6 +122,7 @@ class IPCDetector:
                     groups[("tcp-loop", endpoints)].add(conn.pid)
             except (psutil.Error, OSError, NotImplementedError):
                 continue
+        self.network_flows = tuple(network_flows)
         now = time.monotonic()
         if now - self.last_descriptors >= 10:
             raw = self.read_descriptors(processes)

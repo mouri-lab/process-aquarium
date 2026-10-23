@@ -2,32 +2,22 @@
 // animated habitat implements the same draw(ctx, frame) interface; galaxy
 // portals reveal that exact background as the observer approaches.
 import { TAU } from "./fish.mjs";
+import { drawTide } from "./tides.mjs";
 const smooth = (x) => {
   x = Math.max(0, Math.min(1, x));
   return x * x * (3 - 2 * x);
 };
-import { habitat, seaAppearance } from "./effects.mjs";
-export const BACKGROUNDS = {
-  kelp: {
-    name: "こもれびの海",
-    top: "#174a58",
-    bottom: "#0a222e",
-    glow: "#b6dbbb",
-  },
-  lagoon: {
-    name: "あおい入り江",
-    top: "#235367",
-    bottom: "#0a203e",
-    glow: "#94cbdc",
-  },
-  dusk: {
-    name: "ゆうぐれの海",
-    top: "#51404f",
-    bottom: "#191f38",
-    glow: "#e5b9a8",
-  },
-};
-export function backgroundFrame(tank, camera, width, height, time, wallTime) {
+import { HABITATS, habitat, seaAppearance } from "./effects.mjs";
+export const BACKGROUNDS = HABITATS;
+export function normalizeBackground(saved) {
+  const kind = saved?.kind === "dusk" ? "reef" : saved?.kind;
+  return {
+    kind: Object.hasOwn(BACKGROUNDS, kind) ? kind : "kelp",
+    seaTime: ["auto", "morning", "day", "evening", "night"].includes(saved?.seaTime)
+      ? saved.seaTime : "auto",
+  };
+}
+export function backgroundFrame(tank, camera, width, height, time, wallTime, options = {}) {
   return {
     seed: tank.sky.seed,
     camera,
@@ -35,26 +25,22 @@ export function backgroundFrame(tank, camera, width, height, time, wallTime) {
     height,
     time,
     quality: tank.world.quality,
+    tide: options.communication === false ? null : tank.tide,
+    transfers: tank.transferDirections,
+    reducedMotion: Boolean(options.reducedMotion),
     seaTime: tank.background.seaTime || "auto",
     wallTime: wallTime.getTime(),
   };
 }
-// Store only two palettes at a time. A capped raster scale keeps large and
+// Store only two scenery variants at a time. A capped raster scale keeps large and
 // Retina viewports from allocating several full-resolution scene textures.
 const oceans = new Map();
-function ocean(ctx, frame, palette) {
+function ocean(ctx, frame, scenery) {
   const { width: w, height: h, time, camera, quality } = frame;
   const ratio = Math.min(globalThis.devicePixelRatio || 1, 1.5);
   const sea = seaAppearance(new Date(Math.floor(frame.wallTime / 30000) * 30000), frame.seaTime);
-  const channels = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-  const blend = (color, hex) => {
-    const target = channels(hex);
-    return color.map((v, i) => Math.round(v * 0.6 + target[i] * 0.4));
-  };
-  sea.top = blend(sea.top, palette.top);
-  sea.bottom = blend(sea.bottom, palette.bottom);
-  sea.light = blend(sea.light, palette.glow);
-  const key = JSON.stringify([w, h, ratio, quality, palette.top, sea]);
+  const light = "#" + sea.light.map(c => c.toString(16).padStart(2, "0")).join("");
+  const key = JSON.stringify([w, h, ratio, quality, scenery.name, sea]);
   let cached = oceans.get(key);
   if (!cached) {
     const base = surface(Math.ceil(w * ratio), Math.ceil(h * ratio));
@@ -68,26 +54,29 @@ function ocean(ctx, frame, palette) {
     if (quality !== "minimal") {
       const glow = paint.createRadialGradient(w * 0.35, -h * 0.2, 0,
         w * 0.35, -h * 0.2, h * 1.2);
-      glow.addColorStop(0, palette.glow + "32");
-      glow.addColorStop(1, palette.glow + "00");
+      glow.addColorStop(0, `rgba(${sea.light.join(",")},${sea.alpha * 2})`);
+      glow.addColorStop(1, `rgba(${sea.light.join(",")},0)`);
       paint.fillStyle = glow;
       paint.fillRect(0, 0, w, h);
     }
     const fixedCamera = { x: 0 };
-    habitat(paint, w, h, 0, fixedCamera, quality, sea, "base");
+    habitat(paint, w, h, 0, fixedCamera, quality, sea, "base", scenery);
     // Rocks and shells occupy just the bottom strip, not another full canvas.
-    const frontY = Math.floor(h * 0.8);
+    const frontY = Math.floor(h * scenery.frontTop);
     const front = surface(Math.ceil(w * ratio), Math.ceil((h - frontY) * ratio));
     const detail = front.getContext("2d");
     detail.scale(ratio, ratio);
     detail.translate(0, -frontY);
-    habitat(detail, w, h, 0, fixedCamera, quality, sea, "foreground");
+    habitat(detail, w, h, 0, fixedCamera, quality, sea, "foreground", scenery);
     cached = { base, front, frontY };
     oceans.set(key, cached);
     if (oceans.size > 2) oceans.delete(oceans.keys().next().value);
   }
   ctx.drawImage(cached.base, 0, 0, w, h);
-  habitat(ctx, w, h, time, camera, quality, sea, "plants");
+  // Currents remain live between the cached scenery and foreground plants.
+  // Never bake measured traffic into the static background texture.
+  drawTide(ctx, frame, light);
+  habitat(ctx, w, h, time, camera, quality, sea, "plants", scenery);
   const parallax = Math.sin(camera.x / 900) * 18 * Math.min(1.3, h / 780, w / 850);
   ctx.drawImage(cached.front, parallax, cached.frontY, w, h - cached.frontY);
 }
@@ -98,7 +87,7 @@ const providers = new Map(
   ]),
 );
 export function drawBackground(ctx, descriptor, frame) {
-  (providers.get(descriptor.kind) || providers.get("kelp"))(ctx, frame);
+  (providers.get(descriptor.kind === "dusk" ? "reef" : descriptor.kind) || providers.get("kelp"))(ctx, frame);
 }
 function random(seed) {
   let n = seed;
@@ -237,6 +226,7 @@ export function drawPortalBackground(
   wallTime,
   width,
   height,
+  options = {},
 ) {
   drawGalaxy(ctx, tank, rect, depth, time);
   if (depth <= 0.08) return;
@@ -260,7 +250,7 @@ export function drawPortalBackground(
   drawBackground(
     paint,
     tank.background,
-    backgroundFrame(tank, camera, width, height, time, wallTime),
+    backgroundFrame(tank, camera, width, height, time, wallTime, options),
   );
   paint.restore();
   paint.save();

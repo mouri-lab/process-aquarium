@@ -14,8 +14,9 @@ test("background providers receive separate simulation and wall clocks without c
   assert.deepEqual(tank.background, { kind: "dusk" });
 });
 
-import { BACKGROUNDS, drawBackground } from "../../web/backgrounds.mjs";
-import { drawUnderlay, prepareCanvas } from "../../web/effects.mjs";
+import { BACKGROUNDS, drawBackground, normalizeBackground } from "../../web/backgrounds.mjs";
+import { drawUnderlay, prepareCanvas, habitat, seaAppearance } from "../../web/effects.mjs";
+import { lightPatch } from "../../web/tides.mjs";
 function mockSurfaces(t) {
   const surfaces = [];
   const previous = globalThis.OffscreenCanvas;
@@ -42,7 +43,7 @@ function drawingContext() {
         if (typeof arg === "number") assert.ok(Number.isFinite(arg), `${method}: ${arg}`);
       calls.push([method, ...args]);
       if (method === "createLinearGradient" || method === "createRadialGradient")
-        return { addColorStop() {} };
+        return { addColorStop(...stops) { calls.push(["colorStop", ...stops]); } };
     },
   });
   return { ctx, calls };
@@ -111,4 +112,87 @@ test("background raster cap leaves the default fish and overlay resolution intac
   prepareCanvas(overlay, 800, 600);
   assert.deepEqual([background.width, background.height], [1200, 900]);
   assert.deepEqual([overlay.width, overlay.height], [1600, 1200]);
+});
+
+test("measured currents animate over cached time-of-day scenery and can be switched off", (t) => {
+  const surfaces = mockSurfaces(t);
+  const tank = {
+    sky: { seed: 23 }, world: { quality: "full" },
+    background: { kind: "lagoon", seaTime: "evening" },
+    tide: { sent: .8, received: 0, phase: .2 },
+    transferDirections: [{ strength: .8, outgoing: true, angle: .4 }],
+  };
+  const frame = backgroundFrame(tank, { x: 0 }, 823, 617, 1, new Date(2026, 0, 1, 12),
+    { reducedMotion: true });
+  assert.equal(frame.seaTime, "evening");
+  assert.equal(frame.transfers, tank.transferDirections);
+  assert.equal(frame.reducedMotion, true);
+  const { ctx, calls } = drawingContext();
+  drawBackground(ctx, tank.background, frame);
+  const images = calls.filter(([method]) => method === "drawImage");
+  assert.equal(images.length, 5); // base, three current patches, foreground
+  assert.equal(images[0][1], surfaces[0]);
+  assert.equal(images.at(-1)[1], surfaces[1]);
+  const positions = calls.filter(([method]) => method === "translate");
+  const allocations = surfaces.length;
+  const staticCalls = surfaces[0].context.calls.length;
+  calls.length = 0;
+  drawBackground(ctx, tank.background, { ...frame, tide: { ...tank.tide, phase: .3 } });
+  assert.equal(surfaces.length, allocations);
+  assert.equal(surfaces[0].context.calls.length, staticCalls);
+  assert.notDeepEqual(calls.filter(([method]) => method === "translate"), positions);
+  calls.length = 0;
+  drawBackground(ctx, tank.background,
+    backgroundFrame(tank, { x: 0 }, 823, 617, 1, new Date(2026, 0, 1, 12), { communication: false }));
+  assert.equal(calls.filter(([method]) => method === "drawImage").length, 2);
+  assert.equal(surfaces.length, allocations);
+});
+
+test("habitat geometry differs by place and stays identical across lighting presets", () => {
+  const geometry = [];
+  const shapes = new Set(["moveTo", "lineTo", "bezierCurveTo", "quadraticCurveTo", "ellipse", "arc"]);
+  for (const scenery of Object.values(BACKGROUNDS)) {
+    const render = mode => {
+      const { ctx, calls } = drawingContext();
+      habitat(ctx, 1100, 800, 2, { x: 0 }, "full", seaAppearance(new Date(), mode), "all", scenery);
+      return calls.filter(([method]) => shapes.has(method));
+    };
+    const day = render("day");
+    assert.deepEqual(day, render("night"));
+    geometry.push(day);
+  }
+  for (let i = 0; i < geometry.length; i++)
+    for (let j = i + 1; j < geometry.length; j++) assert.notDeepEqual(geometry[i], geometry[j]);
+});
+
+test("water lighting is shared across habitats instead of tinting one as permanent dusk", (t) => {
+  const surfaces = mockSurfaces(t);
+  const { ctx } = drawingContext();
+  const frame = { width: 879, height: 647, time: 0, camera: { x: 0 }, quality: "full",
+    seaTime: "day", wallTime: new Date(2026, 0, 1, 12).getTime() };
+  const water = (kind, seaTime) => {
+    const index = surfaces.length;
+    drawBackground(ctx, { kind }, { ...frame, seaTime });
+    return surfaces[index].context.calls.filter(([method]) => method === "colorStop").slice(0, 2);
+  };
+  const day = water("kelp", "day");
+  assert.deepEqual(day, water("lagoon", "day"));
+  assert.deepEqual(day, water("reef", "day"));
+  assert.notDeepEqual(day, water("reef", "night"));
+});
+
+test("legacy scenery migrates without changing the separately saved time of day", () => {
+  assert.deepEqual(normalizeBackground({ kind: "dusk", seaTime: "morning" }), { kind: "reef", seaTime: "morning" });
+  assert.deepEqual(normalizeBackground({ kind: "dusk" }), { kind: "reef", seaTime: "auto" });
+  for (const kind of Object.keys(BACKGROUNDS))
+    assert.deepEqual(normalizeBackground({ kind, seaTime: "night" }), { kind, seaTime: "night" });
+});
+
+test("changing daylight colours does not retain an unbounded number of current textures", (t) => {
+  mockSurfaces(t);
+  const color = i => `#0101${i.toString(16).padStart(2, "0")}`;
+  const first = lightPatch(color(0));
+  assert.equal(lightPatch(color(0)), first);
+  for (let i = 1; i <= 12; i++) lightPatch(color(i));
+  assert.notEqual(lightPatch(color(0)), first);
 });

@@ -56,3 +56,14 @@ jobs:
       - run: node --check web/app.mjs
       - run: node --check web/renderer.mjs
       - run: node --test tests/web/*.test.mjs
+
+  linux-peer-traffic:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install distro BCC and running kernel headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-bpfcc python3-psutil iproute2 linux-headers-$(uname -r)
+      - name: Measure IPv4 and IPv6 traffic between isolated Linux hosts
+        run: sudo /usr/bin/python3 tools/check_peer_network.py

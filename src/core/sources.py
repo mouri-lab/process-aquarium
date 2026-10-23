@@ -13,6 +13,8 @@ import psutil
 
 from .source import IProcessSource, SourceStatus
 from .ipc import IPCDetector
+from .network import NetworkSampler
+from .peer_network import PeerNetworkSampler
 from ..telemetry import MAX_EVENTS, Connection, LifecycleEvent, ProcessRecord, Snapshot
 
 
@@ -26,7 +28,8 @@ def boot_identity() -> str:
 class PsutilProcessSource(IProcessSource):
     name = "psutil"
 
-    def __init__(self, max_processes=2000, *, host_id=None, interval=1.0):
+    def __init__(self, max_processes=2000, *, host_id=None, interval=1.0, network_interface=None,
+                 network_peers="auto", network_scope="default"):
         if not math.isfinite(interval) or interval <= 0:
             raise ValueError("Collection interval must be finite and positive")
         self.max_processes = max_processes  # Collection is never display-limited.
@@ -51,8 +54,13 @@ class PsutilProcessSource(IProcessSource):
         self._error = None
         self._last_success = 0.0
         self._recent_ipc = ()
+        self._recent_network = ()
         self._ipc_detector = IPCDetector()
         self._last_ipc_refresh = float("-inf")
+        self._network_sampler = NetworkSampler(network_interface)
+        self._network_activity = None
+        self._peer_sampler = PeerNetworkSampler(mode=network_peers, network_scope=network_scope)
+        self._network_peers = None
 
     def update(self):
         if self._poll_thread is None and not self._shutdown.is_set():
@@ -120,11 +128,14 @@ class PsutilProcessSource(IProcessSource):
         now = time.monotonic()
         if now - self._last_ipc_refresh >= 2.0:
             self._recent_ipc = tuple(self._detect_ipc(processes))
+            self._recent_network = tuple(self._ipc_detector.network_flows)
             self._last_ipc_refresh = now
         if self._sequence == 0:
             self._event_stats["initial_scan"] = len(processes)
         self._processes = processes
         self._seen_events.clear()
+        self._network_activity = self._network_sampler.sample()
+        self._network_peers = self._peer_sampler.sample(self._network_activity)
         self._publish()
 
     def _reconcile(self, processes):
@@ -140,6 +151,9 @@ class PsutilProcessSource(IProcessSource):
                 self._emit("exec", current, deduplicate=True)
 
     def _publish(self, error=None):
+        if error:
+            self._network_activity = self._network_sampler.reset()
+            self._network_peers = self._peer_sampler.reset()
         self._sequence += 1
         # Failure preserves the last complete state and marks it stale.
         collected_at = self._snapshot.collected_at if error and self._snapshot else time.time()
@@ -149,6 +163,9 @@ class PsutilProcessSource(IProcessSource):
             source=self.name, processes=tuple(self._processes.values()),
             events=tuple(self._events), connections=self._recent_ipc,
             event_stats=dict(self._event_stats), error=error,
+            network_flows=self._recent_network,
+            network_activity=self._network_activity,
+            network_peers=self._network_peers,
         )
         with self._lock:
             self._error = error
@@ -158,13 +175,16 @@ class PsutilProcessSource(IProcessSource):
         self._ready.set()
 
     def _poll_loop(self):
-        while not self._shutdown.is_set():
-            started = time.monotonic()
-            try:
-                self._scan()
-            except Exception as exc:
-                self._publish(error=f"Collection failed: {exc}")
-            self._shutdown.wait(max(0, self.update_interval - (time.monotonic() - started)))
+        try:
+            while not self._shutdown.is_set():
+                started = time.monotonic()
+                try:
+                    self._scan()
+                except Exception as exc:
+                    self._publish(error=f"Collection failed: {exc}")
+                self._shutdown.wait(max(0, self.update_interval - (time.monotonic() - started)))
+        finally:
+            self._peer_sampler.close()
 
     def _detect_ipc(self, processes):
         return self._ipc_detector.detect(processes)
@@ -173,6 +193,8 @@ class PsutilProcessSource(IProcessSource):
         self._shutdown.set()
         if self._poll_thread and self._poll_thread.is_alive():
             self._poll_thread.join(timeout=5.0)
+        if self._poll_thread is None or not self._poll_thread.is_alive():
+            self._peer_sampler.close()
 
 
 class EbpfProcessSource(PsutilProcessSource):
@@ -290,6 +312,7 @@ class EbpfProcessSource(PsutilProcessSource):
                         self._publish(error=f"Collection failed: {exc}")
                     next_scan = time.monotonic() + self.update_interval
         finally:
+            self._peer_sampler.close()
             self._cleanup_bpf()
 
     def _cleanup_bpf(self):
