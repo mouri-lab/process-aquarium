@@ -14,6 +14,7 @@ import {
 } from "./multiverse.mjs";
 import {
   BACKGROUNDS,
+  normalizeBackground,
   drawBackground,
   backgroundFrame,
   drawSpace,
@@ -171,11 +172,8 @@ function populateHosts(hosts) {
       const saved = JSON.parse(
         localStorage.getItem(`aquarium-background:${tank.id}`),
       );
-      if (saved && Object.hasOwn(BACKGROUNDS, saved.kind)) {
-        tank.background.kind = saved.kind;
-        if (["auto", "morning", "day", "evening", "night"].includes(saved.seaTime))
-          tank.background.seaTime = saved.seaTime;
-      }
+      if (saved && (Object.hasOwn(BACKGROUNDS, saved.kind) || saved.kind === "dusk"))
+        Object.assign(tank.background, normalizeBackground(saved));
     } catch {}
   }
   if (!activeTank) activate(hostId ? universe.select(hostId) : universe.active);

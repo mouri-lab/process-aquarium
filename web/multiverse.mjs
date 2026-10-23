@@ -43,7 +43,7 @@ export class Tank {
     this.camera = new Camera();
     this.sky = skyFor(this.id);
     this.background = {
-      kind: ["kelp", "lagoon", "dusk"][this.sky.seed % 3],
+      kind: ["kelp", "lagoon", "reef"][this.sky.seed % 3],
     };
     this.freshness = { mode: "waiting", error: "", last: 0 };
     this.listed = false;

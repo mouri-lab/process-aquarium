@@ -112,6 +112,8 @@ export function lightPatch(color) {
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, 192, 192);
   lights.set(color, canvas);
+  // Automatic lighting introduces new colours over the day; bound raster memory.
+  if (lights.size > 12) lights.delete(lights.keys().next().value);
   return canvas;
 }
 export function drawTide(ctx, frame, color) {

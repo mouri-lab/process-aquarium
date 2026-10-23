@@ -52,6 +52,36 @@ const seaRgb = (color) => `rgb(${color.join(",")})`;
 // is deterministic so plants never jump when quality or viewport size changes.
 const seaTint = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
 const seaRgba = (color, alpha) => `rgba(${color.join(",")},${alpha})`;
+// Scenery describes the place; seaAppearance alone chooses the time of day.
+// Reuse these layouts instead of allocating plant/rock arrays every frame.
+export const HABITATS = {
+  kelp: {
+    name: "海藻の森", floor: .91, ridge: 1, distantPlants: 24, distantHeight: 1,
+    sand: [77, 103, 87], frontTop: .8, ripples: 28,
+    beds: [[.045, 10, 245, 0], [.155, 6, 145, 1], [.78, 5, 125, 1], [.94, 11, 275, 0], [.58, 4, 62, 1]],
+    rocks: [[.025, .986, 53, .3], [.105, .984, 33, .7], [.18, .963, 22, .4],
+      [.83, .966, 33, .6], [.925, .99, 59, .9], [.985, .98, 38, .2]],
+    fans: [.215, .865], shells: [[.32, .971], [.69, .987]],
+  },
+  lagoon: {
+    name: "砂の浅瀬", floor: .86, ridge: .22, distantPlants: 5, distantHeight: .4,
+    sand: [154, 145, 111], frontTop: .8, ripples: 45,
+    beds: [[.03, 3, 75, 1], [.96, 4, 90, 1]],
+    rocks: [[.09, .974, 20, .4], [.94, .98, 25, .7]],
+    fans: [], shells: [[.17, .95], [.34, .975], [.57, .94], [.73, .986], [.86, .96]],
+  },
+  reef: {
+    name: "岩礁", floor: .92, ridge: 1.65, distantPlants: 4, distantHeight: .5,
+    sand: [87, 102, 111], frontTop: .74, ripples: 12,
+    beds: [[.18, 3, 80, 1], [.83, 4, 95, 1], [.62, 2, 48, 1]],
+    // Back-to-front clusters leave the middle of the water open for fish.
+    rocks: [[.015, .93, 125, .7], [.095, .95, 93, .3], [.16, .97, 65, .6],
+      [.82, .96, 76, .4], [.92, .94, 120, .8], [.99, .95, 98, .2],
+      [.04, .99, 64, .5], [.115, .99, 42, .8], [.88, .99, 57, .3],
+      [.97, .995, 73, .6], [.55, .974, 27, .2]],
+    fans: [.2, .78, .875], shells: [[.35, .983]],
+  },
+};
 function seaweed(ctx, x, floor, h, breadth, phase, time, color, leafy) {
   const sway = Math.sin(time * 0.48 + phase) * h * 0.085;
   const bend = Math.sin(phase) * h * 0.12;
@@ -120,13 +150,13 @@ function seabedRock(ctx, x, y, size, sea, seed) {
   ctx.stroke();
 }
 export function habitat(ctx, width, height, time, camera, quality,
-  sea = seaAppearance(), layer = "all") {
+  sea = seaAppearance(), layer = "all", scenery = HABITATS.kelp) {
   const base = layer === "all" || layer === "base";
   const plants = layer === "all" || layer === "plants";
   const foreground = layer === "all" || layer === "foreground";
   ctx.save();
   const scale = Math.min(1.3, height / 780, width / 850);
-  const floor = height * 0.91;
+  const floor = height * scenery.floor;
   const parallax = Math.sin(camera.x / 900) * 18 * scale;
   const tint = (color, amount) => seaRgb(seaTint(sea.bottom, color, amount));
   if (base && quality !== "minimal") {
@@ -159,14 +189,14 @@ export function habitat(ctx, width, height, time, camera, quality,
         const x = width * i / 60;
         const ridge = Math.sin(i * 0.21 + layer * 2) * 0.035 +
           Math.sin(i * 0.57 + layer) * 0.016;
-        ctx.lineTo(x, height * (0.82 + layer * 0.055 + ridge));
+        ctx.lineTo(x, height * (scenery.floor - .09 + layer * .055 + ridge * scenery.ridge));
       }
       ctx.lineTo(width, height);
       ctx.fill();
     }
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < scenery.distantPlants; i++) {
       const x = width * ((i * 0.137 + 0.04) % 1) + parallax * 0.35;
-      seaweed(ctx, x, height * 0.925, (45 + (i * 31) % 100) * scale,
+      seaweed(ctx, x, floor + height * .015, (45 + (i * 31) % 100) * scale * scenery.distantHeight,
         3 * scale, i * 2.4, time * 0.7,
         seaTint(sea.bottom, sea.plant, 0.19), false);
     }
@@ -174,7 +204,7 @@ export function habitat(ctx, width, height, time, camera, quality,
   if (base) {
     const sand = ctx.createLinearGradient(0, floor - height * 0.04, 0, height);
     sand.addColorStop(0, seaRgb(seaTint(sea.floor, sea.plant, 0.12)));
-    sand.addColorStop(1, seaRgb(seaTint(sea.floor, [106, 115, 99], 0.3)));
+    sand.addColorStop(1, seaRgb(seaTint(sea.floor, scenery.sand, 0.3)));
     ctx.fillStyle = sand;
     ctx.beginPath();
     ctx.moveTo(0, floor + height * 0.02);
@@ -192,7 +222,7 @@ export function habitat(ctx, width, height, time, camera, quality,
   }
   // Sand ripples and a subtle moving caustic shimmer across the seabed.
   ctx.lineWidth = 0.8;
-  if (base) for (let i = 0; i < 28; i++) {
+  if (base) for (let i = 0; i < scenery.ripples; i++) {
     const x = ((i * 0.173) % 1) * width;
     const y = floor + height * (0.034 + ((i * 0.317) % 1) * 0.064);
     ctx.strokeStyle = seaRgba(sea.light, 0.035 + sea.alpha * 0.45);
@@ -219,10 +249,7 @@ export function habitat(ctx, width, height, time, camera, quality,
     }
   }
   // Different heights, leaf shapes and depths make loose kelp gardens.
-  if (plants) for (const [anchor, count, tall, depth] of [
-    [0.045, 10, 245, 0], [0.155, 6, 145, 1],
-    [0.78, 5, 125, 1], [0.94, 11, 275, 0], [0.58, 4, 62, 1],
-  ]) {
+  if (plants) for (const [anchor, count, tall, depth] of scenery.beds) {
     const base = height * (depth ? 0.945 : 0.98);
     for (let j = 0; j < count; j++) {
       const phase = j * 2.39 + anchor * 37;
@@ -235,14 +262,11 @@ export function habitat(ctx, width, height, time, camera, quality,
     }
   }
   if (foreground) {
-    for (const [x, y, size, seed] of [
-      [0.025, 0.986, 53, 0.3], [0.105, 0.984, 33, 0.7],
-      [0.18, 0.963, 22, 0.4], [0.83, 0.966, 33, 0.6],
-      [0.925, 0.99, 59, 0.9], [0.985, 0.98, 38, 0.2],
-    ]) seabedRock(ctx, x * width + parallax, y * height, size * scale, sea, seed);
+    for (const [x, y, size, seed] of scenery.rocks)
+      seabedRock(ctx, x * width + parallax, y * height, size * scale, sea, seed);
     // Small sea fans bring a muted warm accent to the cool green gardens.
     ctx.lineCap = "round";
-    for (const anchor of [0.215, 0.865]) {
+    for (const anchor of scenery.fans) {
       const x = width * anchor + parallax, y = height * 0.972;
       const color = seaTint(sea.floor, [174, 124, 113], 0.42);
       for (let j = -2; j <= 2; j++) {
@@ -263,7 +287,7 @@ export function habitat(ctx, width, height, time, camera, quality,
         }
       }
     }
-    for (const [u, v] of [[0.32, 0.971], [0.69, 0.987]]) {
+    for (const [u, v] of scenery.shells) {
       const x = width * u, y = height * v;
       ctx.fillStyle = seaRgb(seaTint(sea.floor, [185, 182, 151], 0.45));
       ctx.beginPath();
