@@ -888,7 +888,7 @@ window.addEventListener("keydown", (event) => {
   }
 });
 function drawOverlay(scene, width, height) {
-  const under = prepareCanvas($("underlay"), width, height);
+  const under = prepareCanvas($("underlay"), width, height, 1.5);
   if (activeTank)
     drawBackground(
       under,
@@ -973,7 +973,7 @@ function frame(now) {
       if (inMap && tanks.length) {
         const rects = galaxyLayout(tanks.length, width, height),
           focus = rects[Math.max(0, tanks.indexOf(activeTank))];
-        const under = prepareCanvas($("underlay"), width, height);
+        const under = prepareCanvas($("underlay"), width, height, 1.5);
         prepareCanvas(overlay, width, height);
         view.bubbles = [];
         drawSpace(under, width, height, skyTime, journey.depth, {

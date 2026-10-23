@@ -1,8 +1,8 @@
 import { appearance, clamp, TAU, hash } from "./fish.mjs";
 import { projectedFish, visibleFish } from "./geometry.mjs";
 
-export function prepareCanvas(canvas, width, height) {
-  const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
+export function prepareCanvas(canvas, width, height, maxRatio = 2) {
+  const ratio = Math.min(globalThis.devicePixelRatio || 1, maxRatio);
   if (canvas.width !== Math.round(width * ratio))
     canvas.width = Math.max(1, Math.round(width * ratio));
   if (canvas.height !== Math.round(height * ratio))
@@ -119,13 +119,17 @@ function seabedRock(ctx, x, y, size, sea, seed) {
   ctx.quadraticCurveTo(x - size * 0.4, y - size * 0.8, x + size * 0.1, y - size * 0.68);
   ctx.stroke();
 }
-export function habitat(ctx, width, height, time, camera, quality, sea = seaAppearance()) {
+export function habitat(ctx, width, height, time, camera, quality,
+  sea = seaAppearance(), layer = "all") {
+  const base = layer === "all" || layer === "base";
+  const plants = layer === "all" || layer === "plants";
+  const foreground = layer === "all" || layer === "foreground";
   ctx.save();
   const scale = Math.min(1.3, height / 780, width / 850);
   const floor = height * 0.91;
   const parallax = Math.sin(camera.x / 900) * 18 * scale;
   const tint = (color, amount) => seaRgb(seaTint(sea.bottom, color, amount));
-  if (quality !== "minimal") {
+  if (base && quality !== "minimal") {
     // A soft surface glow and overlapping shafts give the water volume.
     const glow = ctx.createRadialGradient(width * 0.38, -height * 0.12, 0,
       width * 0.38, 0, height * 0.95);
@@ -167,26 +171,28 @@ export function habitat(ctx, width, height, time, camera, quality, sea = seaAppe
         seaTint(sea.bottom, sea.plant, 0.19), false);
     }
   }
-  const sand = ctx.createLinearGradient(0, floor - height * 0.04, 0, height);
-  sand.addColorStop(0, seaRgb(seaTint(sea.floor, sea.plant, 0.12)));
-  sand.addColorStop(1, seaRgb(seaTint(sea.floor, [106, 115, 99], 0.3)));
-  ctx.fillStyle = sand;
-  ctx.beginPath();
-  ctx.moveTo(0, floor + height * 0.02);
-  ctx.bezierCurveTo(width * 0.24, floor - height * 0.04,
-    width * 0.38, floor + height * 0.045, width * 0.6, floor + height * 0.02);
-  ctx.bezierCurveTo(width * 0.8, floor - height * 0.025,
-    width * 0.9, floor + height * 0.005, width, floor - height * 0.01);
-  ctx.lineTo(width, height);
-  ctx.lineTo(0, height);
-  ctx.fill();
+  if (base) {
+    const sand = ctx.createLinearGradient(0, floor - height * 0.04, 0, height);
+    sand.addColorStop(0, seaRgb(seaTint(sea.floor, sea.plant, 0.12)));
+    sand.addColorStop(1, seaRgb(seaTint(sea.floor, [106, 115, 99], 0.3)));
+    ctx.fillStyle = sand;
+    ctx.beginPath();
+    ctx.moveTo(0, floor + height * 0.02);
+    ctx.bezierCurveTo(width * 0.24, floor - height * 0.04,
+      width * 0.38, floor + height * 0.045, width * 0.6, floor + height * 0.02);
+    ctx.bezierCurveTo(width * 0.8, floor - height * 0.025,
+      width * 0.9, floor + height * 0.005, width, floor - height * 0.01);
+    ctx.lineTo(width, height);
+    ctx.lineTo(0, height);
+    ctx.fill();
+  }
   if (quality === "minimal") {
     ctx.restore();
     return;
   }
   // Sand ripples and a subtle moving caustic shimmer across the seabed.
   ctx.lineWidth = 0.8;
-  for (let i = 0; i < 28; i++) {
+  if (base) for (let i = 0; i < 28; i++) {
     const x = ((i * 0.173) % 1) * width;
     const y = floor + height * (0.034 + ((i * 0.317) % 1) * 0.064);
     ctx.strokeStyle = seaRgba(sea.light, 0.035 + sea.alpha * 0.45);
@@ -197,7 +203,7 @@ export function habitat(ctx, width, height, time, camera, quality, sea = seaAppe
     ctx.stroke();
   }
   if (quality === "full") {
-    for (let i = 0; i < 9; i++) {
+    if (plants) for (let i = 0; i < 9; i++) {
       const x = width * (i / 8) + Math.sin(time * 0.2 + i) * 12;
       ctx.strokeStyle = seaRgba(sea.light, sea.alpha * 0.5);
       ctx.beginPath();
@@ -205,7 +211,7 @@ export function habitat(ctx, width, height, time, camera, quality, sea = seaAppe
         Math.sin(i + time * 0.1) * 0.08, 0.2, Math.PI * 0.9);
       ctx.stroke();
     }
-    for (let i = 0; i < 150; i++) {
+    if (base) for (let i = 0; i < 150; i++) {
       const x = ((i * 0.618034) % 1) * width;
       const y = floor + height * (0.04 + ((i * 0.414214) % 1) * 0.06);
       ctx.fillStyle = seaRgba(i % 3 ? sea.plant : sea.light, 0.14);
@@ -213,7 +219,7 @@ export function habitat(ctx, width, height, time, camera, quality, sea = seaAppe
     }
   }
   // Different heights, leaf shapes and depths make loose kelp gardens.
-  for (const [anchor, count, tall, depth] of [
+  if (plants) for (const [anchor, count, tall, depth] of [
     [0.045, 10, 245, 0], [0.155, 6, 145, 1],
     [0.78, 5, 125, 1], [0.94, 11, 275, 0], [0.58, 4, 62, 1],
   ]) {
@@ -228,51 +234,53 @@ export function habitat(ctx, width, height, time, camera, quality, sea = seaAppe
         phase, time, color, j % 3 === 0);
     }
   }
-  for (const [x, y, size, seed] of [
-    [0.025, 0.986, 53, 0.3], [0.105, 0.984, 33, 0.7],
-    [0.18, 0.963, 22, 0.4], [0.83, 0.966, 33, 0.6],
-    [0.925, 0.99, 59, 0.9], [0.985, 0.98, 38, 0.2],
-  ]) seabedRock(ctx, x * width + parallax, y * height, size * scale, sea, seed);
-  // Small sea fans bring a muted warm accent to the cool green gardens.
-  ctx.lineCap = "round";
-  for (const anchor of [0.215, 0.865]) {
-    const x = width * anchor + parallax, y = height * 0.972;
-    const color = seaTint(sea.floor, [174, 124, 113], 0.42);
-    for (let j = -2; j <= 2; j++) {
-      const tipX = x + j * 12 * scale, tipY = y - (41 - Math.abs(j) * 6) * scale;
-      ctx.strokeStyle = seaRgb(color);
-      ctx.lineWidth = 2.6 * scale;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.quadraticCurveTo(x + j * 4 * scale, y - 22 * scale, tipX, tipY);
-      ctx.stroke();
-      for (const side of [-1, 1]) {
-        ctx.lineWidth = 1.5 * scale;
+  if (foreground) {
+    for (const [x, y, size, seed] of [
+      [0.025, 0.986, 53, 0.3], [0.105, 0.984, 33, 0.7],
+      [0.18, 0.963, 22, 0.4], [0.83, 0.966, 33, 0.6],
+      [0.925, 0.99, 59, 0.9], [0.985, 0.98, 38, 0.2],
+    ]) seabedRock(ctx, x * width + parallax, y * height, size * scale, sea, seed);
+    // Small sea fans bring a muted warm accent to the cool green gardens.
+    ctx.lineCap = "round";
+    for (const anchor of [0.215, 0.865]) {
+      const x = width * anchor + parallax, y = height * 0.972;
+      const color = seaTint(sea.floor, [174, 124, 113], 0.42);
+      for (let j = -2; j <= 2; j++) {
+        const tipX = x + j * 12 * scale, tipY = y - (41 - Math.abs(j) * 6) * scale;
+        ctx.strokeStyle = seaRgb(color);
+        ctx.lineWidth = 2.6 * scale;
         ctx.beginPath();
-        ctx.moveTo(x + j * 7 * scale, y - 23 * scale);
-        ctx.quadraticCurveTo(tipX + side * 5 * scale, tipY + 8 * scale,
-          tipX + side * 8 * scale, tipY - 3 * scale);
+        ctx.moveTo(x, y);
+        ctx.quadraticCurveTo(x + j * 4 * scale, y - 22 * scale, tipX, tipY);
         ctx.stroke();
+        for (const side of [-1, 1]) {
+          ctx.lineWidth = 1.5 * scale;
+          ctx.beginPath();
+          ctx.moveTo(x + j * 7 * scale, y - 23 * scale);
+          ctx.quadraticCurveTo(tipX + side * 5 * scale, tipY + 8 * scale,
+            tipX + side * 8 * scale, tipY - 3 * scale);
+          ctx.stroke();
+        }
       }
     }
-  }
-  for (const [u, v] of [[0.32, 0.971], [0.69, 0.987]]) {
-    const x = width * u, y = height * v;
-    ctx.fillStyle = seaRgb(seaTint(sea.floor, [185, 182, 151], 0.45));
-    ctx.beginPath();
-    ctx.moveTo(x, y + 3 * scale);
-    ctx.bezierCurveTo(x - 18 * scale, y - 4 * scale, x - 9 * scale,
-      y - 16 * scale, x, y - 12 * scale);
-    ctx.bezierCurveTo(x + 9 * scale, y - 16 * scale, x + 18 * scale,
-      y - 4 * scale, x, y + 3 * scale);
-    ctx.fill();
-    ctx.strokeStyle = seaRgba(sea.floor, 0.65);
-    ctx.lineWidth = 0.8;
-    for (let j = -2; j <= 2; j++) {
+    for (const [u, v] of [[0.32, 0.971], [0.69, 0.987]]) {
+      const x = width * u, y = height * v;
+      ctx.fillStyle = seaRgb(seaTint(sea.floor, [185, 182, 151], 0.45));
       ctx.beginPath();
-      ctx.moveTo(x, y + 2 * scale);
-      ctx.lineTo(x + j * 4 * scale, y - (12 - Math.abs(j) * 2) * scale);
-      ctx.stroke();
+      ctx.moveTo(x, y + 3 * scale);
+      ctx.bezierCurveTo(x - 18 * scale, y - 4 * scale, x - 9 * scale,
+        y - 16 * scale, x, y - 12 * scale);
+      ctx.bezierCurveTo(x + 9 * scale, y - 16 * scale, x + 18 * scale,
+        y - 4 * scale, x, y + 3 * scale);
+      ctx.fill();
+      ctx.strokeStyle = seaRgba(sea.floor, 0.65);
+      ctx.lineWidth = 0.8;
+      for (let j = -2; j <= 2; j++) {
+        ctx.beginPath();
+        ctx.moveTo(x, y + 2 * scale);
+        ctx.lineTo(x + j * 4 * scale, y - (12 - Math.abs(j) * 2) * scale);
+        ctx.stroke();
+      }
     }
   }
   ctx.restore();

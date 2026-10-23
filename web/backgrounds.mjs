@@ -39,36 +39,57 @@ export function backgroundFrame(tank, camera, width, height, time, wallTime) {
     wallTime: wallTime.getTime(),
   };
 }
+// Store only two palettes at a time. A capped raster scale keeps large and
+// Retina viewports from allocating several full-resolution scene textures.
+const oceans = new Map();
 function ocean(ctx, frame, palette) {
   const { width: w, height: h, time, camera, quality } = frame;
-  const sea = seaAppearance(new Date(frame.wallTime), frame.seaTime);
+  const ratio = Math.min(globalThis.devicePixelRatio || 1, 1.5);
+  const sea = seaAppearance(new Date(Math.floor(frame.wallTime / 30000) * 30000), frame.seaTime);
   const channels = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-  const blend = (color, hex) => color.map((v, i) =>
-    Math.round(v * 0.6 + channels(hex)[i] * 0.4));
-  // Keep each tank's chosen hues while applying its time-of-day lighting.
+  const blend = (color, hex) => {
+    const target = channels(hex);
+    return color.map((v, i) => Math.round(v * 0.6 + target[i] * 0.4));
+  };
   sea.top = blend(sea.top, palette.top);
   sea.bottom = blend(sea.bottom, palette.bottom);
   sea.light = blend(sea.light, palette.glow);
-  const gradient = ctx.createLinearGradient(0, 0, 0, h);
-  gradient.addColorStop(0, `rgb(${sea.top.join(",")})`);
-  gradient.addColorStop(1, `rgb(${sea.bottom.join(",")})`);
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, w, h);
-  if (quality !== "minimal") {
-    const glow = ctx.createRadialGradient(
-      w * 0.35,
-      -h * 0.2,
-      0,
-      w * 0.35,
-      -h * 0.2,
-      h * 1.2,
-    );
-    glow.addColorStop(0, palette.glow + "32");
-    glow.addColorStop(1, palette.glow + "00");
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, w, h);
+  const key = JSON.stringify([w, h, ratio, quality, palette.top, sea]);
+  let cached = oceans.get(key);
+  if (!cached) {
+    const base = surface(Math.ceil(w * ratio), Math.ceil(h * ratio));
+    const paint = base.getContext("2d");
+    paint.scale(ratio, ratio);
+    const gradient = paint.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, `rgb(${sea.top.join(",")})`);
+    gradient.addColorStop(1, `rgb(${sea.bottom.join(",")})`);
+    paint.fillStyle = gradient;
+    paint.fillRect(0, 0, w, h);
+    if (quality !== "minimal") {
+      const glow = paint.createRadialGradient(w * 0.35, -h * 0.2, 0,
+        w * 0.35, -h * 0.2, h * 1.2);
+      glow.addColorStop(0, palette.glow + "32");
+      glow.addColorStop(1, palette.glow + "00");
+      paint.fillStyle = glow;
+      paint.fillRect(0, 0, w, h);
+    }
+    const fixedCamera = { x: 0 };
+    habitat(paint, w, h, 0, fixedCamera, quality, sea, "base");
+    // Rocks and shells occupy just the bottom strip, not another full canvas.
+    const frontY = Math.floor(h * 0.8);
+    const front = surface(Math.ceil(w * ratio), Math.ceil((h - frontY) * ratio));
+    const detail = front.getContext("2d");
+    detail.scale(ratio, ratio);
+    detail.translate(0, -frontY);
+    habitat(detail, w, h, 0, fixedCamera, quality, sea, "foreground");
+    cached = { base, front, frontY };
+    oceans.set(key, cached);
+    if (oceans.size > 2) oceans.delete(oceans.keys().next().value);
   }
-  habitat(ctx, w, h, time, camera, quality, sea);
+  ctx.drawImage(cached.base, 0, 0, w, h);
+  habitat(ctx, w, h, time, camera, quality, sea, "plants");
+  const parallax = Math.sin(camera.x / 900) * 18 * Math.min(1.3, h / 780, w / 850);
+  ctx.drawImage(cached.front, parallax, cached.frontY, w, h - cached.frontY);
 }
 const providers = new Map(
   Object.entries(BACKGROUNDS).map(([id, p]) => [
@@ -219,7 +240,7 @@ export function drawPortalBackground(
 ) {
   drawGalaxy(ctx, tank, rect, depth, time);
   if (depth <= 0.08) return;
-  const ratio = Math.min(globalThis.devicePixelRatio || 1, 2),
+  const ratio = Math.min(globalThis.devicePixelRatio || 1, 1.5),
     w = Math.round(width * ratio),
     h = Math.round(height * ratio);
   backgroundSurface ||= surface(w, h);

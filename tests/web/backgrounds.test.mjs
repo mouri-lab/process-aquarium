@@ -15,7 +15,25 @@ test("background providers receive separate simulation and wall clocks without c
 });
 
 import { BACKGROUNDS, drawBackground } from "../../web/backgrounds.mjs";
-import { drawUnderlay } from "../../web/effects.mjs";
+import { drawUnderlay, prepareCanvas } from "../../web/effects.mjs";
+function mockSurfaces(t) {
+  const surfaces = [];
+  const previous = globalThis.OffscreenCanvas;
+  globalThis.OffscreenCanvas = class {
+    constructor(width, height) {
+      this.width = width;
+      this.height = height;
+      this.context = drawingContext();
+      surfaces.push(this);
+    }
+    getContext() { return this.context.ctx; }
+  };
+  t.after(() => {
+    if (previous === undefined) delete globalThis.OffscreenCanvas;
+    else globalThis.OffscreenCanvas = previous;
+  });
+  return surfaces;
+}
 function drawingContext() {
   const calls = [];
   const ctx = new Proxy({}, {
@@ -29,7 +47,8 @@ function drawingContext() {
   });
   return { ctx, calls };
 }
-test("tank backgrounds render the detailed habitat for every palette, time and quality", () => {
+test("tank backgrounds render the detailed habitat for every palette, time and quality", (t) => {
+  mockSurfaces(t);
   const camera = { x: 0, y: 0, zoom: 1 };
   for (const kind of Object.keys(BACKGROUNDS))
     for (const seaTime of ["auto", "morning", "day", "evening", "night"])
@@ -39,7 +58,7 @@ test("tank backgrounds render the detailed habitat for every palette, time and q
         const frame = backgroundFrame(tank, camera, 390, 844, 20, new Date(2026, 0, 1, 12));
         assert.equal(frame.seaTime, seaTime);
         drawBackground(ctx, tank.background, frame);
-        assert.ok(calls.some(([method]) => method === "bezierCurveTo"));
+        assert.ok(calls.some(([method]) => method === "drawImage"));
         assert.equal(calls.filter(([method]) => method === "save").length,
           calls.filter(([method]) => method === "restore").length);
       }
@@ -51,4 +70,45 @@ test("underlay preserves a tank background that has already been drawn", () => {
     { habitat: false, particles: 2 });
   assert.ok(calls.some(([method]) => method === "arc"));
   assert.ok(!calls.some(([method]) => method === "fillRect" || method === "createLinearGradient"));
+});
+
+test("background reuses static layers while plants animate, and invalidates changed settings", (t) => {
+  const surfaces = mockSurfaces(t);
+  const { ctx, calls } = drawingContext();
+  const frame = { width: 811, height: 613, time: 1, camera: { x: 0 },
+    quality: "full", seaTime: "day", wallTime: 1760000000000 };
+  drawBackground(ctx, { kind: "kelp" }, frame);
+  assert.equal(surfaces.length, 2);
+  const original = surfaces[0];
+  const staticCalls = original.context.calls.length;
+  calls.length = 0;
+  drawBackground(ctx, { kind: "kelp" }, { ...frame, time: 2, camera: { x: 100 } });
+  assert.equal(surfaces.length, 2);
+  assert.equal(original.context.calls.length, staticCalls);
+  assert.ok(calls.some(([method]) => method === "quadraticCurveTo"));
+  assert.ok(!calls.some(([method]) => method === "createLinearGradient"));
+  for (const changed of [{ quality: "reduced" }, { seaTime: "night" }, { width: 812 }]) {
+    const count = surfaces.length;
+    drawBackground(ctx, { kind: "kelp" }, { ...frame, ...changed });
+    assert.equal(surfaces.length, count + 2);
+  }
+  const count = surfaces.length;
+  drawBackground(ctx, { kind: "dusk" }, frame);
+  assert.equal(surfaces.length, count + 2);
+});
+
+test("background raster cap leaves the default fish and overlay resolution intact", (t) => {
+  const previous = globalThis.devicePixelRatio;
+  globalThis.devicePixelRatio = 2;
+  t.after(() => {
+    if (previous === undefined) delete globalThis.devicePixelRatio;
+    else globalThis.devicePixelRatio = previous;
+  });
+  const { ctx } = drawingContext();
+  const background = { width: 0, height: 0, getContext: () => ctx };
+  const overlay = { width: 0, height: 0, getContext: () => ctx };
+  prepareCanvas(background, 800, 600, 1.5);
+  prepareCanvas(overlay, 800, 600);
+  assert.deepEqual([background.width, background.height], [1200, 900]);
+  assert.deepEqual([overlay.width, overlay.height], [1600, 1200]);
 });
