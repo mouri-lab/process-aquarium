@@ -51,6 +51,7 @@ class PsutilProcessSource(IProcessSource):
         self._error = None
         self._last_success = 0.0
         self._recent_ipc = ()
+        self._recent_network = ()
         self._ipc_detector = IPCDetector()
         self._last_ipc_refresh = float("-inf")
 
@@ -120,6 +121,7 @@ class PsutilProcessSource(IProcessSource):
         now = time.monotonic()
         if now - self._last_ipc_refresh >= 2.0:
             self._recent_ipc = tuple(self._detect_ipc(processes))
+            self._recent_network = tuple(self._ipc_detector.network_flows)
             self._last_ipc_refresh = now
         if self._sequence == 0:
             self._event_stats["initial_scan"] = len(processes)
@@ -149,6 +151,7 @@ class PsutilProcessSource(IProcessSource):
             source=self.name, processes=tuple(self._processes.values()),
             events=tuple(self._events), connections=self._recent_ipc,
             event_stats=dict(self._event_stats), error=error,
+            network_flows=self._recent_network,
         )
         with self._lock:
             self._error = error

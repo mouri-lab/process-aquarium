@@ -16,6 +16,7 @@ MAX_BODY_BYTES = 16 * 1024 * 1024
 MAX_RESPONSE_BYTES = MAX_BODY_BYTES + 1024 * 1024
 MAX_EVENTS = 2048
 MAX_PROCESSES = 50000
+MAX_NETWORK_FLOWS = 4096
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,24 @@ class Connection:
 
 
 @dataclass(frozen=True)
+class NetworkFlow:
+    """One observed socket endpoint owned by a process.
+
+    A listener may omit the remote endpoint. This is an observation, not a
+    bandwidth estimate; both ends can be correlated by an aggregation server.
+    """
+
+    pid: int
+    create_time: float
+    transport: str
+    local_address: str
+    local_port: int
+    remote_address: str = ""
+    remote_port: int = 0
+    state: str = ""
+
+
+@dataclass(frozen=True)
 class Snapshot:
     host_id: str
     hostname: str
@@ -69,6 +88,7 @@ class Snapshot:
     connections: tuple[Connection, ...] = ()
     event_stats: dict[str, int] = field(default_factory=dict)
     error: Optional[str] = None
+    network_flows: tuple[NetworkFlow, ...] = ()
 
     @property
     def revision(self) -> tuple[str, str, int]:
@@ -113,6 +133,20 @@ def _number(value: Any, name: str) -> float:
     if not valid:
         raise ProtocolError(f"{name} must be a finite nonnegative number")
     return float(value)
+
+
+def _port(value: Any, name: str) -> int:
+    value = _integer(value, name)
+    if value > 65535:
+        raise ProtocolError(f"{name} must be at most 65535")
+    return value
+
+
+def _short_text(value: Any, name: str) -> str:
+    value = _text(value, name)
+    if len(value) > 64:
+        raise ProtocolError(f"{name} must be at most 64 characters")
+    return value
 
 
 def _identifier(value: Any, name: str) -> str:
@@ -203,6 +237,20 @@ def snapshot_from_dict(value: Any) -> Snapshot:
             kind=_text(item.get("kind"), "kind", nonempty=True),
             metadata=None if metadata is None else _metadata(_object(metadata, "connection metadata"), "connection metadata"),
         ))
+    network_flows = []
+    for raw in _array(data.get("network_flows", []), "network_flows", MAX_NETWORK_FLOWS):
+        item = _object(raw, "network flow")
+        remote_address = _short_text(item.get("remote_address", ""), "remote_address")
+        network_flows.append(NetworkFlow(
+            pid=_integer(item.get("pid"), "network pid"),
+            create_time=_number(item.get("create_time"), "network create_time"),
+            transport=_short_text(item.get("transport"), "transport"),
+            local_address=_short_text(item.get("local_address"), "local_address"),
+            local_port=_port(item.get("local_port"), "local_port"),
+            remote_address=remote_address,
+            remote_port=_port(item.get("remote_port", 0), "remote_port"),
+            state=_short_text(item.get("state", ""), "network state"),
+        ))
     stats = _object(data.get("event_stats", {}), "event_stats")
     if len(stats) > 32:
         raise ProtocolError("Too many event statistics")
@@ -218,6 +266,7 @@ def snapshot_from_dict(value: Any) -> Snapshot:
         processes=tuple(processes), events=tuple(events), connections=tuple(connections),
         event_stats={_text(k, "statistic"): _integer(v, "statistic") for k, v in stats.items()},
         error=None if error is None else _text(error, "error"),
+        network_flows=tuple(network_flows),
     )
 
 
