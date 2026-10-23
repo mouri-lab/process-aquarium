@@ -16,7 +16,7 @@ const circle = (ctx, x, y, r) => {
   ctx.beginPath();
   ctx.arc(x, y, Math.max(0, r), 0, TAU);
 };
-function habitat(ctx, width, height, time, camera, quality) {
+export function habitat(ctx, width, height, time, camera, quality) {
   if (quality !== "minimal") {
     // Broad, quiet shafts of light; their drift follows the animation clock.
     for (let i = 0; i < 3; i++) {

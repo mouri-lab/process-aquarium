@@ -49,6 +49,30 @@
           <path d="M4 7h16M4 12h16M4 17h16" /></svg
         ><span>道具箱</span>
       </button>
+      <button
+        id="galaxy-toggle"
+        class="menu-trigger galaxy-trigger"
+        aria-label="銀河の星図 (V)"
+        aria-pressed="false"
+        title="星図 (V)"
+      >
+        <span aria-hidden="true">✧</span
+        ><span id="galaxy-toggle-label">星図</span>
+      </button>
+      <div id="galaxies" class="galaxies" aria-label="銀河の星図" hidden></div>
+      <p id="map-hint" class="map-hint" hidden>
+        銀河を選んで、海の中へ<small>V で水槽に戻る</small>
+      </p>
+      <nav
+        id="galaxy-pages"
+        class="galaxy-pages"
+        aria-label="星図のページ"
+        hidden
+      >
+        <button id="previous-galaxies" aria-label="前の星域">‹</button
+        ><span id="galaxy-page"></span
+        ><button id="next-galaxies" aria-label="次の星域">›</button>
+      </nav>
       <p id="first-hint" class="first-hint">
         ドラッグで移動 <span>·</span> ホイールでズーム
         <span>·</span> 魚をクリック <span class="hint-key">Esc メニュー</span>
@@ -255,6 +279,10 @@
         >
           <fieldset>
             <legend>ながめ方</legend>
+            <button id="open-galaxies" class="setting-row action-row">
+              <span>銀河の星図をひらく</span><span class="row-arrow">✧</span
+              ><kbd>V</kbd>
+            </button>
             <label class="setting-row"
               ><span>カメラ</span
               ><select id="camera-mode" aria-label="カメラモード">
@@ -374,6 +402,14 @@
           hidden
         >
           <label class="setting-row"
+            ><span>この水槽の背景</span
+            ><select id="background" aria-label="この水槽の背景">
+              <option value="kelp">こもれびの海</option>
+              <option value="lagoon">あおい入り江</option>
+              <option value="dusk">ゆうぐれの海</option>
+            </select></label
+          >
+          <label class="setting-row"
             ><span
               ><strong>描画品質</strong
               ><small>フルは波紋・雷・スレッド・群れ演算を含みます</small></span
@@ -478,6 +514,10 @@
           hidden
         >
           <dl class="key-guide">
+            <div>
+              <dt>V / [ / ]</dt>
+              <dd>星図 / 前・次の水槽</dd>
+            </div>
             <div>
               <dt>ドラッグ</dt>
               <dd>水槽の中を移動</dd>

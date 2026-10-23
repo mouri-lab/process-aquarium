@@ -4,13 +4,35 @@ import { AquariumWorld, colorOf, keyOf, selectedProcesses } from "./world.mjs";
 import { CanvasRenderer, createRenderer, freshCanvas } from "./renderer.mjs";
 import { Camera, View, SHORTCUTS } from "./controls.mjs";
 import {
+  Multiverse,
+  Journey,
+  galaxyLayout,
+  galaxyCamera,
+  transitionRect,
+  pollTanks,
+} from "./multiverse.mjs";
+import {
+  BACKGROUNDS,
+  drawBackground,
+  backgroundFrame,
+  drawSpace,
+  drawPortalBackground,
+  portalClip,
+} from "./backgrounds.mjs";
+import {
   prepareCanvas,
   drawUnderlay,
   drawOverlay as paintOverlay,
 } from "./effects.mjs";
 
 const $ = (id) => document.getElementById(id);
-const world = new AquariumWorld();
+const universe = new Multiverse(location.origin);
+const journey = new Journey();
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+let activeTank = null,
+  world = new AquariumWorld();
+const galaxyButtons = new Map();
+let skyTime = 0;
 const menu = new AquariumMenu();
 const inspection = new GameWindow(document.getElementById("inspection"));
 const portrait = new CanvasRenderer(document.getElementById("portrait"));
@@ -28,8 +50,8 @@ function feedback(message) {
 }
 const stage = $("stage"),
   overlay = $("overlay");
-const camera = new Camera(),
-  view = new View();
+let camera = new Camera();
+const view = new View();
 const parameters = new URLSearchParams(location.search);
 let token = "",
   hostId = parameters.get("host") || "",
@@ -84,7 +106,7 @@ function updateNotice() {
       "Telemetry is stale. Showing the last known state; no process exits are inferred.";
   else if (world.eventsLost)
     message = `${number.format(world.eventsLost)} lifecycle events fell outside the replay window. Current process state is synchronized.`;
-  $("notice").hidden = !message;
+  $("notice").hidden = !message || universe.overview || journey.moving;
   setText("notice", message);
 }
 async function request(path, signal) {
@@ -113,23 +135,137 @@ async function request(path, signal) {
     throw new Error(data.error || `Server returned HTTP ${response.status}`);
   return data;
 }
+function activate(tank) {
+  if (!tank || tank === activeTank) return;
+  if (activeTank) activeTank.search = $("search").value;
+  activeTank = universe.active = tank;
+  hostId = tank.host;
+  world = tank.world;
+  camera = tank.camera;
+  freshness = tank.freshness;
+  $("search").value = tank.search;
+  $("background").value = tank.background.kind;
+  $("host").value = hostId;
+  processRows.clear();
+  inspectedKey = null;
+  syncControls();
+  updateEmpty();
+  updateMetrics();
+  setStatus(freshness.mode, freshness.error);
+  try {
+    sessionStorage.setItem("aquarium-host", hostId);
+  } catch {}
+}
 function populateHosts(hosts) {
-  if (!Array.isArray(hosts)) throw new Error("Invalid host list");
+  universe.catalog(hosts);
+  for (const tank of universe.ordered) {
+    if (tank.settingsLoaded) continue;
+    tank.settingsLoaded = true;
+    try {
+      const saved = JSON.parse(
+        localStorage.getItem(`aquarium-background:${tank.id}`),
+      );
+      if (saved && Object.hasOwn(BACKGROUNDS, saved.kind)) {
+        tank.background.kind = saved.kind;
+      }
+    } catch {}
+  }
+  if (!activeTank) activate(hostId ? universe.select(hostId) : universe.active);
   const select = $("host");
-  const choices = hosts.map(
-    (host) =>
-      new Option(
-        `${host.hostname} · ${host.host_id}${host.stale ? " · stale" : ""}`,
-        host.host_id,
-      ),
+  const choices = universe.ordered.map(
+    (t) => new Option(`${t.name}${t.listed ? "" : " · 更新待ち"}`, t.host),
   );
-  if (hostId && !hosts.some((host) => host.host_id === hostId))
-    choices.push(new Option(`${hostId} · awaiting agent`, hostId));
-  if (!choices.length) choices.push(new Option("Waiting for an agent…", ""));
+  if (!choices.length) choices.push(new Option("接続を待っています…", ""));
   select.replaceChildren(...choices);
-  if (!hostId && hosts.length) hostId = hosts[0].host_id;
   select.value = hostId;
   select.title = select.selectedOptions[0]?.textContent || "";
+}
+function mapMode(open) {
+  if (!activeTank) return;
+  if (open || !universe.visible.includes(activeTank))
+    universe.page = Math.floor(universe.ordered.indexOf(activeTank) / 6);
+  universe.overview = open;
+  journey.go(open ? 0 : 1, reducedMotion.matches);
+  menu.close();
+  drag = null;
+  $("galaxy-toggle").setAttribute("aria-pressed", String(open));
+  $("galaxy-toggle").setAttribute(
+    "aria-label",
+    open ? "水槽に戻る (V)" : "銀河の星図 (V)",
+  );
+  $("galaxy-toggle-label").textContent = open ? "水槽へ" : "星図";
+  updateEmpty();
+  updateDetails();
+  updateNotice();
+  poll();
+  stage.focus({ preventScroll: true });
+}
+function enterTank(tank) {
+  activate(tank);
+  mapMode(false);
+  feedback(tank.name);
+}
+const galaxyStatus = {
+  waiting: "魚たちを待っています",
+  stale: "更新を待っています",
+  offline: "更新を待っています",
+  auth: "接続を確認してください",
+};
+function updateGalaxies(rects, tanks) {
+  const shown = journey.depth < 0.3;
+  $("galaxies").hidden = !shown;
+  $("galaxy-pages").hidden = !shown || universe.pages < 2;
+  $("map-hint").hidden = !shown;
+  $("galaxies").style.opacity = String(Math.max(0, 1 - journey.depth / 0.3));
+  setText("galaxy-page", `${universe.page + 1} / ${universe.pages}`);
+  $("previous-galaxies").disabled = universe.page === 0;
+  $("next-galaxies").disabled = universe.page === universe.pages - 1;
+  if (!shown) return;
+  const ids = new Set(tanks.map((t) => t.id));
+  for (const [id, b] of galaxyButtons)
+    if (!ids.has(id)) {
+      b.remove();
+      galaxyButtons.delete(id);
+    }
+  tanks.forEach((tank, i) => {
+    let button = galaxyButtons.get(tank.id);
+    if (!button) {
+      button = document.createElement("button");
+      button.className = "galaxy";
+      button.append(
+        document.createElement("strong"),
+        document.createElement("small"),
+      );
+      button.addEventListener("click", () => enterTank(tank));
+      button.addEventListener(
+        "wheel",
+        (event) => {
+          event.preventDefault();
+          if (event.deltaY < 0) enterTank(tank);
+        },
+        { passive: false },
+      );
+      galaxyButtons.set(tank.id, button);
+      $("galaxies").append(button);
+    }
+    const r = rects[i];
+    Object.assign(button.style, {
+      left: `${r.x}px`,
+      top: `${r.y}px`,
+      width: `${r.width}px`,
+      height: `${r.height}px`,
+    });
+    button.style.setProperty("--galaxy-color", tank.sky.light);
+    button.firstChild.textContent = tank.name;
+    button.lastChild.textContent =
+      galaxyStatus[tank.freshness.mode] ||
+      (tank.world.snapshot?.processes.length ? "" : "魚たちを待っています");
+    button.setAttribute(
+      "aria-label",
+      `${tank.name} の水槽へ${button.lastChild.textContent ? "・" + button.lastChild.textContent : ""}`,
+    );
+    button.setAttribute("aria-current", String(tank === activeTank));
+  });
 }
 async function poll() {
   if (pending || stopped || $("auth-dialog").open || freshness.mode === "auth")
@@ -142,39 +278,44 @@ async function poll() {
     const hosts = await request("api/v1/hosts", controller.signal);
     if (version !== generation) return;
     populateHosts(hosts.hosts);
-    if (!hostId) {
+    if (!activeTank) {
       setStatus("waiting");
       updateEmpty();
       return;
     }
-    const selected = hostId;
-    const envelope = await request(
-      `api/v1/snapshot?host=${encodeURIComponent(selected)}`,
-      controller.signal,
+    const targets = journey.moving
+      ? universe.ordered.slice(universe.page * 6, universe.page * 6 + 6)
+      : universe.visible;
+    await pollTanks(
+      targets,
+      (host) =>
+        request(
+          `api/v1/snapshot?host=${encodeURIComponent(host)}`,
+          controller.signal,
+        ),
+      () => version === generation,
+      () => performance.now(),
     );
-    if (version !== generation || selected !== hostId) return;
-    if (
-      envelope.snapshot?.host_id !== selected ||
-      typeof envelope.stale !== "boolean"
-    )
-      throw new Error("Unexpected telemetry host or freshness status");
-    const changed = world.apply(envelope.snapshot);
-    if (changed) freshness.last = performance.now();
-    setStatus(envelope.stale ? "stale" : "live", envelope.error || "");
+    if (version !== generation) return;
+    setStatus(freshness.mode, freshness.error);
     updateMetrics();
     updateEmpty();
   } catch (error) {
     if (version !== generation) return;
     if (error.authentication) {
+      generation++;
+      controller?.abort();
       setStatus("auth");
       showAuth(error.message);
-    } else
-      setStatus(
-        "offline",
+    } else {
+      const message =
         error.name === "AbortError"
-          ? "Connection timed out. Showing the last known state."
-          : error.message,
-      );
+          ? "接続を待っています。最後に届いた魚たちを表示しています。"
+          : error.message;
+      for (const tank of universe.tanks.values())
+        Object.assign(tank.freshness, { mode: "offline", error: message });
+      setStatus("offline", message);
+    }
     updateEmpty();
   } finally {
     clearTimeout(timeout);
@@ -188,11 +329,19 @@ function reconnect({ clear = false } = {}) {
   controller?.abort();
   clearTimeout(timer);
   if (clear) {
-    world.clear();
+    universe.clear();
+    activeTank = null;
+    world = new AquariumWorld();
+    camera = new Camera();
+    freshness = { last: 0, mode: "waiting", error: "" };
     following = false;
-    camera.reset();
-    freshness.last = 0;
-    camera.x = camera.y = 0;
+    journey.go(1, true);
+    universe.overview = false;
+    galaxyButtons.clear();
+    $("galaxies").replaceChildren();
+    $("galaxy-toggle").setAttribute("aria-pressed", "false");
+    $("galaxy-toggle").setAttribute("aria-label", "銀河の星図 (V)");
+    setText("galaxy-toggle-label", "星図");
   }
   setStatus("waiting");
   updateEmpty();
@@ -204,7 +353,8 @@ function updateEmpty() {
   const noData = !world.snapshot;
   const noMatches =
     world.snapshot && ![...world.fish.values()].some((f) => !f.dying);
-  $("empty").hidden = !(noData || noMatches);
+  $("empty").hidden =
+    universe.overview || journey.moving || !(noData || noMatches);
   $("agent-command").hidden =
     Boolean(world.snapshot) || freshness.mode === "auth";
   if (world.snapshot) {
@@ -306,6 +456,7 @@ function updateMetrics() {
         const fish = world.selected();
         camera.x = fish.x;
         camera.y = fish.y;
+        if (universe.overview) mapMode(false);
         menu.close();
         updateMetrics();
       });
@@ -342,7 +493,7 @@ function updateDetails() {
   const fish = world.selected();
   if (fish && inspectedKey !== world.selection) inspection.show();
   inspectedKey = world.selection;
-  $("inspection").hidden = !fish;
+  $("inspection").hidden = !fish || universe.overview || journey.moving;
   $("details").hidden = !fish;
   $("inspect-empty").hidden = Boolean(fish);
   $("clear-selection").hidden = !fish;
@@ -440,11 +591,34 @@ $("order").addEventListener("click", () => {
   updateMetrics();
 });
 $("host").addEventListener("change", () => {
-  hostId = $("host").value;
+  enterTank(universe.select($("host").value));
+  poll();
+});
+$("galaxy-toggle").addEventListener("click", () => mapMode(!universe.overview));
+$("open-galaxies").addEventListener("click", () => mapMode(true));
+for (const [id, delta] of [
+  ["previous-galaxies", -1],
+  ["next-galaxies", 1],
+])
+  $(id).addEventListener("click", () => {
+    universe.page = Math.max(
+      0,
+      Math.min(universe.pages - 1, universe.page + delta),
+    );
+    poll();
+  });
+function saveBackground() {
+  if (!activeTank) return;
   try {
-    sessionStorage.setItem("aquarium-host", hostId);
+    localStorage.setItem(
+      `aquarium-background:${activeTank.id}`,
+      JSON.stringify(activeTank.background),
+    );
   } catch {}
-  reconnect({ clear: true });
+}
+$("background").addEventListener("change", () => {
+  if (activeTank) activeTank.background.kind = $("background").value;
+  saveBackground();
 });
 $("auth-button").addEventListener("click", () => showAuth());
 $("auth-form").addEventListener("submit", (event) => {
@@ -576,6 +750,8 @@ document.addEventListener("fullscreenchange", () => {
 });
 let drag = null;
 stage.addEventListener("pointerdown", (event) => {
+  if (universe.overview || journey.moving || event.target.closest("button"))
+    return;
   if (event.button !== 0 && event.button !== 2) return;
   drag = {
     x: event.clientX,
@@ -645,6 +821,11 @@ stage.addEventListener(
   "wheel",
   (event) => {
     event.preventDefault();
+    if (universe.overview || journey.moving) return;
+    if (camera.zoom <= 0.105 && event.deltaY > 0 && universe.tanks.size > 1) {
+      mapMode(true);
+      return;
+    }
     following = false;
     const rect = stage.getBoundingClientRect(),
       x = event.clientX - rect.left - rect.width / 2,
@@ -659,11 +840,32 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
     if (menu.visible) menu.close();
-    else if (world.selection) perform("escape");
+    else if (universe.overview) {
+      universe.page = Math.floor(universe.ordered.indexOf(activeTank) / 6);
+      mapMode(false);
+    } else if (world.selection) perform("escape");
     else menu.open();
     return;
   }
   if (event.target.closest("input,select,textarea")) return;
+  if (event.key.toLowerCase() === "v") {
+    event.preventDefault();
+    mapMode(!universe.overview);
+    return;
+  }
+  if (["[", "]"].includes(event.key) && universe.tanks.size) {
+    event.preventDefault();
+    const tanks = universe.ordered;
+    const index =
+      (tanks.indexOf(activeTank) +
+        (event.key === "]" ? 1 : -1) +
+        tanks.length) %
+      tanks.length;
+    universe.page = Math.floor(index / 6);
+    enterTank(tanks[index]);
+    poll();
+    return;
+  }
   if (event.key === "/" || event.key === "?") {
     event.preventDefault();
     menu.open(event.key === "/" ? "processes" : "help");
@@ -678,7 +880,16 @@ window.addEventListener("keydown", (event) => {
 });
 function drawOverlay(scene, width, height) {
   const under = prepareCanvas($("underlay"), width, height);
-  drawUnderlay(under, scene, camera, width, height, view);
+  if (activeTank)
+    drawBackground(
+      under,
+      activeTank.background,
+      backgroundFrame(activeTank, camera, width, height, skyTime, new Date()),
+    );
+  drawUnderlay(under, scene, camera, width, height, {
+    ...view,
+    habitat: !activeTank,
+  });
   const ctx = prepareCanvas(overlay, width, height);
   paintOverlay(ctx, scene, camera, width, height, view);
   if (view.ui !== 2 && world.snapshot) {
@@ -718,23 +929,97 @@ function frame(now) {
   lastFrame = now;
   if (elapsed > 0) fps = fps * 0.95 + Math.min(120, 1 / elapsed) * 0.05;
   const moving = !paused && !$("auth-dialog").open;
-  if (moving) world.step(Math.min(elapsed, 0.1) * view.speed);
-  const scene = world.renderFrame(elapsed, moving);
-  const oldMode = camera.mode;
-  camera.update(scene, elapsed);
-  if (camera.mode !== oldMode) syncControls();
-  view.adapt(fps, elapsed, world);
+  const dt = Math.min(elapsed, 0.1);
+  if (moving) skyTime += dt * view.speed;
+  const wasMoving = journey.moving;
+  // Navigation uses elapsed wall time; a background tab must not resume a
+  // half-finished trip one simulation tick at a time.
+  journey.step(elapsed);
+  if (wasMoving && !journey.moving) {
+    updateEmpty();
+    updateDetails();
+    updateNotice();
+  }
   const width = stage.clientWidth,
     height = stage.clientHeight;
-  if (world.width !== width || world.height !== height)
-    world.resize(width, height);
+  const inMap = journey.depth < 1;
+  const tanks = inMap
+    ? universe.ordered.slice(universe.page * 6, universe.page * 6 + 6)
+    : activeTank
+      ? [activeTank]
+      : [];
+  view.adapt(fps, elapsed, world);
+  const oldMode = camera.mode;
+  for (const tank of tanks) {
+    const w = tank.world;
+    w.quality = world.quality;
+    if (w.width !== width || w.height !== height) w.resize(width, height);
+    if (moving) w.step(dt * view.speed);
+    tank.scene = w.renderFrame(elapsed, moving);
+    if (!inMap) tank.camera.update(tank.scene, elapsed);
+  }
+  if (camera.mode !== oldMode) syncControls();
   if (renderer && width && height) {
     try {
-      renderer.render(scene, camera, width, height);
+      if (inMap && tanks.length) {
+        const rects = galaxyLayout(tanks.length, width, height),
+          focus = rects[Math.max(0, tanks.indexOf(activeTank))];
+        const under = prepareCanvas($("underlay"), width, height);
+        prepareCanvas(overlay, width, height);
+        view.bubbles = [];
+        drawSpace(under, width, height, skyTime, journey.depth, {
+          x: focus.centerX,
+          y: focus.centerY,
+        });
+        const views = tanks.map((tank, i) => {
+          const depth = tank === activeTank ? journey.depth : 0;
+          const rect = transitionRect(
+            rects[i],
+            focus,
+            journey.depth,
+            width,
+            height,
+          );
+          const far = galaxyCamera(tank.scene, rects[i].width, rects[i].height);
+          const c = {
+            x: far.x + (tank.camera.x - far.x) * depth,
+            y: far.y + (tank.camera.y - far.y) * depth,
+            zoom: Math.exp(
+              Math.log(far.zoom) * (1 - depth) +
+                Math.log(tank.camera.zoom) * depth,
+            ),
+          };
+          drawPortalBackground(
+            under,
+            tank,
+            rect,
+            depth,
+            c,
+            skyTime,
+            new Date(),
+            width,
+            height,
+          );
+          return {
+            world: tank.scene,
+            camera: c,
+            rect,
+            clip: portalClip(rect, depth),
+            opacity: 0.75 + 0.25 * depth,
+            minimumPixels: depth < 0.6 ? 1.6 : 0,
+          };
+        });
+        renderer.renderViews(views, width, height);
+        updateGalaxies(rects, tanks);
+      } else {
+        const scene = activeTank?.scene || world.renderFrame(elapsed, moving);
+        renderer.render(scene, camera, width, height);
+        drawOverlay(scene, width, height);
+        updateGalaxies([], []);
+      }
     } catch (error) {
       fallback(error.message);
     }
-    drawOverlay(scene, width, height);
   }
   if (now - lastMetrics > 500) {
     setText("fps", `${Math.round(fps)} fps`);
