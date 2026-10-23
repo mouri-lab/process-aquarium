@@ -40,7 +40,7 @@ In a second terminal, from the same directory:
 
 Open **<http://localhost:8080>**. The aquarium waits for actual telemetry; it does not invent metrics before an agent connects. Stop each process with Ctrl+C.
 
-Measured network traffic gently moves light and floating motes through each tank. The tide settles when traffic stops; `I` toggles it with the existing communication effects. If several network adapters are active, pass `--network-interface en0` (for example, `eth0` on Linux) to the agent, or set `AQUARIUM_NETWORK_INTERFACE`. Automatic selection only runs when one candidate remains after excluding loopback and known virtual adapters. Select one VPN adapter explicitly if needed; physical and virtual counters are never summed. Per-peer traffic and currents between tanks remain future work.
+Measured network traffic gently moves light and floating motes through each tank. The tide settles when traffic stops; `I` toggles it with the existing communication effects. If several network adapters are active, pass `--network-interface en0` (for example, `eth0` on Linux) to the agent, or set `AQUARIUM_NETWORK_INTERFACE`. Automatic selection only runs when one candidate remains after excluding loopback and known virtual adapters. Select one VPN adapter explicitly if needed; physical and virtual counters are never summed. On Linux, BCC also measures per-peer traffic for currents between tanks. See the eBPF setup below.
 
 ## Multiple hosts
 
@@ -106,8 +106,13 @@ uv sync --locked --no-dev --extra agent
 
 # Configure the token in an appropriate root-readable environment if needed.
 sudo ./.venv/bin/python main.py agent \
-  --server http://127.0.0.1:8080 --source ebpf --host-id linux-01
+  --server http://127.0.0.1:8080 --source ebpf --host-id linux-01 \
+  --network-interface eth0 --network-peers ebpf --network-scope lab
 ```
+
+Peer accounting runs inside the existing Python agent, independently of the process source (`--source psutil` also works). `--network-peers auto` attempts Linux/BCC accounting by default; `off` disables it. Missing privileges or BCC leave process and interface telemetry running and report the measurement status. Explicit `ebpf` also reports failures without stopping process collection.
+
+Use the same `--network-scope` for hosts in one routing domain, and different scopes for overlapping networks. NAT mappings are not guessed. Select one inner VPN interface when appropriate. Each direction uses one observer, preferring the sender, so both endpoints are never added together. Volume changes current width and opacity, not speed. See [measurement semantics and validation](./docs/network-currents.md).
 
 ## Native and text clients
 

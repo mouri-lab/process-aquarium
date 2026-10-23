@@ -40,7 +40,7 @@ uv sync --locked --no-dev --extra agent
 
 **<http://localhost:8080>** を開くと魚が表示されます。エージェントが接続するまで架空のメトリクスは表示しません。終了は各ターミナルで Ctrl+C です。
 
-水槽の淡い光と浮遊物には、実測した送受信量に応じてゆっくり潮が生まれます。通信が収まると静まり、`I` で通信表示と一緒に切り替えられます。対象NICが複数ある場合は、agent に `--network-interface en0`（Linuxなら例: `eth0`）を指定してください。自動選択は、loopbackと既知の仮想NICを除いた稼働中の候補が1つの場合だけ行います。VPNを観測する場合も対象を1つ指定し、物理NICと重複して足しません。接続数だけでは潮を描かず、水槽間の相手別通信量はまだ計測しません。
+水槽の淡い光と浮遊物には、実測した送受信量に応じてゆっくり潮が生まれます。通信が収まると静まり、`I` で通信表示と一緒に切り替えられます。対象NICが複数ある場合は、agent に `--network-interface en0`（Linuxなら例: `eth0`）を指定してください。自動選択は、loopbackと既知の仮想NICを除いた稼働中の候補が1つの場合だけ行います。VPNを観測する場合も対象を1つ指定し、物理NICと重複して足しません。LinuxではBCCによる相手別の実測通信量で、水槽間にも潮が流れます。接続数から流量を推測しません。導入方法は下の「eBPFを利用する」を参照してください。
 
 ## 複数マシンで使う
 
@@ -107,8 +107,13 @@ uv sync --locked --no-dev --extra agent
 
 # トークンを使う場合は root から読める適切な環境設定を別途用意
 sudo ./.venv/bin/python main.py agent \
-  --server http://127.0.0.1:8080 --source ebpf --host-id linux-01
+  --server http://127.0.0.1:8080 --source ebpf --host-id linux-01 \
+  --network-interface eth0 --network-peers ebpf --network-scope lab
 ```
+
+相手別計測は既存Pythonエージェント内の独立したBCC収集器です。`--source psutil` でも利用でき、`--network-peers off` で停止できます。既定の `auto` はLinuxで計測を試み、権限・BCCが不足する場合もプロセスとNIC全体の収集を続けます。`ebpf` 指定時も失敗状態をテレメトリに残して収集を続けます。
+
+通信する水槽は同じ集約サーバへ登録し、同じルーティング範囲には同じ `--network-scope` を指定します。別ネットワークでIPが重複する場合は異なるscopeに分けてください。NAT越しの対応は推測しません。VPNは内側のNICを1つ選びます。両端の観測は二重加算せず、速度を上げずに潮の幅と濃さへ反映します。詳しい計測範囲・制限・検証方法は[水流の設計](./docs/network-currents.md)に記載しています。
 
 ## ネイティブ・統計クライアント
 
@@ -143,6 +148,8 @@ uv sync --locked --no-dev --extra agent --extra gui
 | server `--retention` / `--max-hosts` | 3600 秒 / 128 ホスト |
 | agent `--interval` | 1 秒 |
 | agent `--network-interface` / `AQUARIUM_NETWORK_INTERFACE` | 候補が1つなら自動選択。複数なら明示指定 |
+| agent `--network-peers` / `AQUARIUM_NETWORK_PEERS` | `auto`（Linux/BCC）。`ebpf` / `off` も指定可 |
+| agent `--network-scope` / `AQUARIUM_NETWORK_SCOPE` | `default`。同じIP空間を共有するホストの識別範囲 |
 | client `--poll-interval` / `--timeout` | 1 秒 / 3 秒 |
 | ブラウザ表示件数 | 無制限（プロトコル上限50,000件）。表示制限は収集対象に影響しません |
 
