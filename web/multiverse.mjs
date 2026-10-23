@@ -131,7 +131,12 @@ export class Multiverse {
   }
   select(host) {
     const tank = this.ensure(host);
-    if (tank) this.active = tank;
+    if (tank) {
+      this.active = tank;
+      // Interior polling includes this tank's neighbours for measured currents.
+      // A deep link or dropdown can select a host beyond the first chart page.
+      if (!this.overview) this.page = Math.floor(this.ordered.indexOf(tank) / 6);
+    }
     return tank;
   }
   get ordered() {
