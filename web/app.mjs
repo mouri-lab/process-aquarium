@@ -884,7 +884,9 @@ function drawOverlay(scene, width, height) {
     drawBackground(
       under,
       activeTank.background,
-      backgroundFrame(activeTank, camera, width, height, skyTime, new Date()),
+      backgroundFrame(activeTank, camera, width, height, skyTime, new Date(), {
+        communication: view.ipc, reducedMotion: reducedMotion.matches,
+      }),
     );
   drawUnderlay(under, scene, camera, width, height, {
     ...view,
@@ -955,6 +957,11 @@ function frame(now) {
     w.quality = world.quality;
     if (w.width !== width || w.height !== height) w.resize(width, height);
     if (moving) w.step(dt * view.speed);
+    tank.tide.step(dt * view.speed, now, {
+      live: tank.freshness.mode === "live",
+      paused: !moving,
+      reduced: reducedMotion.matches,
+    });
     tank.scene = w.renderFrame(elapsed, moving);
     if (!inMap) tank.camera.update(tank.scene, elapsed);
   }
@@ -999,6 +1006,7 @@ function frame(now) {
             new Date(),
             width,
             height,
+            { communication: view.ipc, reducedMotion: reducedMotion.matches },
           );
           return {
             world: tank.scene,

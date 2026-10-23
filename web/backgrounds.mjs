@@ -2,6 +2,7 @@
 // animated habitat implements the same draw(ctx, frame) interface; galaxy
 // portals reveal that exact background as the observer approaches.
 import { TAU } from "./fish.mjs";
+import { drawTide } from "./tides.mjs";
 const smooth = (x) => {
   x = Math.max(0, Math.min(1, x));
   return x * x * (3 - 2 * x);
@@ -27,7 +28,7 @@ export const BACKGROUNDS = {
     glow: "#e5b9a8",
   },
 };
-export function backgroundFrame(tank, camera, width, height, time, wallTime) {
+export function backgroundFrame(tank, camera, width, height, time, wallTime, options = {}) {
   return {
     seed: tank.sky.seed,
     camera,
@@ -35,6 +36,8 @@ export function backgroundFrame(tank, camera, width, height, time, wallTime) {
     height,
     time,
     quality: tank.world.quality,
+    tide: options.communication === false ? null : tank.tide,
+    reducedMotion: Boolean(options.reducedMotion),
     // Reserved for future time-dependent providers (#13/#14); current
     // backgrounds keep their chosen palette regardless of wall time.
     wallTime: wallTime.getTime(),
@@ -61,6 +64,7 @@ function ocean(ctx, frame, palette) {
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, w, h);
   }
+  drawTide(ctx, frame, palette.glow);
   habitat(ctx, w, h, time, camera, quality);
 }
 const providers = new Map(
@@ -209,6 +213,7 @@ export function drawPortalBackground(
   wallTime,
   width,
   height,
+  options = {},
 ) {
   drawGalaxy(ctx, tank, rect, depth, time);
   if (depth <= 0.08) return;
@@ -232,7 +237,7 @@ export function drawPortalBackground(
   drawBackground(
     paint,
     tank.background,
-    backgroundFrame(tank, camera, width, height, time, wallTime),
+    backgroundFrame(tank, camera, width, height, time, wallTime, options),
   );
   paint.restore();
   paint.save();

@@ -1,6 +1,7 @@
 // Pure client model: no DOM or GPU dependency. Complete host state precedes
 // display selection; network failures never enter the reconciliation path.
 export const MAX_VISIBLE = 50000;
+import { validateActivity } from "./tides.mjs";
 export const keyOf = (snapshot, p) =>
   JSON.stringify([snapshot.host_id, snapshot.boot_id, p.pid, p.create_time]);
 import {
@@ -166,6 +167,7 @@ export function validateSnapshot(snapshot) {
       ))
   )
     throw new Error("Invalid network stream telemetry");
+  validateActivity(snapshot.network_activity);
   return snapshot;
 }
 

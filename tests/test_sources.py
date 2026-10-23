@@ -2,7 +2,7 @@ from dataclasses import replace
 from unittest.mock import Mock
 
 from src.core.sources import EbpfProcessSource, PsutilProcessSource
-from src.telemetry import MAX_EVENTS, snapshot_from_bytes
+from src.telemetry import MAX_EVENTS, NetworkActivity, snapshot_from_bytes
 from test_telemetry import process
 
 
@@ -49,3 +49,22 @@ def test_event_history_is_bounded():
     source._publish()
     assert len(source.get_snapshot().events) == MAX_EVENTS
     assert source.get_snapshot().events[0].event_id == 11
+
+
+def test_interface_activity_survives_agent_wire_format_without_hiding_processes(monkeypatch):
+    source = PsutilProcessSource()
+    monkeypatch.setattr("src.core.sources.psutil.process_iter", lambda: [Mock()])
+    monkeypatch.setattr(source, "_read_process", lambda _: process())
+    monkeypatch.setattr(source, "_detect_ipc", lambda _: [])
+    activity = NetworkActivity("ready", "en0", 2, 100, 600)
+    monkeypatch.setattr(source._network_sampler, "sample", lambda: activity)
+    source._scan()
+    assert snapshot_from_bytes(source.get_snapshot().to_bytes()).network_activity == activity
+    activity = NetworkActivity("denied", "en0")
+    source._scan()
+    assert source.get_snapshot().network_activity.status == "denied"
+    assert source.get_snapshot().processes == (process(),)
+    assert not source.status.stale
+    source._publish(error="process collection failed")
+    assert source.get_snapshot().network_activity.status == "unavailable"
+    assert source.get_snapshot().network_activity.sent_bytes is None
