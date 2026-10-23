@@ -12,6 +12,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 from .telemetry import MAX_BODY_BYTES, NetworkFlow, ProtocolError, Snapshot, snapshot_from_bytes
+from .transfers import resolve_transfers
 
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
@@ -131,6 +132,14 @@ class SnapshotStore:
         if address.startswith("::ffff:"):
             address = address[7:]
         return transport, address, port
+
+    def network_transfers(self) -> list[dict]:
+        with self._lock:
+            now = self._clock()
+            self._expire(now)
+            hosts = [(host.snapshot, max(0, now - host.received_monotonic))
+                     for host in self._hosts.values()]
+        return resolve_transfers(hosts, stale_after=self.stale_after)
 
     def network_flows(self, limit=512) -> list[dict]:
         """Correlate client/listener sockets observed on different hosts.
@@ -328,6 +337,8 @@ class TelemetryHandler(BaseHTTPRequestHandler):
             self._json(200, {"hosts": self.server.store.hosts()})
         elif path.path == "/api/v1/flows":
             self._json(200, {"flows": self.server.store.network_flows()})
+        elif path.path == "/api/v1/transfers":
+            self._json(200, {"transfers": self.server.store.network_transfers()})
         elif path.path == "/api/v1/snapshot":
             hosts = parse_qs(path.query).get("host", [])
             if len(hosts) != 1 or not hosts[0]:
