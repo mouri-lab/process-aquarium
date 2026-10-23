@@ -77,6 +77,7 @@ Remote WebGPU needs HTTPS; HTTP localhost is supported. Terminate TLS with Caddy
 
 The aquarium fills the viewport. Press `Esc` or open the toolbox in the corner to summon a small game window. Drag its title bar to move it; fold it with the minus button or a double-click. The aquarium keeps swimming while windows are open.
 
+- `V` opens the galaxy map of hosts; select a galaxy to enter its aquarium. `[` / `]` switch hosts. Choose each tank’s background in Display; its selection and camera are retained when switching.
 - Click a fish to inspect it, or right-click to follow it. `/` searches by name or PID and takes you to the fish.
 - Drag to pan; scroll for pointer-centered zoom (0.1–5×). `C` changes camera mode; `R` resets the view.
 - `L` cycles display limits. `1`–`6` select 10, 20, 50, 100, 200 or 400 fish; `0` removes the limit. `S` / `O` change sort field/direction.

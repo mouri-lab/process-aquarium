@@ -119,7 +119,7 @@ function seabedRock(ctx, x, y, size, sea, seed) {
   ctx.quadraticCurveTo(x - size * 0.4, y - size * 0.8, x + size * 0.1, y - size * 0.68);
   ctx.stroke();
 }
-function habitat(ctx, width, height, time, camera, quality, sea) {
+export function habitat(ctx, width, height, time, camera, quality, sea = seaAppearance()) {
   ctx.save();
   const scale = Math.min(1.3, height / 780, width / 850);
   const floor = height * 0.91;
@@ -280,14 +280,15 @@ function habitat(ctx, width, height, time, camera, quality, sea) {
 export function drawUnderlay(ctx, world, camera, width, height, view) {
   const time = world.time,
     byPid = world.byPid();
-  const sea = seaAppearance(new Date(), view.seaTime);
-  const water = ctx.createLinearGradient(0, 0, 0, height);
-  water.addColorStop(0, seaRgb(sea.top));
-  water.addColorStop(1, seaRgb(sea.bottom));
-  ctx.fillStyle = water;
-  ctx.fillRect(0, 0, width, height);
-  if (view.habitat !== false)
+  if (view.habitat !== false) {
+    const sea = seaAppearance(new Date(), view.seaTime);
+    const water = ctx.createLinearGradient(0, 0, 0, height);
+    water.addColorStop(0, seaRgb(sea.top));
+    water.addColorStop(1, seaRgb(sea.bottom));
+    ctx.fillStyle = water;
+    ctx.fillRect(0, 0, width, height);
     habitat(ctx, width, height, time, camera, world.quality, sea);
+  }
   ctx.lineWidth = 1;
   for (let i = 0; i < view.particles; i++) {
     const x = (i * 179.3 + Math.sin(time * 0.1 + i) * 12) % width;
