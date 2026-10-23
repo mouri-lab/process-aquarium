@@ -101,6 +101,11 @@ function setStatus(mode, error = "") {
   updateNotice();
 }
 function updateNotice() {
+  const unavailable = ["offline", "stale", "auth"].includes(freshness.mode);
+  $("telemetry-warning").hidden = !unavailable;
+  setText("telemetry-warning", freshness.mode === "auth"
+    ? "認証が必要です。表示中の監視データは現在の状態ではありません。"
+    : "監視データを更新できません。表示中のデータは最後に受信した状態です。");
   let message = "";
   if (freshness.mode === "offline" || freshness.mode === "stale")
     message =

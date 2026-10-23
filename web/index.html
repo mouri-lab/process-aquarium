@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="theme-color" content="#000025" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Process Aquarium" />
     <title>Process Aquarium</title>
     <link
       rel="icon"
@@ -11,8 +15,10 @@
     />
     <link rel="stylesheet" href="./aquarium.css" />
     <script type="module" src="./app.mjs"></script>
+    <script type="module" src="./pwa.mjs"></script>
   </head>
   <body>
+    <p id="telemetry-warning" class="telemetry-warning" role="status" hidden></p>
     <main class="workspace" aria-label="プロセスの水槽">
       <div
         id="stage"

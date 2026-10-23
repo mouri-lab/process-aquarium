@@ -1175,3 +1175,20 @@ button.setting-row:hover {
     right: 12px;
   }
 }
+
+/* Remains visible in the galaxy overview and while navigating between hosts. */
+.telemetry-warning {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  max-width: min(90vw, 48rem);
+  padding: .65rem 1rem;
+  border: 1px solid #f3cc80;
+  border-radius: .5rem;
+  background: #18182e;
+  color: #ffe3ad;
+  font-size: .85rem;
+  pointer-events: none;
+}

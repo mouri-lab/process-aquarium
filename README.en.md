@@ -168,3 +168,29 @@ node --test tests/web/*.test.mjs
 Tests cover HTTP authentication and validation, multiple hosts, reordered and duplicate revisions, reconnects, PID reuse, filtering, and separate-process startup/shutdown. With pygame and Node.js installed, differential tests compare the actual native formulas, flocking and drawing primitives. Native rendering also runs through SDL's dummy driver. Browser verification is documented in [architecture](./docs/architecture.md#検証).
 
 MIT License — [LICENSE](./LICENSE)
+
+### Install as a PWA
+
+No frontend build is required. The Python server serves the manifest, app icons,
+and service worker. Open `http://localhost:8080/` or an HTTPS deployment and use
+your browser's **Install app** action. On iPhone/iPad, use Safari's Share → Add to
+Home Screen. Installation support and wording depend on the browser.
+For access from other devices, terminate HTTPS at a reverse proxy and expose the
+static assets and `/api/` on the same origin at `/`. Plain HTTP on a LAN IP does
+not enable service workers; the ordinary web client remains available.
+
+After a successful online visit, only the static shell is cached. Host lists,
+snapshots, flows, transfers, and credentials never enter Cache Storage. During
+an outage, retained fish are explicitly labeled as last known data, including in
+the galaxy overview; no process exits are inferred. An offline restart does not
+restore telemetry. Polling resumes when the connection returns. Authentication
+and host selection keep their existing behavior; a new installed window may
+require entering the token again.
+
+When changing shell assets, bump the cache version in `web/sw.js`. A replacement
+worker installs the entire shell before waiting for all existing windows/tabs to
+close, avoiding mixed module versions. Only this app's obsolete caches are
+removed. In browser developer tools, check Application → Manifest, Service
+Workers, and Cache Storage. After fetching telemetry, confirm that only shell
+assets are stored, then enable Offline and reload: the shell should open without
+presenting old monitoring data as current.
