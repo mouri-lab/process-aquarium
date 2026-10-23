@@ -9,7 +9,7 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.telemetry import Snapshot, ProcessRecord, Connection
+from src.telemetry import Snapshot, ProcessRecord, Connection, NetworkActivity
 from src.transport import APIClient
 
 
@@ -18,6 +18,8 @@ def main():
     parser.add_argument('--server', default='http://127.0.0.1:8765')
     parser.add_argument('--hosts', type=int, default=3)
     parser.add_argument('--stale-last', action='store_true')
+    parser.add_argument('--tides', choices=['cycle', 'receive', 'send', 'both', 'idle', 'missing'],
+                        help='Synthetic interface activity for water-current review')
     args = parser.parse_args()
     if not 1 <= args.hosts <= 128:
         parser.error('--hosts must be 1..128')
@@ -43,11 +45,24 @@ def main():
                     boot_id=f'boot-{host}', session_id=session, sequence=sequence,
                     collected_at=time.time(), source='fixture', processes=processes,
                     events=(), connections=(Connection(100, 101, 'pipe'),),
+                    network_activity=demo_activity(args.tides, sequence, host),
                 )
                 client.request('POST', '/api/v1/snapshots', snapshot.to_dict())
             time.sleep(1)
     except KeyboardInterrupt:
         pass
+
+
+def demo_activity(mode, sequence, host):
+    if not mode:
+        return None
+    if mode == 'cycle':
+        mode = ['receive', 'send', 'both', 'idle', 'missing'][((sequence - 1) // 16 + host) % 5]
+    if mode == 'missing':
+        return NetworkActivity('unavailable', 'demo0')
+    return NetworkActivity('ready', 'demo0', 1,
+                           4 * 1024**2 if mode in ('send', 'both') else 0,
+                           4 * 1024**2 if mode in ('receive', 'both') else 0)
 
 
 if __name__ == '__main__':

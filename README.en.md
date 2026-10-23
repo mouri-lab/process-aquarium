@@ -40,6 +40,8 @@ In a second terminal, from the same directory:
 
 Open **<http://localhost:8080>**. The aquarium waits for actual telemetry; it does not invent metrics before an agent connects. Stop each process with Ctrl+C.
 
+Measured network traffic gently moves light and floating motes through each tank. The tide settles when traffic stops; `I` toggles it with the existing communication effects. If several network adapters are active, pass `--network-interface en0` (for example, `eth0` on Linux) to the agent, or set `AQUARIUM_NETWORK_INTERFACE`. Automatic selection only runs when one candidate remains after excluding loopback and known virtual adapters. Select one VPN adapter explicitly if needed; physical and virtual counters are never summed. Per-peer traffic and currents between tanks remain future work.
+
 ## Multiple hosts
 
 The aggregation server only needs the Python standard library.
@@ -81,7 +83,7 @@ The aquarium fills the viewport. Press `Esc` or open the toolbox in the corner t
 - Click a fish to inspect it, or right-click to follow it. `/` searches by name or PID and takes you to the fish.
 - Drag to pan; scroll for pointer-centered zoom (0.1–5×). `C` changes camera mode; `R` resets the view.
 - `L` cycles display limits. `1`–`6` select 10, 20, 50, 100, 200 or 400 fish; `0` removes the limit. `S` / `O` change sort field/direction.
-- `D` toggles parent lines, `I` communication lines, and `Q` school highlighting. Click a chat puff to highlight its communication partners.
+- `D` toggles parent lines, `I` communication effects and ambient tides, and `Q` school highlighting. Click a chat puff to highlight its communication partners.
 - `Space` pauses movement, `T` cycles UI visibility, `F` / `F11` toggles fullscreen, and `?` opens help.
 - Swimming defaults to 1× with ¼–1× controls. The 30Hz simulation is interpolated for display; gentle steering and smaller fin strokes soften rapid visual changes.
 - Full/reduced/minimal/automatic quality, name labels, hosts, authentication and diagnostics live in the toolbox.
